@@ -1,0 +1,3 @@
+#!/bin/sh
+echo "Running lint and format check before push..."
+npm run lint && npx prettier --check .

@@ -1,0 +1,8 @@
+#!/bin/sh
+commit_msg=$(cat "$1")
+pattern='^ATH-[1-9][0-9]{0,5}: .+'
+if ! echo "$commit_msg" | grep -qE "$pattern"; then
+  echo "❌ Commit message must match: ATH-XXX: message (XXX = 1–999999)"
+  echo "   Got: $commit_msg"
+  exit 1
+fi
