@@ -15,6 +15,7 @@ import { ptyService } from './services/ptyService'
 import { jestService } from './services/jestService'
 import * as git from './services/gitService'
 import * as eslint from './services/eslintService'
+import { lspService } from './services/lspService'
 
 let currentRoot: string | null = null
 const requireRoot = (): string => {
@@ -98,10 +99,15 @@ export function registerIpc(win: BrowserWindow): void {
   // ---- Jest ----
   ipcMain.handle('jest:run', (_e, file?: string) => jestService.run(requireRoot(), file))
   ipcMain.handle('jest:stop', () => jestService.stop())
+
+  // ---- LSP ----
+  ipcMain.handle('lsp:start', (_e, rootPath: string) => lspService.start(win, rootPath))
+  ipcMain.on('lsp:send', (_e, msg: object) => lspService.send(msg))
 }
 
 export function disposeIpc(): void {
   closeWatcher()
   ptyService.killAll()
   jestService.stop()
+  lspService.stop()
 }
