@@ -1,4 +1,5 @@
 type Handler = (params: unknown) => void
+type RequestHandler = (params: unknown) => unknown | Promise<unknown>
 
 interface Pending {
   resolve: (result: unknown) => void
@@ -9,11 +10,13 @@ export class LspClient {
   private nextId = 1
   private pending = new Map<number, Pending>()
   private notifications = new Map<string, Handler[]>()
+  private requests = new Map<string, RequestHandler>()
   private readyCallbacks: Array<() => void> = []
   private _ready = false
 
   constructor() {
     window.api.lsp.onMessage((msg: Record<string, unknown>) => this.dispatch(msg))
+    window.api.lsp.onExit(() => this.reset())
   }
 
   get ready(): boolean {
@@ -32,16 +35,36 @@ export class LspClient {
   }
 
   private dispatch(msg: Record<string, unknown>): void {
-    if ('id' in msg && ('result' in msg || 'error' in msg)) {
+    if ('id' in msg && typeof msg.method === 'string') {
+      // Server-initiated request — must respond or server hangs
+      this.handleServerRequest(msg.id, msg.method, msg.params)
+    } else if ('id' in msg && ('result' in msg || 'error' in msg)) {
       const p = this.pending.get(msg.id as number)
       if (p) {
         this.pending.delete(msg.id as number)
         if ('error' in msg) p.reject(msg.error)
         else p.resolve(msg.result)
       }
-    } else if (typeof msg.method === 'string' && !('id' in msg)) {
+    } else if (typeof msg.method === 'string') {
       const handlers = this.notifications.get(msg.method) ?? []
       for (const h of handlers) h(msg.params)
+    }
+  }
+
+  private handleServerRequest(id: unknown, method: string, params: unknown): void {
+    const handler = this.requests.get(method)
+    const respond = (result: unknown, error?: unknown): void => {
+      const response: Record<string, unknown> = { jsonrpc: '2.0', id }
+      if (error !== undefined) response.error = error
+      else response.result = result ?? null
+      window.api.lsp.send(response)
+    }
+    if (handler) {
+      Promise.resolve(handler(params))
+        .then((r) => respond(r))
+        .catch((err) => respond(null, { code: -32000, message: String(err) }))
+    } else {
+      respond(null)
     }
   }
 
