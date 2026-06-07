@@ -16,34 +16,34 @@ AI-first code editor built on Electron. Monaco editor core, Claude agent embedde
 
 ## Stack
 
-| Layer | Tech |
-|---|---|
-| Shell | Electron 39 |
-| UI | React 19 + TypeScript |
-| Build | electron-vite + Vite 7 |
-| Editor | Monaco Editor 0.55 |
-| AI | `@anthropic-ai/claude-agent-sdk` |
-| Terminal | node-pty + xterm.js |
-| Git | simple-git |
-| State | Zustand |
+| Layer    | Tech                             |
+| -------- | -------------------------------- |
+| Shell    | Electron 39                      |
+| UI       | React 19 + TypeScript            |
+| Build    | electron-vite + Vite 7           |
+| Editor   | Monaco Editor 0.55               |
+| AI       | `@anthropic-ai/claude-agent-sdk` |
+| Terminal | node-pty + xterm.js              |
+| Git      | simple-git                       |
+| State    | Zustand                          |
 
 ## Keyboard shortcuts (VS Code map)
 
-| Shortcut | Action |
-|---|---|
-| `Cmd+P` | Quick Open — fuzzy file picker |
-| `Cmd+Shift+P` | Command Palette |
-| `Cmd+B` | Toggle sidebar |
-| `Cmd+J` / `Cmd+\`` | Toggle bottom panel |
-| `Cmd+S` | Save active file |
-| `Cmd+Shift+S` | Save all |
-| `Cmd+W` | Close active tab |
-| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab |
+| Shortcut                      | Action                          |
+| ----------------------------- | ------------------------------- |
+| `Cmd+P`                       | Quick Open — fuzzy file picker  |
+| `Cmd+Shift+P`                 | Command Palette                 |
+| `Cmd+B`                       | Toggle sidebar                  |
+| `Cmd+J` / `Cmd+\``            | Toggle bottom panel             |
+| `Cmd+S`                       | Save active file                |
+| `Cmd+Shift+S`                 | Save all                        |
+| `Cmd+W`                       | Close active tab                |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab             |
 | `Cmd+Shift+]` / `Cmd+Shift+[` | Next / previous tab (Mac style) |
-| `Cmd+1–9` | Jump to tab by index |
-| `Cmd+Shift+E` | Show Explorer |
-| `Cmd+Shift+G` | Show Source Control |
-| `Cmd+Shift+T` | Show Tests |
+| `Cmd+1–9`                     | Jump to tab by index            |
+| `Cmd+Shift+E`                 | Show Explorer                   |
+| `Cmd+Shift+G`                 | Show Source Control             |
+| `Cmd+Shift+T`                 | Show Tests                      |
 
 ## Setup
 
