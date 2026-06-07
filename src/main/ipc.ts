@@ -102,6 +102,7 @@ export function registerIpc(win: BrowserWindow): void {
 
   // ---- LSP ----
   ipcMain.handle('lsp:start', (_e, rootPath: string) => lspService.start(win, rootPath))
+  ipcMain.handle('lsp:stop', () => lspService.stop())
   ipcMain.on('lsp:send', (_e, msg: object) => lspService.send(msg))
 }
 
