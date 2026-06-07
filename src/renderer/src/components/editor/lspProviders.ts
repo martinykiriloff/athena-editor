@@ -49,26 +49,52 @@ type LspDocSym = {
 
 // LSP CompletionItemKind (1-based) → Monaco CompletionItemKind (0-based raw number)
 const COMP_KIND: Record<number, number> = {
-  1: 18, 2: 0, 3: 1, 4: 2, 5: 3, 6: 4, 7: 5, 8: 7, 9: 8, 10: 9,
-  11: 12, 12: 13, 13: 15, 14: 17, 15: 27, 16: 19, 17: 20, 18: 21,
-  19: 23, 20: 16, 21: 14, 22: 6, 23: 10, 24: 11, 25: 24
+  1: 18,
+  2: 0,
+  3: 1,
+  4: 2,
+  5: 3,
+  6: 4,
+  7: 5,
+  8: 7,
+  9: 8,
+  10: 9,
+  11: 12,
+  12: 13,
+  13: 15,
+  14: 17,
+  15: 27,
+  16: 19,
+  17: 20,
+  18: 21,
+  19: 23,
+  20: 16,
+  21: 14,
+  22: 6,
+  23: 10,
+  24: 11,
+  25: 24
 }
 
 // LSP SymbolKind is 1-based, Monaco's is 0-based (same names)
-const symKind = (k: number) => Math.max(0, k - 1)
+const symKind = (k: number): number => Math.max(0, k - 1)
 
-// Monaco normalises .ts/.tsx → 'typescript' and .js/.jsx → 'javascript'.
-// LSP needs the react variants to enable JSX parsing.
 const LSP_LANGS = ['typescript', 'javascript']
 
 function lspLangId(monacoLang: string, uri: string): string {
   if (monacoLang === 'typescript' && uri.endsWith('.tsx')) return 'typescriptreact'
-  if (monacoLang === 'javascript' && (uri.endsWith('.jsx') || uri.endsWith('.mjsx') || uri.endsWith('.cjsx'))) return 'javascriptreact'
+  if (monacoLang === 'javascript' && (uri.endsWith('.jsx') || uri.endsWith('.mjsx')))
+    return 'javascriptreact'
   return monacoLang
 }
 
-function mRange(r: LspRange, monaco: Monaco) {
-  return new monaco.Range(r.start.line + 1, r.start.character + 1, r.end.line + 1, r.end.character + 1)
+function mRange(r: LspRange, monaco: Monaco): import('monaco-editor').Range {
+  return new monaco.Range(
+    r.start.line + 1,
+    r.start.character + 1,
+    r.end.line + 1,
+    r.end.character + 1
+  )
 }
 
 function toLsp(lineNumber: number, column: number): LspPos {
@@ -91,7 +117,7 @@ function normalizeHoverContents(
 ): { value: string; isTrusted?: boolean }[] {
   const items = Array.isArray(raw) ? raw : [raw]
   return items
-    .map((c) => {
+    .map((c): { value: string } => {
       if (typeof c === 'string') return { value: c }
       if ('language' in c) return { value: `\`\`\`${c.language}\n${c.value}\n\`\`\`` }
       return { value: (c as { value: string }).value }
@@ -234,8 +260,12 @@ export function registerLspProviders(monaco: Monaco): void {
         const lspItem = (item as languages.CompletionItem & { _lsp?: LspCompletionItem })._lsp
         if (!lspItem || !lspClient.ready) return item
         try {
-          const resolved = await lspClient.request<LspCompletionItem>('completionItem/resolve', lspItem)
-          if (resolved.documentation) item.documentation = { value: markupValue(resolved.documentation) }
+          const resolved = await lspClient.request<LspCompletionItem>(
+            'completionItem/resolve',
+            lspItem
+          )
+          if (resolved.documentation)
+            item.documentation = { value: markupValue(resolved.documentation) }
           if (resolved.detail) item.detail = resolved.detail
           if (resolved.additionalTextEdits?.length) {
             item.additionalTextEdits = resolved.additionalTextEdits.map((e) => ({
@@ -295,9 +325,7 @@ export function registerLspProviders(monaco: Monaco): void {
                 : undefined,
               parameters: (sig.parameters ?? []).map((p) => ({
                 label: p.label,
-                documentation: p.documentation
-                  ? { value: markupValue(p.documentation) }
-                  : undefined
+                documentation: p.documentation ? { value: markupValue(p.documentation) } : undefined
               }))
             })),
             activeSignature: result.activeSignature ?? 0,
@@ -384,24 +412,4 @@ export function registerLspProviders(monaco: Monaco): void {
       }
     })
   }
-
-  // Workspace Symbols
-  monaco.languages.registerWorkspaceSymbolProvider({
-    async provideWorkspaceSymbols(query: string) {
-      if (!lspClient.ready) return []
-      const result = await lspClient.request<
-        Array<{ name: string; kind: number; location: LspLocation; containerName?: string }> | null
-      >('workspace/symbol', { query })
-      if (!result) return []
-      return result.map((sym) => ({
-        name: sym.name,
-        kind: symKind(sym.kind) as languages.SymbolKind,
-        location: {
-          uri: monaco.Uri.parse(sym.location.uri),
-          range: mRange(sym.location.range, monaco)
-        },
-        containerName: sym.containerName
-      }))
-    }
-  })
 }

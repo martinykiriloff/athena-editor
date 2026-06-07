@@ -81,11 +81,18 @@ const api = {
   },
   lsp: {
     start: (rootPath: string): Promise<void> => ipcRenderer.invoke('lsp:start', rootPath),
+    stop: (): Promise<void> => ipcRenderer.invoke('lsp:stop'),
     send: (msg: object): void => ipcRenderer.send('lsp:send', msg),
     onMessage: (cb: (msg: Record<string, unknown>) => void): (() => void) => {
       const listener = (_e: unknown, msg: Record<string, unknown>): void => cb(msg)
       ipcRenderer.on('lsp:message', listener)
       return () => ipcRenderer.removeListener('lsp:message', listener)
+    },
+    onExit: (cb: (info: { code: number | null; signal: string | null }) => void): (() => void) => {
+      const listener = (_e: unknown, info: { code: number | null; signal: string | null }): void =>
+        cb(info)
+      ipcRenderer.on('lsp:exit', listener)
+      return () => ipcRenderer.removeListener('lsp:exit', listener)
     }
   }
 }

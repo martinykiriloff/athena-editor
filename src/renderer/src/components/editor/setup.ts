@@ -60,6 +60,7 @@ export function setupLanguages(monaco: Monaco): void {
   }
   ts.typescriptDefaults.setCompilerOptions(compilerOptions)
   ts.javascriptDefaults.setCompilerOptions(compilerOptions)
+
   ts.typescriptDefaults.setEagerModelSync(true)
   ts.javascriptDefaults.setEagerModelSync(true)
 

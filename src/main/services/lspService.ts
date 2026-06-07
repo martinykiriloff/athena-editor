@@ -4,19 +4,23 @@ import { BrowserWindow, app } from 'electron'
 import { is } from '@electron-toolkit/utils'
 
 function serverModule(): string {
-  const base = is.dev ? join(app.getAppPath(), 'node_modules') : join(app.getAppPath(), 'node_modules')
-  return join(base, 'typescript-language-server/lib/cli.mjs')
+  const nmBase = is.dev
+    ? join(app.getAppPath(), 'node_modules')
+    : join(process.resourcesPath, 'app.asar.unpacked', 'node_modules')
+  return join(nmBase, 'typescript-language-server/lib/cli.mjs')
 }
 
 export class LspService {
   private proc: ChildProcess | null = null
   private buf = ''
   private win: BrowserWindow | null = null
+  private stopping = false
 
   start(win: BrowserWindow, rootPath: string): void {
     this.stop()
     this.win = win
     this.buf = ''
+    this.stopping = false
 
     this.proc = spawn(process.execPath, [serverModule(), '--stdio'], {
       cwd: rootPath,
@@ -35,6 +39,9 @@ export class LspService {
 
     this.proc.on('exit', (code, signal) => {
       console.log('[LSP] exited', code, signal)
+      if (!this.stopping && this.win && !this.win.isDestroyed()) {
+        this.win.webContents.send('lsp:exit', { code, signal })
+      }
       this.proc = null
     })
   }
@@ -70,10 +77,12 @@ export class LspService {
   }
 
   stop(): void {
+    this.stopping = true
     this.proc?.kill()
     this.proc = null
     this.buf = ''
     this.win = null
+    this.stopping = false
   }
 }
 
