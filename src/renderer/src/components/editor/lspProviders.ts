@@ -1,6 +1,7 @@
 import type { Monaco } from '@monaco-editor/react'
 import type { languages } from 'monaco-editor'
 import { lspClient } from './lspClient'
+import { useWorkspaceStore } from '../../store/workspace'
 
 type LspPos = { line: number; character: number }
 type LspRange = { start: LspPos; end: LspPos }
@@ -142,6 +143,10 @@ export function registerLspProviders(monaco: Monaco): void {
   monaco.editor.onDidCreateModel((model) => {
     const langId = model.getLanguageId()
     if (!LSP_LANGS.includes(langId)) return
+
+    // Lazy LSP start: spawn server on first TS/JS file open.
+    void useWorkspaceStore.getState().ensureLsp()
+
     const uri = model.uri.toString()
 
     if (lspClient.ready) {

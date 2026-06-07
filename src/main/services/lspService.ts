@@ -1,4 +1,5 @@
 import { ChildProcess, spawn } from 'child_process'
+import { existsSync } from 'fs'
 import { join } from 'path'
 import { BrowserWindow, app } from 'electron'
 import { is } from '@electron-toolkit/utils'
@@ -8,6 +9,12 @@ function serverModule(): string {
     ? join(app.getAppPath(), 'node_modules')
     : join(process.resourcesPath, 'app.asar.unpacked', 'node_modules')
   return join(nmBase, 'typescript-language-server/lib/cli.mjs')
+}
+
+// Mirror the ESLint resolution pattern: prefer workspace's own TypeScript.
+function workspaceTsServerPath(rootPath: string): string | undefined {
+  const candidate = join(rootPath, 'node_modules', 'typescript', 'lib', 'tsserver.js')
+  return existsSync(candidate) ? candidate : undefined
 }
 
 export class LspService {
@@ -22,7 +29,11 @@ export class LspService {
     this.buf = ''
     this.stopping = false
 
-    this.proc = spawn(process.execPath, [serverModule(), '--stdio'], {
+    const args = [serverModule(), '--stdio']
+    const tsPath = workspaceTsServerPath(rootPath)
+    if (tsPath) args.push('--tsserver-path', tsPath)
+
+    this.proc = spawn(process.execPath, args, {
       cwd: rootPath,
       env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
       stdio: ['pipe', 'pipe', 'pipe']
