@@ -78,6 +78,15 @@ const api = {
     const listener = (_e: unknown, payload: { type: string; path: string }): void => cb(payload)
     ipcRenderer.on('fs:changed', listener)
     return () => ipcRenderer.removeListener('fs:changed', listener)
+  },
+  lsp: {
+    start: (rootPath: string): Promise<void> => ipcRenderer.invoke('lsp:start', rootPath),
+    send: (msg: object): void => ipcRenderer.send('lsp:send', msg),
+    onMessage: (cb: (msg: Record<string, unknown>) => void): (() => void) => {
+      const listener = (_e: unknown, msg: Record<string, unknown>): void => cb(msg)
+      ipcRenderer.on('lsp:message', listener)
+      return () => ipcRenderer.removeListener('lsp:message', listener)
+    }
   }
 }
 
