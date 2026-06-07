@@ -1,8 +1,9 @@
 import type { Monaco } from '@monaco-editor/react'
 import { useEditorStore } from '../../store/editor'
+import { registerLspProviders } from './lspProviders'
 
-// Languages that can contain resolvable imports/requires/@imports.
-const IMPORT_LANGS = ['typescript', 'javascript', 'html', 'css', 'scss', 'less']
+// LSP handles TS/JS — keep import-resolver only for stylesheet/markup languages.
+const IMPORT_LANGS = ['html', 'css', 'scss', 'less']
 
 // Regexes whose first capture group is the module specifier.
 const SPEC_PATTERNS: RegExp[] = [
@@ -118,4 +119,7 @@ export function setupLanguages(monaco: Monaco): void {
       return true
     }
   })
+
+  // Register LSP-backed providers for TypeScript / JavaScript.
+  registerLspProviders(monaco)
 }

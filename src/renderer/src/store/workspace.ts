@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { lspClient } from '../components/editor/lspClient'
 
 interface WorkspaceState {
   root: string | null
@@ -13,7 +14,12 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   changeTick: 0,
   openFolder: async () => {
     const root = await window.api.workspace.open()
-    if (root) set({ root })
+    if (root) {
+      set({ root })
+      lspClient.reset()
+      await window.api.lsp.start(root)
+      lspClient.initialize(root).catch((err) => console.error('[LSP] init error', err))
+    }
   },
   bumpChange: () => set((s) => ({ changeTick: s.changeTick + 1 }))
 }))
