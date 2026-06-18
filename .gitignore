@@ -1,0 +1,19 @@
+# Swift build artifacts
+.build/
+.swiftpm/
+
+# Object and dependency files
+*.o
+*.d
+*.swp
+
+# Xcode
+xcuserdata/
+DerivedData/
+
+# macOS
+.DS_Store
+
+# Build outputs (binaries — released via GitHub Releases)
+*.app
+*.dmg

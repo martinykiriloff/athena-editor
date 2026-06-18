@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:athena-swift}",
+            "name": "Debug Athena",
+            "target": "Athena",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug Athena"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:athena-swift}",
+            "name": "Release Athena",
+            "target": "Athena",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release Athena"
+        }
+    ]
+}
