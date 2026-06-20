@@ -317,7 +317,7 @@ struct SettingsView: View {
         case .checking:
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
-                Text("Checking…").foregroundStyle(.secondary)
+                Text("Checking for updates…").foregroundStyle(.secondary)
             }
 
         case .upToDate:
@@ -327,27 +327,24 @@ struct SettingsView: View {
                 Task { await updateService.checkForUpdates() }
             }
 
-        case .available(let version, let url):
-            Label("Version \(version) is available", systemImage: "arrow.down.circle.fill")
-                .foregroundStyle(.blue)
-            Button("Download & Install") {
-                Task { await updateService.downloadAndInstall(from: url) }
+        case .available(let version, _):
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Update \(version) found — downloading…").foregroundStyle(.secondary)
             }
-            .buttonStyle(.borderedProminent)
 
         case .downloading:
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
-                Text("Downloading update…").foregroundStyle(.secondary)
+                let label = updateService.pendingVersion.map { "Downloading v\($0)…" } ?? "Downloading update…"
+                Text(label).foregroundStyle(.secondary)
             }
 
-        case .readyToInstall(let appURL):
-            Label("Update ready to install", systemImage: "checkmark.circle.fill")
-                .foregroundStyle(.green)
-            Button("Install & Relaunch") {
-                updateService.installAndRelaunch(newAppURL: appURL)
+        case .readyToInstall:
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Saving files and restarting…").foregroundStyle(.secondary)
             }
-            .buttonStyle(.borderedProminent)
 
         case .error(let message):
             Label(message, systemImage: "exclamationmark.triangle.fill")

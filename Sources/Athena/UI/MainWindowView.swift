@@ -161,6 +161,11 @@ struct MainWindowView: View {
         }
         .frame(minWidth: 900, minHeight: 600)
         .background(Color(nsColor: .windowBackgroundColor))
+        .overlay {
+            if appState.showQuickOpen {
+                QuickOpenView()
+            }
+        }
         // Menu commands can't reach @Environment, so they broadcast their
         // intent. Observe those broadcasts here and run them through the same
         // dispatch the keyboard uses, so clicks and shortcuts behave identically.

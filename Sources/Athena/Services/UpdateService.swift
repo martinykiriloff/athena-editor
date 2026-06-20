@@ -27,10 +27,12 @@ final class UpdateService {
 
     var state: UpdateState = .idle
     var lastChecked: Date?
+    /// The version string being downloaded / installed, for UI display.
+    private(set) var pendingVersion: String?
 
     var updateAvailable: Bool {
         switch state {
-        case .available, .readyToInstall: return true
+        case .available, .downloading, .readyToInstall: return true
         default: return false
         }
     }
@@ -53,7 +55,9 @@ final class UpdateService {
                     state = .error("No .zip asset found in release \(latest)")
                     return
                 }
-                state = .available(version: latest, downloadURL: url)
+                pendingVersion = latest
+                // Kick off download immediately — no user interaction required.
+                await downloadAndInstall(from: url)
             } else {
                 state = .upToDate
             }
@@ -62,11 +66,16 @@ final class UpdateService {
         }
     }
 
-    func downloadAndInstall(from url: URL) async {
+    private func downloadAndInstall(from url: URL) async {
         state = .downloading
         do {
             let appURL = try await downloadAndExtract(from: url)
             state = .readyToInstall(appURL: appURL)
+            // Save all open files before we quit.
+            NotificationCenter.default.post(name: .athenaSaveAll, object: nil)
+            // Give saves a moment to flush, then replace and relaunch.
+            try? await Task.sleep(for: .seconds(2))
+            installAndRelaunch(newAppURL: appURL)
         } catch {
             state = .error(error.localizedDescription)
         }

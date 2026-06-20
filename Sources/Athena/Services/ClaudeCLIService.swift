@@ -20,12 +20,27 @@ actor ClaudeCLIService {
             var env = ProcessInfo.processInfo.environment
             env["ATHENA_PROMPT"] = prompt
 
-            // Login shell (-l) so $PATH includes brew/nix/volta installations.
+            // macOS apps launched from Finder/Dock get a stripped PATH that
+            // typically omits ~/.local/bin (the default claude install location).
+            // Prepend all common install locations so the binary is always found.
+            let extraPaths: [String] = [
+                "\(NSHomeDirectory())/.local/bin",
+                "/usr/local/bin",
+                "/opt/homebrew/bin",
+                "\(NSHomeDirectory())/.npm-global/bin",
+            ]
+            let basePath = env["PATH"] ?? "/usr/bin:/bin"
+            env["PATH"] = (extraPaths + [basePath]).joined(separator: ":")
+
+            // Resolve the binary to an absolute path so the shell command works
+            // even when login-shell profile loading is delayed or absent.
+            let resolvedCommand = Self.resolveBinary(command, extraPaths: extraPaths)
+
             // `--print` (-p) runs the CLI non-interactively: it reads the piped
             // prompt and streams the response to stdout. Without it, `claude`
             // launches its interactive TUI and emits no usable output here.
             process.executableURL  = URL(fileURLWithPath: "/bin/zsh")
-            process.arguments      = ["-lc", "printf '%s' \"$ATHENA_PROMPT\" | \(command) --print"]
+            process.arguments      = ["-lc", "printf '%s' \"$ATHENA_PROMPT\" | '\(resolvedCommand)' --print"]
             process.standardOutput = outPipe
             process.standardError  = errPipe
             process.environment    = env
@@ -84,6 +99,19 @@ actor ClaudeCLIService {
 
     private func storeProcess(_ p: Process) {
         currentProcess = p
+    }
+
+    /// Returns the absolute path to `name` if found in any of `extraPaths`,
+    /// otherwise returns `name` unchanged and lets the shell resolve it.
+    private static func resolveBinary(_ name: String, extraPaths: [String]) -> String {
+        let fm = FileManager.default
+        for dir in extraPaths {
+            let candidate = "\(dir)/\(name)"
+            if fm.isExecutableFile(atPath: candidate) {
+                return candidate
+            }
+        }
+        return name
     }
 }
 

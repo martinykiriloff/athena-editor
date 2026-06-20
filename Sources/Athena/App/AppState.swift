@@ -49,6 +49,7 @@ final class AppState {
     var showClaudePanel: Bool = false
     var claudePanelWidth: CGFloat = 340
     var keyBindings: [KeyBinding] = KeyBinding.vscodeDefaults
+    var showQuickOpen: Bool = false
 
     // MARK: - Editor settings (mirrored from SettingsService on launch)
     var editorFontSize:          CGFloat = 14
@@ -72,6 +73,19 @@ final class AppState {
 
     var activeTab: TabModel? {
         openTabs.first { $0.id == activeTabId }
+    }
+
+    /// Flat, sorted list of every non-directory file in the workspace tree.
+    var allFiles: [FileNode] {
+        var result: [FileNode] = []
+        func collect(_ nodes: [FileNode]) {
+            for node in nodes {
+                if !node.isDirectory { result.append(node) }
+                if let children = node.children { collect(children) }
+            }
+        }
+        collect(fileTree)
+        return result.sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
     }
 
     // MARK: - Init
@@ -392,18 +406,8 @@ final class AppState {
         NotificationCenter.default.post(name: .athenaEditorCommand, object: command)
     }
 
-    /// Quick-open substitute: there's no fuzzy palette yet, so present the
-    /// system file panel scoped to the workspace and open the chosen file.
     private func presentQuickOpen() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        panel.title = "Go to File"
-        if let root = workspace?.rootURL { panel.directoryURL = root }
-        if panel.runModal() == .OK, let url = panel.url {
-            Task { await openFile(url) }
-        }
+        showQuickOpen = true
     }
 
     /// Saves every open tab that has unsaved changes.

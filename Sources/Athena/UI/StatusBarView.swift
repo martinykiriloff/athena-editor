@@ -37,18 +37,35 @@ struct StatusBarView: View {
                     }
                 }
 
-                // Update available badge
-                if updateService.updateAvailable {
+                // Update progress / badge
+                switch updateService.state {
+                case .available(let version, _):
                     StatusBarItem {
-                        Button {
-                            NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-                        } label: {
-                            Label("Update available", systemImage: "arrow.down.circle.fill")
-                                .foregroundStyle(Color.blue)
+                        HStack(spacing: 4) {
+                            ProgressView().controlSize(.mini)
+                            Text("Update \(version) found…")
                         }
-                        .buttonStyle(.plain)
-                        .help("A new version of Athena is available — click to open Settings")
+                        .foregroundStyle(.secondary)
                     }
+                case .downloading:
+                    StatusBarItem {
+                        HStack(spacing: 4) {
+                            ProgressView().controlSize(.mini)
+                            let label = updateService.pendingVersion.map { "Downloading v\($0)…" } ?? "Downloading update…"
+                            Text(label)
+                        }
+                        .foregroundStyle(.secondary)
+                    }
+                case .readyToInstall:
+                    StatusBarItem {
+                        HStack(spacing: 4) {
+                            ProgressView().controlSize(.mini)
+                            Text("Restarting…")
+                        }
+                        .foregroundStyle(.secondary)
+                    }
+                default:
+                    EmptyView()
                 }
 
                 // Error count
