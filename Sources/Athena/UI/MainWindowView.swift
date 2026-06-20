@@ -99,7 +99,8 @@ private struct EditorSplitView: View {
 // MARK: - MainWindowView
 
 struct MainWindowView: View {
-    @Environment(AppState.self) private var appState
+    @Environment(AppState.self)      private var appState
+    @Environment(UpdateService.self) private var updateService
 
     @State private var dragBaseSidebarWidth: CGFloat = 0
     @State private var dragBaseClaudeWidth: CGFloat = 0
@@ -160,6 +161,39 @@ struct MainWindowView: View {
         }
         .frame(minWidth: 900, minHeight: 600)
         .background(Color(nsColor: .windowBackgroundColor))
+        // Menu commands can't reach @Environment, so they broadcast their
+        // intent. Observe those broadcasts here and run them through the same
+        // dispatch the keyboard uses, so clicks and shortcuts behave identically.
+        .onReceive(NotificationCenter.default.publisher(for: .athenaPerformAction)) { note in
+            guard let action = note.object as? KeyAction else { return }
+            Task { await appState.perform(action) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .athenaOpenFile)) { note in
+            guard let url = note.object as? URL else { return }
+            Task { await appState.openFile(url) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .athenaOpenWorkspace)) { note in
+            guard let url = note.object as? URL else { return }
+            Task { await appState.openWorkspace(url) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .athenaSaveAll)) { _ in
+            Task { await appState.saveAllTabs() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .athenaZoomIn)) { _ in
+            appState.adjustFontSize(by: 1)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .athenaZoomOut)) { _ in
+            appState.adjustFontSize(by: -1)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .athenaResetZoom)) { _ in
+            appState.resetFontSize()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .athenaGitRefresh)) { _ in
+            Task { await appState.refreshGitStatus() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .athenaCheckForUpdates)) { _ in
+            Task { await updateService.checkForUpdates() }
+        }
     }
 }
 

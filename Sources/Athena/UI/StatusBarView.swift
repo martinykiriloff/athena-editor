@@ -7,7 +7,8 @@ import SwiftUI
 // MARK: - StatusBarView
 
 struct StatusBarView: View {
-    @Environment(AppState.self) private var appState
+    @Environment(AppState.self)      private var appState
+    @Environment(UpdateService.self) private var updateService
 
     // MARK: Diagnostic counts
 
@@ -33,6 +34,20 @@ struct StatusBarView: View {
                 if let branch = gitBranch {
                     StatusBarItem {
                         Label(branch, systemImage: "arrow.triangle.branch")
+                    }
+                }
+
+                // Update available badge
+                if updateService.updateAvailable {
+                    StatusBarItem {
+                        Button {
+                            NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                        } label: {
+                            Label("Update available", systemImage: "arrow.down.circle.fill")
+                                .foregroundStyle(Color.blue)
+                        }
+                        .buttonStyle(.plain)
+                        .help("A new version of Athena is available — click to open Settings")
                     }
                 }
 

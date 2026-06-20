@@ -12,22 +12,28 @@ import AppKit
 // MARK: - Notification Names
 
 extension Notification.Name {
+    /// Generic menu→app dispatch carrying a `KeyAction` as its `object`. Lets
+    /// menu commands run the exact same code path as the keybinding monitor.
+    static let athenaPerformAction  = Notification.Name("athena.performAction")
+    /// Editor-level command carrying an `EditorCommand` as its `object`.
+    static let athenaEditorCommand  = Notification.Name("athena.editorCommand")
+
     static let athenaOpenFile       = Notification.Name("athena.openFile")
-    static let athenaNewTab         = Notification.Name("athena.newTab")
     static let athenaOpenWorkspace  = Notification.Name("athena.openWorkspace")
-    static let athenaSave           = Notification.Name("athena.save")
     static let athenaSaveAll        = Notification.Name("athena.saveAll")
-    static let athenaToggleSidebar  = Notification.Name("athena.toggleSidebar")
-    static let athenaToggleTerminal = Notification.Name("athena.toggleTerminal")
     static let athenaZoomIn         = Notification.Name("athena.zoomIn")
     static let athenaZoomOut        = Notification.Name("athena.zoomOut")
     static let athenaResetZoom      = Notification.Name("athena.resetZoom")
-    static let athenaGoToFile       = Notification.Name("athena.goToFile")
-    static let athenaGoToLine       = Notification.Name("athena.goToLine")
-    static let athenaGoToDefinition = Notification.Name("athena.goToDefinition")
     static let athenaGitRefresh     = Notification.Name("athena.gitRefresh")
     static let athenaGitStageAll    = Notification.Name("athena.gitStageAll")
     static let athenaGitCommit      = Notification.Name("athena.gitCommit")
+    static let athenaCheckForUpdates = Notification.Name("athena.checkForUpdates")
+}
+
+// MARK: - Menu action helper
+
+private func performAction(_ action: KeyAction) {
+    NotificationCenter.default.post(name: .athenaPerformAction, object: action)
 }
 
 // MARK: - AthenaCommands
@@ -35,10 +41,23 @@ extension Notification.Name {
 struct AthenaCommands: Commands {
 
     var body: some Commands {
+        appInfoCommands
         fileCommands
         viewCommands
         goCommands
         gitCommands
+    }
+
+    // MARK: - App Menu (injected after "About Athena")
+
+    @CommandsBuilder
+    private var appInfoCommands: some Commands {
+        CommandGroup(after: .appInfo) {
+            Button("Check for Updates…") {
+                NotificationCenter.default.post(name: .athenaCheckForUpdates, object: nil)
+            }
+            Divider()
+        }
     }
 
     // MARK: - File Menu
@@ -46,10 +65,12 @@ struct AthenaCommands: Commands {
     @CommandsBuilder
     private var fileCommands: some Commands {
         CommandGroup(replacing: .newItem) {
-            Button("New Tab") {
-                NotificationCenter.default.post(name: .athenaNewTab, object: nil)
+            // New File (⌘N) and Close Editor (⌘W) are owned by the keybinding
+            // monitor; they're intentionally not given menu key-equivalents so
+            // they don't shadow it. Menu clicks route through the same action.
+            Button("New File") {
+                performAction(.newFile)
             }
-            .keyboardShortcut("t", modifiers: .command)
 
             Divider()
 
@@ -85,10 +106,10 @@ struct AthenaCommands: Commands {
 
             Divider()
 
+            // Save (⌘S) is owned by the keybinding monitor — no menu shortcut.
             Button("Save") {
-                NotificationCenter.default.post(name: .athenaSave, object: nil)
+                performAction(.saveFile)
             }
-            .keyboardShortcut("s", modifiers: .command)
 
             Button("Save All") {
                 NotificationCenter.default.post(name: .athenaSaveAll, object: nil)
@@ -102,15 +123,15 @@ struct AthenaCommands: Commands {
     @CommandsBuilder
     private var viewCommands: some Commands {
         CommandMenu("View") {
+            // ⌘B and ⌃` are owned by the keybinding monitor (so it isn't
+            // shadowed by the menu); clicks route through the same action.
             Button("Toggle Sidebar") {
-                NotificationCenter.default.post(name: .athenaToggleSidebar, object: nil)
+                performAction(.toggleSidebar)
             }
-            .keyboardShortcut("b", modifiers: .command)
 
             Button("Toggle Terminal") {
-                NotificationCenter.default.post(name: .athenaToggleTerminal, object: nil)
+                performAction(.toggleTerminal)
             }
-            .keyboardShortcut("`", modifiers: .control)
 
             Divider()
 
@@ -136,21 +157,15 @@ struct AthenaCommands: Commands {
     @CommandsBuilder
     private var goCommands: some Commands {
         CommandMenu("Go") {
+            // ⌘P and ⌘⌃G are owned by the keybinding monitor; clicks route
+            // through the same actions.
             Button("Go to File…") {
-                NotificationCenter.default.post(name: .athenaGoToFile, object: nil)
+                performAction(.quickOpen)
             }
-            .keyboardShortcut("p", modifiers: .command)
 
             Button("Go to Line…") {
-                NotificationCenter.default.post(name: .athenaGoToLine, object: nil)
+                performAction(.goToLine)
             }
-            .keyboardShortcut("g", modifiers: [.command, .control])
-
-            Button("Go to Definition") {
-                NotificationCenter.default.post(name: .athenaGoToDefinition, object: nil)
-            }
-            // F12 = Unicode private-use 0xF70B (macOS function-key encoding).
-            .keyboardShortcut(KeyEquivalent("\u{F70B}"), modifiers: [])
         }
     }
 

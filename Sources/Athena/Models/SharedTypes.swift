@@ -148,6 +148,18 @@ enum ChatRole: Sendable {
     case user, assistant
 }
 
+// MARK: - Editor commands
+
+/// Editor-level actions dispatched from the keybinding system to the active
+/// text view (which can't be reached directly from AppState).
+enum EditorCommand: Sendable {
+    case find
+    case goToLine
+    case toggleComment
+    case indent
+    case outdent
+}
+
 // MARK: - Workspace & Files
 
 struct WorkspaceModel: Identifiable, Sendable {

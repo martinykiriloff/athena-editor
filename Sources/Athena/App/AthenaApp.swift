@@ -8,7 +8,8 @@ import AppKit
 @main
 struct AthenaApp: App {
 
-    @State private var appState = AppState()
+    @State private var appState     = AppState()
+    @State private var updateService = UpdateService()
 
     var body: some Scene {
         // MARK: - Main editor window
@@ -16,6 +17,7 @@ struct AthenaApp: App {
         WindowGroup {
             MainWindowView()
                 .environment(appState)
+                .environment(updateService)
                 .onAppear {
                     NSWindow.allowsAutomaticWindowTabbing = false
                     NSApplication.shared.appearance = NSAppearance(named: .darkAqua)
@@ -24,6 +26,9 @@ struct AthenaApp: App {
                     await appState.loadSettings()
                     await appState.restoreLastWorkspace()
                     await appState.installKeyMonitor()
+                    // Auto-check for updates a few seconds after launch.
+                    try? await Task.sleep(for: .seconds(5))
+                    await updateService.checkForUpdates()
                 }
         }
         .windowStyle(.hiddenTitleBar)
@@ -37,6 +42,7 @@ struct AthenaApp: App {
         Settings {
             SettingsView()
                 .environment(appState)
+                .environment(updateService)
         }
     }
 }

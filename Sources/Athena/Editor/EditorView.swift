@@ -20,6 +20,8 @@ struct EditorView: NSViewRepresentable {
     var lineHeight:     CGFloat = 1.5
     var wordWrap:       Bool    = false
     var renderWhitespace: Bool  = true
+    var tabSize:        Int     = 4
+    var insertSpaces:   Bool    = true
     var onCursorMove: (Int, Int) -> Void = { _, _ in }
     var onContentChange: (String) -> Void = { _ in }
     /// Called whenever the scroll position changes. (fraction 0‥1, visible ratio 0‥1)
@@ -50,6 +52,10 @@ struct EditorView: NSViewRepresentable {
         // Observe live scroll notifications to feed the minimap.
         context.coordinator.installScrollObserver(on: scrollView)
 
+        // Let the keybinding system reach this editor (find, comment, indent…).
+        context.coordinator.textView = textView
+        context.coordinator.installCommandObserver()
+
         return scrollView
     }
 
@@ -57,6 +63,8 @@ struct EditorView: NSViewRepresentable {
         guard let textView = nsView.documentView as? NSTextView else { return }
 
         let coord = context.coordinator
+        coord.currentTabSize      = tabSize
+        coord.currentInsertSpaces = insertSpaces
         let themeChanged = coord.currentTheme != theme
         let langChanged  = coord.currentLanguage != language
         let fontChanged  = coord.currentFontSize != fontSize
@@ -190,8 +198,12 @@ extension EditorView {
         var currentLineHeight:    CGFloat = 1.5
         var currentWordWrap:      Bool    = false
         var currentRenderWhitespace: Bool = true
+        var currentTabSize:       Int     = 4
+        var currentInsertSpaces:  Bool    = true
         var scrollProxy: EditorScrollProxy?
+        weak var textView: NSTextView?
         nonisolated(unsafe) private var scrollObserver: NSObjectProtocol?
+        nonisolated(unsafe) private var commandObserver: NSObjectProtocol?
 
         init(_ parent: EditorView) {
             self.parent              = parent
@@ -203,6 +215,8 @@ extension EditorView {
             self.currentLineHeight   = parent.lineHeight
             self.currentWordWrap     = parent.wordWrap
             self.currentRenderWhitespace = parent.renderWhitespace
+            self.currentTabSize      = parent.tabSize
+            self.currentInsertSpaces = parent.insertSpaces
             self.highlighter = SyntaxHighlighter(
                 language: parent.language, theme: parent.theme,
                 fontSize: parent.fontSize, fontFamily: parent.fontFamily,
@@ -240,6 +254,168 @@ extension EditorView {
         deinit {
             if let obs = scrollObserver {
                 NotificationCenter.default.removeObserver(obs)
+            }
+            if let obs = commandObserver {
+                NotificationCenter.default.removeObserver(obs)
+            }
+        }
+
+        // MARK: Editor commands (find / go-to-line / comment / indent)
+
+        func installCommandObserver() {
+            commandObserver = NotificationCenter.default.addObserver(
+                forName: .athenaEditorCommand,
+                object: nil,
+                queue: .main
+            ) { [weak self] note in
+                guard let command = note.object as? EditorCommand else { return }
+                MainActor.assumeIsolated {
+                    self?.handle(command)
+                }
+            }
+        }
+
+        private func handle(_ command: EditorCommand) {
+            // Only the focused editor should react, matching VS Code semantics.
+            guard let tv = textView, tv.window?.firstResponder === tv else { return }
+            switch command {
+            case .find:          showFindBar(tv)
+            case .goToLine:      promptGoToLine(tv)
+            case .toggleComment: toggleComment(tv)
+            case .indent:        shiftIndent(tv, indent: true)
+            case .outdent:       shiftIndent(tv, indent: false)
+            }
+        }
+
+        private var indentUnit: String {
+            currentInsertSpaces ? String(repeating: " ", count: max(1, currentTabSize)) : "\t"
+        }
+
+        private func showFindBar(_ tv: NSTextView) {
+            tv.usesFindBar = true
+            let sender = NSMenuItem()
+            sender.tag = Int(NSTextFinder.Action.showFindInterface.rawValue)
+            tv.performTextFinderAction(sender)
+        }
+
+        private func promptGoToLine(_ tv: NSTextView) {
+            let alert = NSAlert()
+            alert.messageText = "Go to Line"
+            alert.informativeText = "Enter a line number:"
+            let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 200, height: 24))
+            alert.accessoryView = field
+            alert.addButton(withTitle: "Go")
+            alert.addButton(withTitle: "Cancel")
+            alert.window.initialFirstResponder = field
+            guard alert.runModal() == .alertFirstButtonReturn,
+                  let line = Int(field.stringValue.trimmingCharacters(in: .whitespaces)),
+                  line >= 1
+            else { return }
+
+            let ns = tv.string as NSString
+            var idx = 0
+            var current = 1
+            while current < line && idx < ns.length {
+                let r = ns.range(of: "\n", options: [],
+                                 range: NSRange(location: idx, length: ns.length - idx))
+                if r.location == NSNotFound { break }
+                idx = r.location + 1
+                current += 1
+            }
+            let range = NSRange(location: min(idx, ns.length), length: 0)
+            tv.setSelectedRange(range)
+            tv.scrollRangeToVisible(range)
+        }
+
+        /// Comment token for the current language, or "" if line comments
+        /// aren't well-defined for it.
+        private var lineCommentToken: String {
+            switch currentLanguage {
+            case .python:                         return "#"
+            case .swift, .typescript, .javascript,
+                 .rust, .go, .css:                return "//"
+            case .json, .html, .markdown, .plaintext: return ""
+            }
+        }
+
+        private func toggleComment(_ tv: NSTextView) {
+            let token = lineCommentToken
+            guard !token.isEmpty else { return }
+
+            let ns = tv.string as NSString
+            let lineRange = ns.lineRange(for: tv.selectedRange())
+            let block = ns.substring(with: lineRange)
+            let hadTrailingNewline = block.hasSuffix("\n")
+            var lines = block.components(separatedBy: "\n")
+            if hadTrailingNewline { lines.removeLast() }
+
+            let nonBlank = lines.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            let allCommented = !nonBlank.isEmpty && nonBlank.allSatisfy {
+                $0.trimmingCharacters(in: .whitespaces).hasPrefix(token)
+            }
+
+            let newLines = lines.map { line -> String in
+                if line.trimmingCharacters(in: .whitespaces).isEmpty { return line }
+                if allCommented {
+                    return Self.uncomment(line, token: token)
+                } else {
+                    let indent = line.prefix { $0 == " " || $0 == "\t" }
+                    let rest   = line[indent.endIndex...]
+                    return "\(indent)\(token) \(rest)"
+                }
+            }
+
+            var newBlock = newLines.joined(separator: "\n")
+            if hadTrailingNewline { newBlock += "\n" }
+            replace(lineRange, with: newBlock, in: tv)
+        }
+
+        private static func uncomment(_ line: String, token: String) -> String {
+            guard let r = line.range(of: token) else { return line }
+            let before = line[..<r.lowerBound]
+            var after  = line[r.upperBound...]
+            // Drop a single space that followed the token, if any.
+            if after.first == " " { after = after.dropFirst() }
+            return String(before) + String(after)
+        }
+
+        private func shiftIndent(_ tv: NSTextView, indent: Bool) {
+            let ns = tv.string as NSString
+            let lineRange = ns.lineRange(for: tv.selectedRange())
+            let block = ns.substring(with: lineRange)
+            let hadTrailingNewline = block.hasSuffix("\n")
+            var lines = block.components(separatedBy: "\n")
+            if hadTrailingNewline { lines.removeLast() }
+
+            let unit = indentUnit
+            let newLines = lines.map { line -> String in
+                if indent {
+                    return line.isEmpty ? line : unit + line
+                }
+                // Outdent: remove one leading tab, or up to `tabSize` spaces.
+                if line.hasPrefix("\t") { return String(line.dropFirst()) }
+                var removed = 0
+                var s = Substring(line)
+                while removed < max(1, currentTabSize), s.first == " " {
+                    s = s.dropFirst()
+                    removed += 1
+                }
+                return String(s)
+            }
+
+            var newBlock = newLines.joined(separator: "\n")
+            if hadTrailingNewline { newBlock += "\n" }
+            replace(lineRange, with: newBlock, in: tv, selectWhole: true)
+        }
+
+        /// Replaces `range` with `text` through the undo-aware path and keeps
+        /// highlighting and the bound content in sync.
+        private func replace(_ range: NSRange, with text: String, in tv: NSTextView, selectWhole: Bool = false) {
+            guard tv.shouldChangeText(in: range, replacementString: text) else { return }
+            tv.replaceCharacters(in: range, with: text)
+            tv.didChangeText()
+            if selectWhole {
+                tv.setSelectedRange(NSRange(location: range.location, length: (text as NSString).length))
             }
         }
 

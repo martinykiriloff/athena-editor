@@ -341,6 +341,9 @@ final class AppState {
         return true
     }
 
+    /// The single dispatch point for every bindable action. Called both by the
+    /// keybinding monitor (keyboard) and by menu commands (clicks), so a binding
+    /// and its menu item always do exactly the same thing.
     func perform(_ action: KeyAction) async {
         switch action {
         case .saveFile:
@@ -352,7 +355,7 @@ final class AppState {
         case .toggleSidebar:
             showSidebar.toggle()
         case .toggleTerminal:
-            toggleBottomPanel(.terminal)
+            toggleTerminal()
         case .showExplorer:
             activateSidebarPanel(.files)
         case .showSourceControl:
@@ -364,20 +367,84 @@ final class AppState {
         case .showClaude:
             showClaudePanel.toggle()
         case .quickOpen:
-            NotificationCenter.default.post(name: .athenaOpenWorkspace, object: nil)
+            presentQuickOpen()
         case .nextTab:
             cycleTab(forward: true)
         case .previousTab:
             cycleTab(forward: false)
-        case .findInFile, .goToLine, .toggleComment, .indentLine, .outdentLine:
-            break  // TODO: forward to active editor
+        // Editor-level actions are forwarded to the active text view, which
+        // owns the selection and undo stack.
+        case .findInFile:
+            postEditorCommand(.find)
+        case .goToLine:
+            postEditorCommand(.goToLine)
+        case .toggleComment:
+            postEditorCommand(.toggleComment)
+        case .indentLine:
+            postEditorCommand(.indent)
+        case .outdentLine:
+            postEditorCommand(.outdent)
         }
+    }
+
+    /// Forwards an editor command to the active EditorView's coordinator.
+    private func postEditorCommand(_ command: EditorCommand) {
+        NotificationCenter.default.post(name: .athenaEditorCommand, object: command)
+    }
+
+    /// Quick-open substitute: there's no fuzzy palette yet, so present the
+    /// system file panel scoped to the workspace and open the chosen file.
+    private func presentQuickOpen() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.title = "Go to File"
+        if let root = workspace?.rootURL { panel.directoryURL = root }
+        if panel.runModal() == .OK, let url = panel.url {
+            Task { await openFile(url) }
+        }
+    }
+
+    /// Saves every open tab that has unsaved changes.
+    func saveAllTabs() async {
+        for tab in openTabs where tab.isDirty {
+            guard let url = tab.fileURL else { continue }
+            do {
+                try await fileService.writeFile(url, content: tab.content)
+                if let i = openTabs.firstIndex(where: { $0.id == tab.id }) {
+                    openTabs[i].isDirty = false
+                }
+            } catch {
+                statusMessage = "Error saving \(url.lastPathComponent): \(error.localizedDescription)"
+            }
+        }
+        statusMessage = "Saved all files"
+    }
+
+    /// Adjusts the editor font size (zoom in/out) and persists it.
+    func adjustFontSize(by delta: CGFloat) {
+        editorFontSize = min(48, max(8, editorFontSize + delta))
+        persistSetting(editorFontSize, for: "editorFontSize")
+    }
+
+    /// Resets the editor font size to the default and persists it.
+    func resetFontSize() {
+        editorFontSize = 14
+        persistSetting(editorFontSize, for: "editorFontSize")
     }
 
     func openNewTab() {
         let tab = TabModel.untitled()
         openTabs.append(tab)
         activeTabId = tab.id
+    }
+
+    /// Toggles the integrated terminal panel — shows it (and selects the
+    /// Terminal tab) if hidden, hides it if it's already the active panel.
+    /// Bound to ⌃` (the VS Code "Toggle Terminal" shortcut).
+    func toggleTerminal() {
+        toggleBottomPanel(.terminal)
     }
 
     private func toggleBottomPanel(_ panel: BottomPanel) {

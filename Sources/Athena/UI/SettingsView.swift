@@ -5,7 +5,8 @@
 import SwiftUI
 
 struct SettingsView: View {
-    @Environment(AppState.self) private var appState
+    @Environment(AppState.self)      private var appState
+    @Environment(UpdateService.self) private var updateService
 
     var body: some View {
         TabView {
@@ -17,6 +18,8 @@ struct SettingsView: View {
                 .tabItem { Label("AI", systemImage: "sparkles") }
             KeybindingsView()
                 .tabItem { Label("Keybindings", systemImage: "keyboard") }
+            updatesTab
+                .tabItem { Label("Updates", systemImage: "arrow.down.circle") }
             aboutTab
                 .tabItem { Label("About", systemImage: "info.circle") }
         }
@@ -273,6 +276,89 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - Updates Tab
+
+    private var installedVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
+    }
+
+    private var updatesTab: some View {
+        Form {
+            Section("Version") {
+                HStack {
+                    Text("Installed Version")
+                    Spacer()
+                    Text(installedVersion).foregroundStyle(.secondary)
+                }
+                if let checked = updateService.lastChecked {
+                    HStack {
+                        Text("Last Checked")
+                        Spacer()
+                        Text(checked, style: .relative).foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            Section("Check for Updates") {
+                updatesContent
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    @ViewBuilder
+    private var updatesContent: some View {
+        switch updateService.state {
+        case .idle:
+            Button("Check for Updates") {
+                Task { await updateService.checkForUpdates() }
+            }
+
+        case .checking:
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Checking…").foregroundStyle(.secondary)
+            }
+
+        case .upToDate:
+            Label("Athena is up to date", systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+            Button("Check Again") {
+                Task { await updateService.checkForUpdates() }
+            }
+
+        case .available(let version, let url):
+            Label("Version \(version) is available", systemImage: "arrow.down.circle.fill")
+                .foregroundStyle(.blue)
+            Button("Download & Install") {
+                Task { await updateService.downloadAndInstall(from: url) }
+            }
+            .buttonStyle(.borderedProminent)
+
+        case .downloading:
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Downloading update…").foregroundStyle(.secondary)
+            }
+
+        case .readyToInstall(let appURL):
+            Label("Update ready to install", systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+            Button("Install & Relaunch") {
+                updateService.installAndRelaunch(newAppURL: appURL)
+            }
+            .buttonStyle(.borderedProminent)
+
+        case .error(let message):
+            Label(message, systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
+                .font(.system(size: 11))
+            Button("Try Again") {
+                Task { await updateService.checkForUpdates() }
+            }
+        }
+    }
+
     // MARK: - About Tab
 
     private var aboutTab: some View {
@@ -281,7 +367,7 @@ struct SettingsView: View {
                 HStack {
                     Text("Athena").font(.system(size: 13, weight: .semibold))
                     Spacer()
-                    Text("1.0").foregroundStyle(.secondary)
+                    Text(installedVersion).foregroundStyle(.secondary)
                 }
                 Text("Native Swift 6 code editor")
                     .font(.system(size: 12))

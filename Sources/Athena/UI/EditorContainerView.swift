@@ -63,6 +63,8 @@ struct CodeEditorView: View {
                 lineHeight:       appState.editorLineHeight,
                 wordWrap:         appState.editorWordWrap,
                 renderWhitespace: appState.editorRenderWhitespace,
+                tabSize:          appState.editorTabSize,
+                insertSpaces:     appState.editorInsertSpaces,
                 onCursorMove: { line, col in
                     guard let idx = appState.openTabs.firstIndex(where: { $0.id == tab.id }) else { return }
                     appState.openTabs[idx].cursorLine   = line
