@@ -27,6 +27,10 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
     case toggleComment      = "editor.action.commentLine"
     case indentLine         = "editor.action.indentLines"
     case outdentLine        = "editor.action.outdentLines"
+    // Zoom
+    case zoomIn             = "workbench.action.zoomIn"
+    case zoomOut            = "workbench.action.zoomOut"
+    case resetZoom          = "workbench.action.zoomReset"
 
     var displayName: String {
         switch self {
@@ -48,6 +52,9 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
         case .toggleComment:     return "Toggle Line Comment"
         case .indentLine:        return "Indent Line"
         case .outdentLine:       return "Outdent Line"
+        case .zoomIn:            return "Zoom In"
+        case .zoomOut:           return "Zoom Out"
+        case .resetZoom:         return "Reset Zoom"
         }
     }
 
@@ -56,7 +63,8 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
         case .saveFile, .newFile, .closeTab:
             return "File"
         case .toggleSidebar, .toggleTerminal,
-             .showExplorer, .showSourceControl, .showSearch, .showDatabase, .showClaude:
+             .showExplorer, .showSourceControl, .showSearch, .showDatabase, .showClaude,
+             .zoomIn, .zoomOut, .resetZoom:
             return "View"
         case .quickOpen, .nextTab, .previousTab, .goToLine:
             return "Navigation"
@@ -202,6 +210,10 @@ struct KeyBinding: Identifiable, Codable, Sendable {
         KeyBinding(action: .toggleComment,     combo: KeyCombo(key: "/",   command: true)),
         KeyBinding(action: .indentLine,        combo: KeyCombo(key: "]",   command: true)),
         KeyBinding(action: .outdentLine,       combo: KeyCombo(key: "[",   command: true)),
+        // Zoom — default binding is Cmd+= (no shift); Cmd++ also triggers it (see dispatchKeyInfo)
+        KeyBinding(action: .zoomIn,            combo: KeyCombo(key: "=",   command: true)),
+        KeyBinding(action: .zoomOut,           combo: KeyCombo(key: "-",   command: true)),
+        KeyBinding(action: .resetZoom,         combo: KeyCombo(key: "0",   command: true)),
     ]
 
     // Ordered category list for display

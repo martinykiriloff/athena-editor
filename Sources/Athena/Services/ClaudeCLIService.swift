@@ -39,8 +39,10 @@ actor ClaudeCLIService {
             // `--print` (-p) runs the CLI non-interactively: it reads the piped
             // prompt and streams the response to stdout. Without it, `claude`
             // launches its interactive TUI and emits no usable output here.
+            // Source ~/.zshrc so that shell functions (e.g. `claude-work`)
+            // defined there are available — login-only shells skip it.
             process.executableURL  = URL(fileURLWithPath: "/bin/zsh")
-            process.arguments      = ["-lc", "printf '%s' \"$ATHENA_PROMPT\" | '\(resolvedCommand)' --print"]
+            process.arguments      = ["-lc", "source ~/.zshrc 2>/dev/null; printf '%s' \"$ATHENA_PROMPT\" | '\(resolvedCommand)' --print"]
             process.standardOutput = outPipe
             process.standardError  = errPipe
             process.environment    = env

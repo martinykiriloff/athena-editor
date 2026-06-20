@@ -11,24 +11,28 @@ struct QuickOpenView: View {
     @Environment(AppState.self) private var appState
     @State private var query: String = ""
     @State private var selectedIndex: Int = 0
+    @FocusState private var searchFocused: Bool
+
+    // MARK: - Filtered results
 
     private var results: [FileNode] {
         let all = appState.allFiles
-        guard !query.isEmpty else {
-            return Array(all.prefix(200))
-        }
+        guard !query.isEmpty else { return Array(all.prefix(200)) }
         let q = query.lowercased()
-        let filtered = all.filter { $0.url.path.lowercased().contains(q) }
-        return filtered.sorted { a, b in
-            let aName = a.name.lowercased().hasPrefix(q)
-            let bName = b.name.lowercased().hasPrefix(q)
-            if aName != bName { return aName }
-            let aContains = a.name.lowercased().contains(q)
-            let bContains = b.name.lowercased().contains(q)
-            if aContains != bContains { return aContains }
-            return a.name.localizedCompare(b.name) == .orderedAscending
-        }
+        return all
+            .filter { $0.url.path.lowercased().contains(q) }
+            .sorted { a, b in
+                let aPrefix = a.name.lowercased().hasPrefix(q)
+                let bPrefix = b.name.lowercased().hasPrefix(q)
+                if aPrefix != bPrefix { return aPrefix }
+                let aName = a.name.lowercased().contains(q)
+                let bName = b.name.lowercased().contains(q)
+                if aName != bName { return aName }
+                return a.name.localizedCompare(b.name) == .orderedAscending
+            }
     }
+
+    // MARK: - Body
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -39,26 +43,45 @@ struct QuickOpenView: View {
 
             // Palette card
             VStack(spacing: 0) {
-                QuickOpenSearchField(
-                    placeholder: "Go to file…",
-                    text: $query,
-                    onArrowUp:   { move(-1) },
-                    onArrowDown: { move(1) },
-                    onReturn:    { confirmSelection() },
-                    onEscape:    { close() }
-                )
-                .frame(height: 44)
-                .padding(.horizontal, 12)
+                // Search field row
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                        .font(.system(size: 14))
 
-                if !results.isEmpty {
+                    TextField("Go to file…", text: $query)
+                        .font(.system(size: 16))
+                        .textFieldStyle(.plain)
+                        .focused($searchFocused)
+                        // Arrow keys — navigate the list
+                        .onKeyPress(.upArrow)   { move(-1); return .handled }
+                        .onKeyPress(.downArrow) { move(1);  return .handled }
+                        // Return — open the selected file
+                        .onKeyPress(.return)    { confirmSelection(); return .handled }
+                        // Escape — dismiss
+                        .onKeyPress(.escape)    { close(); return .handled }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+
+                // Results or empty state
+                if results.isEmpty && !query.isEmpty {
+                    Divider()
+                    Text("No results for \"\(query)\"")
+                        .foregroundStyle(.secondary)
+                        .font(.system(size: 12))
+                        .padding(20)
+                } else if !results.isEmpty {
                     Divider()
                     ScrollViewReader { proxy in
                         ScrollView {
                             LazyVStack(spacing: 0) {
-                                ForEach(Array(results.prefix(200).enumerated()), id: \.element.id) { i, file in
+                                ForEach(
+                                    Array(results.prefix(200).enumerated()),
+                                    id: \.element.id
+                                ) { i, file in
                                     QuickOpenRow(
                                         file: file,
-                                        query: query,
                                         isSelected: i == selectedIndex,
                                         workspaceURL: appState.workspace?.rootURL
                                     )
@@ -72,12 +95,6 @@ struct QuickOpenView: View {
                             proxy.scrollTo(idx, anchor: .center)
                         }
                     }
-                } else if !query.isEmpty {
-                    Divider()
-                    Text("No results for \"\(query)\"")
-                        .foregroundStyle(.secondary)
-                        .font(.system(size: 12))
-                        .padding(20)
                 }
             }
             .background(Color(nsColor: .windowBackgroundColor))
@@ -86,6 +103,7 @@ struct QuickOpenView: View {
             .frame(width: 580)
             .padding(.top, 80)
         }
+        .onAppear { searchFocused = true }
         .onChange(of: query) { selectedIndex = 0 }
     }
 
@@ -116,7 +134,6 @@ struct QuickOpenView: View {
 
 private struct QuickOpenRow: View {
     let file: FileNode
-    let query: String
     let isSelected: Bool
     let workspaceURL: URL?
 
@@ -156,81 +173,5 @@ private struct QuickOpenRow: View {
         let rel = String(dir.dropFirst(root.path.count))
         let trimmed = rel.hasPrefix("/") ? String(rel.dropFirst()) : rel
         return trimmed.isEmpty ? nil : trimmed
-    }
-}
-
-// MARK: - NSTextField search field (intercepts ↑ ↓ ↵ ⎋ before AppKit eats them)
-
-private struct QuickOpenSearchField: NSViewRepresentable {
-    let placeholder: String
-    @Binding var text: String
-    var onArrowUp:   () -> Void
-    var onArrowDown: () -> Void
-    var onReturn:    () -> Void
-    var onEscape:    () -> Void
-
-    func makeNSView(context: Context) -> InterceptingTextField {
-        let field = InterceptingTextField()
-        field.delegate          = context.coordinator
-        field.placeholderString = placeholder
-        field.isBezeled         = false
-        field.drawsBackground   = false
-        field.font              = .systemFont(ofSize: 16)
-        field.focusRingType     = .none
-        field.lineBreakMode     = .byTruncatingTail
-        field.cell?.isScrollable = true
-        field.onArrowUp   = onArrowUp
-        field.onArrowDown = onArrowDown
-        field.onReturn    = onReturn
-        field.onEscape    = onEscape
-        // Grab keyboard focus after the view is in the window hierarchy.
-        DispatchQueue.main.async {
-            field.window?.makeFirstResponder(field)
-        }
-        return field
-    }
-
-    func updateNSView(_ nsView: InterceptingTextField, context: Context) {
-        if nsView.stringValue != text {
-            nsView.stringValue = text
-        }
-        nsView.onArrowUp   = onArrowUp
-        nsView.onArrowDown = onArrowDown
-        nsView.onReturn    = onReturn
-        nsView.onEscape    = onEscape
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
-
-    final class Coordinator: NSObject, NSTextFieldDelegate {
-        var parent: QuickOpenSearchField
-        init(_ parent: QuickOpenSearchField) { self.parent = parent }
-
-        func controlTextDidChange(_ obj: Notification) {
-            guard let field = obj.object as? NSTextField else { return }
-            parent.text = field.stringValue
-        }
-    }
-}
-
-// MARK: - InterceptingTextField
-
-final class InterceptingTextField: NSTextField {
-    // nonisolated(unsafe): these callbacks are always invoked on the main thread
-    // (NSEvent delivery is always on main), but Swift 6 can't verify that
-    // statically when they're stored as plain closures.
-    nonisolated(unsafe) var onArrowUp:   (() -> Void)?
-    nonisolated(unsafe) var onArrowDown: (() -> Void)?
-    nonisolated(unsafe) var onReturn:    (() -> Void)?
-    nonisolated(unsafe) var onEscape:    (() -> Void)?
-
-    override func keyDown(with event: NSEvent) {
-        switch event.keyCode {
-        case 125: MainActor.assumeIsolated { onArrowDown?() }  // ↓
-        case 126: MainActor.assumeIsolated { onArrowUp?() }    // ↑
-        case 36:  MainActor.assumeIsolated { onReturn?() }     // ↵
-        case 53:  MainActor.assumeIsolated { onEscape?() }     // ⎋
-        default:  super.keyDown(with: event)
-        }
     }
 }

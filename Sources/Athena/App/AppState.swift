@@ -372,9 +372,17 @@ final class AppState {
     }
 
     private func dispatchKeyInfo(keyCode: UInt16, modRaw: UInt, chars: String) -> Bool {
-        guard let combo = KeyCombo.from(keyCode: keyCode, modRaw: modRaw, chars: chars),
-              let binding = keyBindings.first(where: { $0.combo == combo })
-        else { return false }
+        guard let combo = KeyCombo.from(keyCode: keyCode, modRaw: modRaw, chars: chars) else { return false }
+
+        // Zoom shortcuts accept both Cmd+= and Cmd++ (Shift+=), and Cmd+- and Cmd+_ (Shift+-).
+        // Try the base-key (no-shift) variant so either key press fires the registered binding.
+        let comboNoShift = KeyCombo(key: combo.key, command: combo.command,
+                                    shift: false, option: combo.option, control: combo.control)
+        let lookup = combo.shift ? (keyBindings.first(where: { $0.combo == combo })
+                                 ?? keyBindings.first(where: { $0.combo == comboNoShift }))
+                                 : keyBindings.first(where: { $0.combo == combo })
+
+        guard let binding = lookup else { return false }
         Task { await self.perform(binding.action) }
         return true
     }
@@ -422,6 +430,12 @@ final class AppState {
             postEditorCommand(.indent)
         case .outdentLine:
             postEditorCommand(.outdent)
+        case .zoomIn:
+            adjustFontSize(by: 2)
+        case .zoomOut:
+            adjustFontSize(by: -2)
+        case .resetZoom:
+            resetFontSize()
         }
     }
 
