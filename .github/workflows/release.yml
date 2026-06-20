@@ -1,0 +1,39 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'          # triggers on v1.1.0, v2.0.0, etc.
+
+jobs:
+  build-and-release:
+    runs-on: macos-15
+    permissions:
+      contents: write   # needed to create the GitHub Release
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build (release)
+        run: swift build -c release
+
+      - name: Assemble .app bundle
+        run: |
+          APP=Athena.app
+          mkdir -p "$APP/Contents/MacOS"
+          mkdir -p "$APP/Contents/Resources"
+
+          cp .build/release/Athena              "$APP/Contents/MacOS/Athena"
+          cp XcodeConfig/Info.plist             "$APP/Contents/Info.plist"
+          cp Sources/Athena/AppIcon.icns        "$APP/Contents/Resources/AppIcon.icns"
+          cp Sources/Athena/Athena.entitlements "$APP/Contents/Resources/Athena.entitlements"
+
+      - name: Zip
+        run: zip -r Athena.zip Athena.app
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Athena.zip
+          generate_release_notes: true
