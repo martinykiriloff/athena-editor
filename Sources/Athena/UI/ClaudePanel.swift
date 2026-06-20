@@ -140,6 +140,7 @@ struct ClaudePanel: View {
     @State private var showCommands: Bool = false
     @State private var commandFilter: String = ""
     @State private var hoveredCommandId: String? = nil
+    @State private var selectedCommandId: String? = nil
     @FocusState private var inputFocused: Bool
 
     var body: some View {
@@ -251,49 +252,71 @@ struct ClaudePanel: View {
         }
     }
 
+    private var visibleCommands: [PanelCommand] {
+        commandFilter.isEmpty ? PanelCommand.all : filteredCommands
+    }
+
+    private func moveSelection(_ delta: Int) {
+        let cmds = visibleCommands
+        guard !cmds.isEmpty else { return }
+        if let current = selectedCommandId,
+           let idx = cmds.firstIndex(where: { $0.id == current }) {
+            selectedCommandId = cmds[(idx + delta + cmds.count) % cmds.count].id
+        } else {
+            selectedCommandId = delta > 0 ? cmds.first?.id : cmds.last?.id
+        }
+    }
+
     private var commandPalette: some View {
-        ScrollView {
-            LazyVStack(spacing: 0, pinnedViews: .sectionHeaders) {
-                if commandFilter.isEmpty {
-                    // Grouped by category
-                    ForEach(PanelCommand.categories, id: \.self) { cat in
-                        let cmds = PanelCommand.all.filter { $0.category == cat }
-                        Section {
-                            ForEach(cmds) { cmd in
-                                commandRow(cmd)
-                                Divider().padding(.leading, 38)
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 0, pinnedViews: .sectionHeaders) {
+                    if commandFilter.isEmpty {
+                        // Grouped by category
+                        ForEach(PanelCommand.categories, id: \.self) { cat in
+                            let cmds = PanelCommand.all.filter { $0.category == cat }
+                            Section {
+                                ForEach(cmds) { cmd in
+                                    commandRow(cmd)
+                                    Divider().padding(.leading, 38)
+                                }
+                            } header: {
+                                Text(cat.uppercased())
+                                    .font(.system(size: 9, weight: .semibold))
+                                    .foregroundStyle(.tertiary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 4)
+                                    .background(Color(nsColor: .windowBackgroundColor))
                             }
-                        } header: {
-                            Text(cat.uppercased())
-                                .font(.system(size: 9, weight: .semibold))
-                                .foregroundStyle(.tertiary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 4)
-                                .background(Color(nsColor: .windowBackgroundColor))
                         }
-                    }
-                } else {
-                    // Flat filtered list
-                    ForEach(filteredCommands) { cmd in
-                        commandRow(cmd)
-                        Divider().padding(.leading, 38)
+                    } else {
+                        // Flat filtered list
+                        ForEach(filteredCommands) { cmd in
+                            commandRow(cmd)
+                            Divider().padding(.leading, 38)
+                        }
                     }
                 }
             }
+            .frame(maxHeight: 320)
+            .background(Color(nsColor: .controlBackgroundColor))
+            .onChange(of: selectedCommandId) { _, id in
+                guard let id else { return }
+                proxy.scrollTo(id, anchor: .center)
+            }
         }
-        .frame(maxHeight: 320)
-        .background(Color(nsColor: .controlBackgroundColor))
     }
 
     private func commandRow(_ cmd: PanelCommand) -> some View {
-        Button {
+        let highlighted = hoveredCommandId == cmd.id || selectedCommandId == cmd.id
+        return Button {
             selectCommand(cmd)
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: cmd.icon)
                     .font(.system(size: 12))
-                    .foregroundStyle(hoveredCommandId == cmd.id ? Color.accentColor : Color.secondary)
+                    .foregroundStyle(highlighted ? Color.accentColor : Color.secondary)
                     .frame(width: 18, alignment: .center)
 
                 VStack(alignment: .leading, spacing: 1) {
@@ -320,10 +343,11 @@ struct ClaudePanel: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .contentShape(Rectangle())
-            .background(hoveredCommandId == cmd.id ? Color.accentColor.opacity(0.08) : Color.clear)
+            .background(highlighted ? Color.accentColor.opacity(0.12) : Color.clear)
         }
         .buttonStyle(.plain)
         .onHover { hoveredCommandId = $0 ? cmd.id : nil }
+        .id(cmd.id)
     }
 
     // MARK: Input bar
@@ -339,13 +363,37 @@ struct ClaudePanel: View {
                     if new.hasPrefix("/") {
                         showCommands = true
                         commandFilter = String(new.dropFirst())
+                        selectedCommandId = visibleCommands.first?.id
                     } else {
                         showCommands = false
                         commandFilter = ""
+                        selectedCommandId = nil
                     }
                 }
+                .onKeyPress(.upArrow) {
+                    guard showCommands else { return .ignored }
+                    moveSelection(-1)
+                    return .handled
+                }
+                .onKeyPress(.downArrow) {
+                    guard showCommands else { return .ignored }
+                    moveSelection(1)
+                    return .handled
+                }
+                .onKeyPress(.return) {
+                    guard showCommands,
+                          let id = selectedCommandId,
+                          let cmd = visibleCommands.first(where: { $0.id == id })
+                    else { return .ignored }
+                    selectCommand(cmd)
+                    return .handled
+                }
                 .onKeyPress(.escape) {
-                    if showCommands { showCommands = false; return .handled }
+                    if showCommands {
+                        showCommands = false
+                        selectedCommandId = nil
+                        return .handled
+                    }
                     return .ignored
                 }
 
