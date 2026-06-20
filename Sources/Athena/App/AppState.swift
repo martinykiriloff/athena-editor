@@ -20,6 +20,7 @@ final class AppState {
     let settingsService: SettingsService
     let lspManager: LSPManager
     let keyBindingService: KeyBindingService
+    let blameService: GitBlameService
 
     // MARK: - UI State
 
@@ -50,6 +51,9 @@ final class AppState {
     var claudePanelWidth: CGFloat = 340
     var keyBindings: [KeyBinding] = KeyBinding.vscodeDefaults
     var showQuickOpen: Bool = false
+
+    // Blame data keyed by file path.
+    var blameCache: [String: [Int: BlameLine]] = [:]
 
     // MARK: - Editor settings (mirrored from SettingsService on launch)
     var editorFontSize:          CGFloat = 14
@@ -100,7 +104,8 @@ final class AppState {
         searchService: SearchService = SearchService(),
         settingsService: SettingsService = SettingsService(),
         lspManager: LSPManager = LSPManager(),
-        keyBindingService: KeyBindingService = KeyBindingService()
+        keyBindingService: KeyBindingService = KeyBindingService(),
+        blameService: GitBlameService = GitBlameService()
     ) {
         self.fileService = fileService
         self.gitService = gitService
@@ -110,6 +115,7 @@ final class AppState {
         self.settingsService = settingsService
         self.lspManager = lspManager
         self.keyBindingService = keyBindingService
+        self.blameService = blameService
     }
 
     // MARK: - Methods
@@ -170,6 +176,24 @@ final class AppState {
         statusMessage = url.lastPathComponent
 
         try? await settingsService.setValue(url.path, for: "lastWorkspacePath")
+    }
+
+    // MARK: - Git Blame
+
+    /// Loads (or returns cached) blame data for the file in `tab`.
+    /// Only runs when a `.git` directory exists at the workspace root.
+    func loadBlame(for tab: TabModel) async {
+        guard let fileURL = tab.fileURL,
+              let ws = workspace else { return }
+        let gitDir = ws.rootURL.appendingPathComponent(".git")
+        guard FileManager.default.fileExists(atPath: gitDir.path) else { return }
+        let blame = await blameService.blame(fileURL: fileURL, workspaceURL: ws.rootURL)
+        blameCache[fileURL.path] = blame
+    }
+
+    func invalidateBlame(for fileURL: URL) {
+        blameCache.removeValue(forKey: fileURL.path)
+        Task { await blameService.invalidate(fileURL: fileURL) }
     }
 
     // MARK: - Settings persistence

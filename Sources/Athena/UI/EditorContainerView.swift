@@ -51,6 +51,11 @@ struct CodeEditorView: View {
     @State private var visibleFraction: Double = 0.2
     @State private var scrollProxy:     EditorScrollProxy? = nil
 
+    private var blameInfo: [Int: BlameLine] {
+        guard let url = tab.fileURL else { return [:] }
+        return appState.blameCache[url.path] ?? [:]
+    }
+
     var body: some View {
         HStack(spacing: 0) {
             EditorView(
@@ -65,6 +70,7 @@ struct CodeEditorView: View {
                 renderWhitespace: appState.editorRenderWhitespace,
                 tabSize:          appState.editorTabSize,
                 insertSpaces:     appState.editorInsertSpaces,
+                blameInfo:        blameInfo,
                 onCursorMove: { line, col in
                     guard let idx = appState.openTabs.firstIndex(where: { $0.id == tab.id }) else { return }
                     appState.openTabs[idx].cursorLine   = line
@@ -80,6 +86,7 @@ struct CodeEditorView: View {
                 scrollProxy: $scrollProxy
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .task(id: tab.id) { await appState.loadBlame(for: tab) }
 
             if appState.editorMinimapEnabled {
                 MinimapView(

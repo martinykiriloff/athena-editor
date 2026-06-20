@@ -1,5 +1,5 @@
 // SearchPanelView.swift
-// Athena — sidebar search panel backed by SearchService (ripgrep).
+// Athena — sidebar search panel backed by SearchService (grep / ripgrep).
 // Swift 6, strict concurrency.
 
 import SwiftUI
@@ -9,10 +9,13 @@ import SwiftUI
 struct SearchPanelView: View {
     @Environment(AppState.self) private var appState
 
-    @State private var useRegex: Bool = false
-    @State private var caseSensitive: Bool = false
-    @State private var isSearching: Bool = false
-    @State private var debounceTask: Task<Void, Never>?
+    @State private var useRegex:       Bool   = false
+    @State private var caseSensitive:  Bool   = false
+    @State private var isSearching:    Bool   = false
+    @State private var showFilters:    Bool   = false
+    @State private var includePattern: String = ""
+    @State private var excludePattern: String = ""
+    @State private var debounceTask:   Task<Void, Never>?
 
     // MARK: - Body
 
@@ -20,6 +23,7 @@ struct SearchPanelView: View {
         VStack(spacing: 0) {
             searchBar
             Divider()
+            if showFilters { filterSection }
             statusLine
             Divider()
             resultsArea
@@ -42,24 +46,25 @@ struct SearchPanelView: View {
                 .onSubmit { triggerSearch() }
                 .onChange(of: appState.searchQuery) { _, _ in scheduleDebounce() }
 
-            // Regex toggle
-            toggleButton(
-                symbol: ".*",
-                help: "Use Regular Expression",
-                isOn: $useRegex
-            )
+            toggleButton(symbol: ".*", help: "Use Regular Expression", isOn: $useRegex)
+            toggleButton(symbol: "Aa", help: "Match Case",             isOn: $caseSensitive)
 
-            // Case-sensitive toggle
-            toggleButton(
-                symbol: "Aa",
-                help: "Match Case",
-                isOn: $caseSensitive
-            )
+            // Filter toggle
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) { showFilters.toggle() }
+            } label: {
+                Image(systemName: showFilters
+                      ? "line.3.horizontal.decrease.circle.fill"
+                      : "line.3.horizontal.decrease.circle")
+                    .font(.system(size: 13))
+                    .foregroundStyle(showFilters ? Color.accentColor : Color.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Toggle filters")
 
-            // Clear
             if !appState.searchQuery.isEmpty {
                 Button {
-                    appState.searchQuery = ""
+                    appState.searchQuery  = ""
                     appState.searchResults = []
                     debounceTask?.cancel()
                     Task { await appState.searchService.cancel() }
@@ -75,6 +80,42 @@ struct SearchPanelView: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .background(Color(nsColor: .controlBackgroundColor))
+    }
+
+    // MARK: - Filter Section
+
+    private var filterSection: some View {
+        VStack(spacing: 0) {
+            filterRow(
+                label: "Include",
+                placeholder: "e.g. *.swift, src",
+                text: $includePattern
+            )
+            Divider().padding(.leading, 8)
+            filterRow(
+                label: "Exclude",
+                placeholder: "e.g. node_modules, .build, *.lock",
+                text: $excludePattern
+            )
+            Divider()
+        }
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+    }
+
+    private func filterRow(label: String, placeholder: String, text: Binding<String>) -> some View {
+        HStack(spacing: 6) {
+            Text(label)
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+                .frame(width: 44, alignment: .trailing)
+            TextField(placeholder, text: text)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .onSubmit { triggerSearch() }
+                .onChange(of: text.wrappedValue) { _, _ in scheduleDebounce() }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
     }
 
     // MARK: - Toggle Button Helper
@@ -217,19 +258,21 @@ struct SearchPanelView: View {
             isSearching = false
             return
         }
-        let root = ws.rootURL
-        let regex = useRegex
-        let cs = caseSensitive
+        let root    = ws.rootURL
+        let regex   = useRegex
+        let cs      = caseSensitive
+        let filter  = SearchFilter(include: includePattern, exclude: excludePattern)
 
         Task {
             isSearching = true
             appState.searchResults = []
             await appState.searchService.cancel()
             let stream = await appState.searchService.search(
-                query: query,
-                in: root,
-                regex: regex,
-                caseSensitive: cs
+                query:         query,
+                in:            root,
+                regex:         regex,
+                caseSensitive: cs,
+                filter:        filter
             )
             for await result in stream {
                 appState.searchResults.append(result)

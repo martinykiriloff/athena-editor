@@ -22,6 +22,7 @@ struct EditorView: NSViewRepresentable {
     var renderWhitespace: Bool  = true
     var tabSize:        Int     = 4
     var insertSpaces:   Bool    = true
+    var blameInfo: [Int: BlameLine] = [:]
     var onCursorMove: (Int, Int) -> Void = { _, _ in }
     var onContentChange: (String) -> Void = { _ in }
     /// Called whenever the scroll position changes. (fraction 0‥1, visible ratio 0‥1)
@@ -42,6 +43,16 @@ struct EditorView: NSViewRepresentable {
 
         textView.string = content
         context.coordinator.applyHighlighting(to: textView)
+
+        // Inline blame annotation label — ghost text after the cursor line.
+        let blameLabel = NSTextField(labelWithString: "")
+        blameLabel.isEditable     = false
+        blameLabel.isBordered     = false
+        blameLabel.drawsBackground = false
+        blameLabel.isSelectable   = false
+        blameLabel.alphaValue     = 0
+        textView.addSubview(blameLabel)
+        context.coordinator.blameAnnotationLabel = blameLabel
 
         // Expose scroll view via proxy so the minimap can drive scrolling.
         let proxy = EditorScrollProxy()
@@ -114,6 +125,11 @@ struct EditorView: NSViewRepresentable {
             coord.applyHighlighting(to: textView)
         } else if themeChanged || fontChanged {
             coord.applyHighlighting(to: textView)
+        }
+
+        if coord.currentBlameInfo != blameInfo {
+            coord.currentBlameInfo = blameInfo
+            coord.updateBlameLabel(in: textView, fontSize: fontSize, fontFamily: fontFamily, theme: theme)
         }
     }
 
@@ -204,6 +220,10 @@ extension EditorView {
         weak var textView: NSTextView?
         nonisolated(unsafe) private var scrollObserver: NSObjectProtocol?
         nonisolated(unsafe) private var commandObserver: NSObjectProtocol?
+
+        // Blame annotation
+        var blameAnnotationLabel: NSTextField?
+        var currentBlameInfo: [Int: BlameLine] = [:]
 
         init(_ parent: EditorView) {
             self.parent              = parent
@@ -446,6 +466,83 @@ extension EditorView {
             guard let textView = notification.object as? NSTextView else { return }
             let (line, col) = cursorPosition(in: textView)
             parent.onCursorMove(line, col)
+            updateBlameLabel(
+                in: textView,
+                fontSize: parent.fontSize,
+                fontFamily: parent.fontFamily,
+                theme: parent.theme
+            )
+        }
+
+        // MARK: Blame annotation
+
+        func updateBlameLabel(in textView: NSTextView, fontSize: CGFloat, fontFamily: String, theme: EditorTheme) {
+            guard let label = blameAnnotationLabel else { return }
+
+            let cursorIdx = textView.selectedRange().location
+            guard let layoutManager = textView.layoutManager,
+                  textView.textContainer != nil
+            else { label.alphaValue = 0; return }
+
+            // Compute current 1-based line number
+            let nsString = textView.string as NSString
+            let safeIdx  = min(cursorIdx, nsString.length)
+            var line = 1
+            for i in 0..<safeIdx {
+                if nsString.character(at: i) == 0x0A { line += 1 }
+            }
+
+            guard let blameLine = currentBlameInfo[line] else {
+                label.alphaValue = 0
+                return
+            }
+
+            // Position: find the last glyph on this line's fragment, then place label after it.
+            let lineCharRange = nsString.lineRange(for: NSRange(location: safeIdx, length: 0))
+            let glyphRange    = layoutManager.glyphRange(forCharacterRange: lineCharRange,
+                                                         actualCharacterRange: nil)
+            guard glyphRange.location != NSNotFound, glyphRange.length > 0 else {
+                label.alphaValue = 0
+                return
+            }
+
+            let usedRect  = layoutManager.lineFragmentUsedRect(forGlyphAt: glyphRange.location,
+                                                               effectiveRange: nil)
+            let inset     = textView.textContainerInset
+            let labelX    = usedRect.maxX + inset.width + 20
+            let labelY    = usedRect.minY + inset.height
+
+            label.attributedStringValue = blameAttributedString(
+                blameLine, fontSize: fontSize - 1, theme: theme
+            )
+            label.sizeToFit()
+            label.frame.origin = CGPoint(x: labelX, y: labelY)
+            label.alphaValue   = 1
+        }
+
+        private func blameAttributedString(_ b: BlameLine, fontSize: CGFloat, theme: EditorTheme) -> NSAttributedString {
+            let font  = NSFont.monospacedSystemFont(ofSize: max(fontSize, 10), weight: .regular)
+            let color = NSColor(white: 0.55, alpha: 0.75)
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font:           font,
+                .foregroundColor: color,
+            ]
+            let summary = b.summary.count > 60 ? String(b.summary.prefix(57)) + "…" : b.summary
+            let text    = "\(b.author)  ·  \(relativeDate(b.date))  ·  \(summary)"
+            return NSAttributedString(string: text, attributes: attrs)
+        }
+
+        private func relativeDate(_ date: Date) -> String {
+            let seconds = Int(-date.timeIntervalSinceNow)
+            switch seconds {
+            case ..<60:          return "just now"
+            case 60..<3600:      return "\(seconds / 60)m ago"
+            case 3600..<86400:   return "\(seconds / 3600)h ago"
+            case 86400..<604800: return "\(seconds / 86400)d ago"
+            case 604800..<2592000: return "\(seconds / 604800)w ago"
+            case 2592000..<31536000: return "\(seconds / 2592000)mo ago"
+            default:             return "\(seconds / 31536000)y ago"
+            }
         }
 
         // MARK: Private

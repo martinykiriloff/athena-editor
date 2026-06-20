@@ -226,6 +226,15 @@ struct GitCommit: Identifiable, Sendable {
     var date: Date
 }
 
+// MARK: - Git Blame
+
+struct BlameLine: Sendable, Equatable {
+    var hash: String
+    var author: String
+    var date: Date
+    var summary: String
+}
+
 // MARK: - Search
 
 struct SearchResult: Identifiable, Sendable {
