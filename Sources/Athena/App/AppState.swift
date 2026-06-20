@@ -21,6 +21,7 @@ final class AppState {
     let lspManager: LSPManager
     let keyBindingService: KeyBindingService
     let blameService: GitBlameService
+    let importResolver: ImportResolver
 
     // MARK: - UI State
 
@@ -105,7 +106,8 @@ final class AppState {
         settingsService: SettingsService = SettingsService(),
         lspManager: LSPManager = LSPManager(),
         keyBindingService: KeyBindingService = KeyBindingService(),
-        blameService: GitBlameService = GitBlameService()
+        blameService: GitBlameService = GitBlameService(),
+        importResolver: ImportResolver = ImportResolver()
     ) {
         self.fileService = fileService
         self.gitService = gitService
@@ -116,6 +118,7 @@ final class AppState {
         self.lspManager = lspManager
         self.keyBindingService = keyBindingService
         self.blameService = blameService
+        self.importResolver = importResolver
     }
 
     // MARK: - Methods
@@ -140,6 +143,19 @@ final class AppState {
             statusMessage = "Opened \(url.lastPathComponent)"
         } catch {
             statusMessage = "Error opening \(url.lastPathComponent): \(error.localizedDescription)"
+        }
+    }
+
+    /// Resolves `importPath` relative to `currentFileURL` and opens the result.
+    func openImportedFile(_ importPath: String, from currentFileURL: URL) async {
+        if let resolved = await importResolver.resolve(
+            importPath,
+            from: currentFileURL,
+            workspaceURL: workspace?.rootURL
+        ) {
+            await openFile(resolved)
+        } else {
+            statusMessage = "Cannot resolve import: \(importPath)"
         }
     }
 

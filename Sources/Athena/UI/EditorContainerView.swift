@@ -71,6 +71,7 @@ struct CodeEditorView: View {
                 tabSize:          appState.editorTabSize,
                 insertSpaces:     appState.editorInsertSpaces,
                 blameInfo:        blameInfo,
+                fileURL:          tab.fileURL,
                 onCursorMove: { line, col in
                     guard let idx = appState.openTabs.firstIndex(where: { $0.id == tab.id }) else { return }
                     appState.openTabs[idx].cursorLine   = line
@@ -82,6 +83,10 @@ struct CodeEditorView: View {
                 onScrollChange: { fraction, visible in
                     scrollFraction  = fraction
                     visibleFraction = visible
+                },
+                onImportClick: { importPath, fileURL in
+                    guard let fileURL else { return }
+                    Task { await appState.openImportedFile(importPath, from: fileURL) }
                 },
                 scrollProxy: $scrollProxy
             )

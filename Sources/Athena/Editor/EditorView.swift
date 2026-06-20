@@ -23,10 +23,15 @@ struct EditorView: NSViewRepresentable {
     var tabSize:        Int     = 4
     var insertSpaces:   Bool    = true
     var blameInfo: [Int: BlameLine] = [:]
+    /// The URL of the file being edited — used for import path resolution.
+    var fileURL: URL? = nil
     var onCursorMove: (Int, Int) -> Void = { _, _ in }
     var onContentChange: (String) -> Void = { _ in }
     /// Called whenever the scroll position changes. (fraction 0‥1, visible ratio 0‥1)
     var onScrollChange: (Double, Double) -> Void = { _, _ in }
+    /// Called when the user clicks on a quoted import path string.
+    /// First argument is the raw path (e.g. `"./configs"`), second is the current file URL.
+    var onImportClick: (String, URL?) -> Void = { _, _ in }
     /// Set by the representable so external callers can scroll the editor.
     var scrollProxy: Binding<EditorScrollProxy?>? = nil
 
@@ -66,6 +71,7 @@ struct EditorView: NSViewRepresentable {
         // Let the keybinding system reach this editor (find, comment, indent…).
         context.coordinator.textView = textView
         context.coordinator.installCommandObserver()
+        context.coordinator.installMouseMonitor(on: scrollView)
 
         return scrollView
     }
@@ -220,6 +226,7 @@ extension EditorView {
         weak var textView: NSTextView?
         nonisolated(unsafe) private var scrollObserver: NSObjectProtocol?
         nonisolated(unsafe) private var commandObserver: NSObjectProtocol?
+        nonisolated(unsafe) private var mouseMonitor: Any?
 
         // Blame annotation
         var blameAnnotationLabel: NSTextField?
@@ -278,6 +285,9 @@ extension EditorView {
             if let obs = commandObserver {
                 NotificationCenter.default.removeObserver(obs)
             }
+            if let mon = mouseMonitor {
+                NSEvent.removeMonitor(mon)
+            }
         }
 
         // MARK: Editor commands (find / go-to-line / comment / indent)
@@ -293,6 +303,88 @@ extension EditorView {
                     self?.handle(command)
                 }
             }
+        }
+
+        // MARK: Import click (click on quoted import path → open file)
+
+        func installMouseMonitor(on scrollView: NSScrollView) {
+            mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self, weak scrollView] event in
+                guard let self,
+                      let scrollView,
+                      let tv = scrollView.documentView as? NSTextView
+                else { return event }
+
+                // Verify click is inside this text view.
+                let tvPoint = tv.convert(event.locationInWindow, from: nil)
+                guard tv.bounds.contains(tvPoint) else { return event }
+
+                let charIdx = tv.characterIndex(for: tvPoint)
+                guard charIdx != NSNotFound else { return event }
+
+                // Extract path on main thread (local monitors fire on main).
+                // NSEvent isn't Sendable, so return it outside assumeIsolated.
+                let path = MainActor.assumeIsolated {
+                    self.extractImportPath(from: tv.string, at: charIdx)
+                }
+                if let path {
+                    MainActor.assumeIsolated {
+                        self.parent.onImportClick(path, self.parent.fileURL)
+                    }
+                }
+                return event  // always pass through so cursor moves normally
+            }
+        }
+
+        /// Scans the line at `charIndex` for a quoted string literal that looks
+        /// like an import path (the line must contain an import/require keyword).
+        /// Returns the unquoted path, or `nil`.
+        private func extractImportPath(from text: String, at charIndex: Int) -> String? {
+            let ns = text as NSString
+            guard charIndex < ns.length else { return nil }
+
+            let lineRange = ns.lineRange(for: NSRange(location: charIndex, length: 0))
+            let line      = ns.substring(with: lineRange)
+
+            // Only lines that look like imports.
+            let keywords = ["import ", "require(", " from ", "@import", "#include", "export "]
+            guard keywords.contains(where: { line.contains($0) }) else { return nil }
+
+            // Walk through all quoted strings on this line; return the one that
+            // contains charIndex.
+            let lineStart = lineRange.location
+            let lineEnd   = NSMaxRange(lineRange)
+            var i = lineStart
+
+            while i < lineEnd {
+                let c = ns.character(at: i)
+                // Opening quote: 34=" 39=' 96=`
+                if c == 34 || c == 39 || c == 96 {
+                    let openQuote = c
+                    let openPos   = i
+                    i += 1
+                    while i < lineEnd {
+                        let c2 = ns.character(at: i)
+                        if c2 == openQuote {
+                            let closePos = i
+                            // charIndex is inside this quoted span?
+                            if charIndex > openPos && charIndex <= closePos {
+                                let path = ns.substring(with: NSRange(
+                                    location: openPos + 1,
+                                    length:   closePos - openPos - 1
+                                ))
+                                return path.isEmpty ? nil : path
+                            }
+                            i = closePos + 1
+                            break
+                        }
+                        i += 1
+                    }
+                } else {
+                    i += 1
+                }
+            }
+
+            return nil
         }
 
         private func handle(_ command: EditorCommand) {
