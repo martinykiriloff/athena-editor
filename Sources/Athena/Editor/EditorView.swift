@@ -80,6 +80,7 @@ struct EditorView: NSViewRepresentable {
         guard let textView = nsView.documentView as? NSTextView else { return }
 
         let coord = context.coordinator
+        coord.parent = self          // keep fileURL and callbacks fresh on every render
         coord.currentTabSize      = tabSize
         coord.currentInsertSpaces = insertSpaces
         let themeChanged = coord.currentTheme != theme
@@ -311,18 +312,22 @@ extension EditorView {
             mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self, weak scrollView] event in
                 guard let self,
                       let scrollView,
-                      let tv = scrollView.documentView as? NSTextView
+                      let tv = scrollView.documentView as? NSTextView,
+                      event.modifierFlags.contains(.command)   // Cmd+Click only
                 else { return event }
 
-                // Verify click is inside this text view.
+                // Verify the click landed inside our scroll view (not sidebar etc.)
+                let svPoint = scrollView.convert(event.locationInWindow, from: nil)
+                guard scrollView.bounds.contains(svPoint) else { return event }
+
+                // Map to text-view coords and get the character index.
                 let tvPoint = tv.convert(event.locationInWindow, from: nil)
-                guard tv.bounds.contains(tvPoint) else { return event }
-
                 let charIdx = tv.characterIndex(for: tvPoint)
-                guard charIdx != NSNotFound else { return event }
+                let nsStr   = tv.string as NSString
+                guard charIdx != NSNotFound, charIdx < nsStr.length else { return event }
 
-                // Extract path on main thread (local monitors fire on main).
-                // NSEvent isn't Sendable, so return it outside assumeIsolated.
+                // Extract path on main thread (local monitors always fire on main).
+                // NSEvent isn't Sendable, so keep it outside assumeIsolated.
                 let path = MainActor.assumeIsolated {
                     self.extractImportPath(from: tv.string, at: charIdx)
                 }
