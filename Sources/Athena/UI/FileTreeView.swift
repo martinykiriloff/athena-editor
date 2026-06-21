@@ -69,7 +69,7 @@ struct FileTreeView: View {
     private var headerBar: some View {
         HStack(spacing: 4) {
             Text(appState.workspace?.name ?? "No Workspace")
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: appState.sf(11), weight: .semibold))
                 .foregroundColor(.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -118,7 +118,7 @@ struct FileTreeView: View {
     ) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: 12))
+                .font(.system(size: appState.sf(12)))
                 .foregroundColor(.secondary)
         }
         .buttonStyle(.plain)
@@ -278,6 +278,7 @@ private struct FileNodeRow: View {
     let onNewFolder: () -> Void
     let onRename: () -> Void
     let onDelete: () -> Void
+    @Environment(AppState.self) private var appState
 
     @State private var isHovering: Bool = false
 
@@ -290,7 +291,7 @@ private struct FileNodeRow: View {
             // Chevron (directories only)
             if node.isDirectory {
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.system(size: appState.sf(10), weight: .semibold))
                     .foregroundColor(.secondary)
                     .rotationEffect(node.isExpanded ? .degrees(90) : .degrees(0))
                     .animation(.easeInOut(duration: 0.15), value: node.isExpanded)
@@ -301,12 +302,12 @@ private struct FileNodeRow: View {
 
             // File/folder icon
             fileIcon
-                .font(.system(size: 13))
+                .font(.system(size: appState.sf(13)))
                 .frame(width: 16)
 
             // Filename
             Text(node.name)
-                .font(.system(size: 13))
+                .font(.system(size: appState.sf(13)))
                 .foregroundColor(.primary)
                 .lineLimit(1)
                 .truncationMode(.middle)

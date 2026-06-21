@@ -46,7 +46,7 @@ struct DBConnectionsView: View {
                 showAddSheet = true
             } label: {
                 Image(systemName: "plus")
-                    .font(.system(size: 13))
+                    .font(.system(size: appState.sf(13)))
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
@@ -61,10 +61,10 @@ struct DBConnectionsView: View {
     private var emptyState: some View {
         VStack(spacing: 12) {
             Image(systemName: "cylinder.split.1x2")
-                .font(.system(size: 32))
+                .font(.system(size: appState.sf(32)))
                 .foregroundStyle(.tertiary)
             Text("No connections")
-                .font(.system(size: 13))
+                .font(.system(size: appState.sf(13)))
                 .foregroundStyle(.secondary)
             Button("Add Connection") { showAddSheet = true }
                 .buttonStyle(.bordered)
@@ -119,6 +119,7 @@ private struct DBConnectionRow: View {
     let onEdit: () -> Void
     let onDelete: () -> Void
     let onToggle: () -> Void
+    @Environment(AppState.self) private var appState
 
     @State private var isHovered = false
 
@@ -131,7 +132,7 @@ private struct DBConnectionRow: View {
 
             // Type badge
             Text(connection.type.rawValue.prefix(2).uppercased())
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .font(.system(size: appState.sf(9), weight: .bold, design: .monospaced))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 4)
                 .padding(.vertical, 2)
@@ -141,11 +142,11 @@ private struct DBConnectionRow: View {
             // Name + host
             VStack(alignment: .leading, spacing: 1) {
                 Text(connection.name)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.system(size: appState.sf(12), weight: .medium))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 Text("\(connection.host):\(connection.port)")
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(.system(size: appState.sf(11), design: .monospaced))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -301,6 +302,7 @@ private struct IconButton: View {
     let name: String
     let help: String
     let action: () -> Void
+    @Environment(AppState.self) private var appState
 
     init(_ name: String, help: String, action: @escaping () -> Void) {
         self.name = name; self.help = help; self.action = action
@@ -309,7 +311,7 @@ private struct IconButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: name)
-                .font(.system(size: 11))
+                .font(.system(size: appState.sf(11)))
                 .foregroundStyle(.secondary)
                 .frame(width: 22, height: 22)
         }

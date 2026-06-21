@@ -68,11 +68,12 @@ private struct ActivityBarButton: View {
     let systemImage: String
     let isActive: Bool
     let action: () -> Void
+    @Environment(AppState.self) private var appState
 
     var body: some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: 20))
+                .font(.system(size: appState.sf(20)))
                 .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
                 .frame(width: 44, height: 44)
                 .contentShape(Rectangle())

@@ -33,7 +33,7 @@ struct BottomPanelView: View {
                 appState.showBottomPanel = false
             } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 11))
+                    .font(.system(size: appState.sf(11)))
                     .foregroundColor(.secondary)
                     .frame(width: 28, height: tabBarHeight)
             }
@@ -52,7 +52,7 @@ struct BottomPanelView: View {
             appState.activeBottomPanel = panel
         } label: {
             Text(panelLabel(panel))
-                .font(.system(size: 12, weight: isActive ? .medium : .regular))
+                .font(.system(size: appState.sf(12), weight: isActive ? .medium : .regular))
                 .foregroundColor(isActive ? .primary : .secondary)
                 .padding(.horizontal, 12)
                 .frame(height: tabBarHeight)
@@ -111,10 +111,10 @@ struct ProblemsView: View {
     private var emptyState: some View {
         VStack(spacing: 8) {
             Image(systemName: "checkmark.circle")
-                .font(.system(size: 28))
+                .font(.system(size: appState.sf(28)))
                 .foregroundColor(.secondary)
             Text("No problems")
-                .font(.system(size: 13))
+                .font(.system(size: appState.sf(13)))
                 .foregroundColor(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -131,7 +131,7 @@ struct ProblemsView: View {
                         }
                     } header: {
                         Text(fileURL.lastPathComponent)
-                            .font(.system(size: 11, weight: .semibold))
+                            .font(.system(size: appState.sf(11), weight: .semibold))
                             .foregroundColor(.secondary)
                     }
                 }
@@ -145,19 +145,20 @@ struct ProblemsView: View {
 
 private struct DiagnosticRowView: View {
     let diagnostic: Diagnostic
+    @Environment(AppState.self) private var appState
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             severityIcon
-                .font(.system(size: 13))
+                .font(.system(size: appState.sf(13)))
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(diagnostic.message)
-                    .font(.system(size: 12))
+                    .font(.system(size: appState.sf(12)))
                     .foregroundColor(.primary)
 
                 Text("\(diagnostic.fileURL.lastPathComponent):\(diagnostic.line)")
-                    .font(.system(size: 11))
+                    .font(.system(size: appState.sf(11)))
                     .foregroundColor(.secondary)
             }
 
@@ -188,6 +189,7 @@ private struct DiagnosticRowView: View {
 // MARK: - OutputView
 
 struct OutputView: View {
+    @Environment(AppState.self) private var appState
     private let placeholder: String = """
         [Athena] Output log initialised.
         [Athena] Waiting for events…
@@ -196,7 +198,7 @@ struct OutputView: View {
     var body: some View {
         ScrollView {
             Text(placeholder)
-                .font(.system(size: 12, design: .monospaced))
+                .font(.system(size: appState.sf(12), design: .monospaced))
                 .foregroundColor(.primary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(8)

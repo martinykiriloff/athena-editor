@@ -53,11 +53,12 @@ struct SidebarView: View {
 
 private struct SidebarHeaderView: View {
     let title: String
+    @Environment(AppState.self) private var appState
 
     var body: some View {
         HStack {
             Text(title.uppercased())
-                .font(.system(size: 11, weight: .semibold, design: .default))
+                .font(.system(size: appState.sf(11), weight: .semibold, design: .default))
                 .foregroundStyle(.secondary)
                 .tracking(0.5)
                 // smallCaps would require a font that supports it; uppercase + tracking

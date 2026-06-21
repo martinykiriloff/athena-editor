@@ -172,7 +172,7 @@ struct ClaudePanel: View {
                     appState.claudeMessages = []
                 } label: {
                     Image(systemName: "trash")
-                        .font(.system(size: 11))
+                        .font(.system(size: appState.sf(11)))
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
@@ -214,13 +214,13 @@ struct ClaudePanel: View {
     private var emptyState: some View {
         VStack(spacing: 10) {
             Image(systemName: "sparkles")
-                .font(.system(size: 28))
+                .font(.system(size: appState.sf(28)))
                 .foregroundStyle(.tertiary)
             Text("Ask Claude anything")
-                .font(.system(size: 13))
+                .font(.system(size: appState.sf(13)))
                 .foregroundStyle(.secondary)
             Text("Type / for commands")
-                .font(.system(size: 11))
+                .font(.system(size: appState.sf(11)))
                 .foregroundStyle(.tertiary)
         }
         .frame(maxWidth: .infinity)
@@ -282,7 +282,7 @@ struct ClaudePanel: View {
                                 }
                             } header: {
                                 Text(cat.uppercased())
-                                    .font(.system(size: 9, weight: .semibold))
+                                    .font(.system(size: appState.sf(9), weight: .semibold))
                                     .foregroundStyle(.tertiary)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .padding(.horizontal, 10)
@@ -315,18 +315,18 @@ struct ClaudePanel: View {
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: cmd.icon)
-                    .font(.system(size: 12))
+                    .font(.system(size: appState.sf(12)))
                     .foregroundStyle(highlighted ? Color.accentColor : Color.secondary)
                     .frame(width: 18, alignment: .center)
 
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 5) {
                         Text(cmd.trigger)
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(.system(size: appState.sf(11), design: .monospaced))
                             .foregroundStyle(.primary)
                         if cmd.isBuiltIn {
                             Text("built-in")
-                                .font(.system(size: 9, weight: .medium))
+                                .font(.system(size: appState.sf(9), weight: .medium))
                                 .foregroundStyle(.secondary)
                                 .padding(.horizontal, 4)
                                 .padding(.vertical, 1)
@@ -334,7 +334,7 @@ struct ClaudePanel: View {
                         }
                     }
                     Text(cmd.description)
-                        .font(.system(size: 10))
+                        .font(.system(size: appState.sf(10)))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
@@ -356,7 +356,7 @@ struct ClaudePanel: View {
         HStack(alignment: .bottom, spacing: 8) {
             TextField("Message Claude… (/ for commands)", text: $inputText, axis: .vertical)
                 .textFieldStyle(.plain)
-                .font(.system(size: 13))
+                .font(.system(size: appState.sf(13)))
                 .lineLimit(1...8)
                 .focused($inputFocused)
                 .onChange(of: inputText) { _, new in
@@ -408,7 +408,7 @@ struct ClaudePanel: View {
                 }
             } label: {
                 Image(systemName: appState.claudeIsStreaming ? "stop.circle.fill" : "arrow.up.circle.fill")
-                    .font(.system(size: 20))
+                    .font(.system(size: appState.sf(20)))
                     .foregroundStyle(sendButtonColor)
             }
             .buttonStyle(.plain)
@@ -681,11 +681,12 @@ private struct AccountChip: View {
     let account: ClaudeAccount
     let isActive: Bool
     let action: () -> Void
+    @Environment(AppState.self) private var appState
 
     var body: some View {
         Button(action: action) {
             Text(account.name)
-                .font(.system(size: 11, weight: isActive ? .semibold : .regular))
+                .font(.system(size: appState.sf(11), weight: isActive ? .semibold : .regular))
                 .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)
@@ -709,6 +710,7 @@ private struct AccountChip: View {
 
 private struct MessageRow: View {
     let message: ClaudeMessage
+    @Environment(AppState.self) private var appState
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -728,7 +730,7 @@ private struct MessageRow: View {
     private var bubble: some View {
         if message.role == .user {
             Text(message.content)
-                .font(.system(size: 13))
+                .font(.system(size: appState.sf(13)))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 7)
@@ -740,7 +742,7 @@ private struct MessageRow: View {
                     ClaudeTypingIndicator()
                 } else {
                     Text(message.content)
-                        .font(.system(size: 13))
+                        .font(.system(size: appState.sf(13)))
                         .foregroundStyle(.primary)
                         .textSelection(.enabled)
                     if message.isStreaming {

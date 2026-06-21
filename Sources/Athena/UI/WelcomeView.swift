@@ -25,11 +25,11 @@ struct WelcomeView: View {
                 // ── Branding ───────────────────────────────────────────────
                 VStack(spacing: 10) {
                     Text("Athena")
-                        .font(.system(size: 48, weight: .bold, design: .default))
+                        .font(.system(size: appState.sf(48), weight: .bold, design: .default))
                         .foregroundStyle(.white)
 
                     Text("AI-first macOS code editor")
-                        .font(.system(size: 16, weight: .regular))
+                        .font(.system(size: appState.sf(16), weight: .regular))
                         .foregroundStyle(.secondary)
                 }
 
@@ -106,6 +106,7 @@ private struct QuickActionButton: View {
     let systemImage: String
     let shortcut: String?
     let action: () -> Void
+    @Environment(AppState.self) private var appState
 
     @State private var isHovered = false
 
@@ -113,16 +114,16 @@ private struct QuickActionButton: View {
         Button(action: action) {
             VStack(spacing: 10) {
                 Image(systemName: systemImage)
-                    .font(.system(size: 24))
+                    .font(.system(size: appState.sf(24)))
                     .foregroundStyle(isHovered ? .white : Color.accentColor)
 
                 Text(title)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: appState.sf(13), weight: .medium))
                     .foregroundStyle(.white)
 
                 if let shortcut {
                     Text(shortcut)
-                        .font(.system(size: 11))
+                        .font(.system(size: appState.sf(11)))
                         .foregroundStyle(.secondary)
                 }
             }
@@ -152,6 +153,7 @@ private struct QuickActionButton: View {
 // MARK: - ShortcutsGrid
 
 private struct ShortcutsGrid: View {
+    @Environment(AppState.self) private var appState
 
     private let shortcuts: [(key: String, description: String)] = [
         ("⌘P",  "Go to File"),
@@ -172,7 +174,7 @@ private struct ShortcutsGrid: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Keyboard Shortcuts")
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: appState.sf(11), weight: .semibold))
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.bottom, 4)
@@ -204,13 +206,14 @@ private struct ShortcutsGrid: View {
 // MARK: - ShortcutRow
 
 private struct ShortcutRow: View {
+    @Environment(AppState.self) private var appState
 
     let item: (key: String, description: String)
 
     var body: some View {
         HStack(spacing: 10) {
             Text(item.key)
-                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .font(.system(size: appState.sf(12), weight: .medium, design: .monospaced))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 3)
@@ -228,7 +231,7 @@ private struct ShortcutRow: View {
                 .frame(minWidth: 44, alignment: .center)
 
             Text(item.description)
-                .font(.system(size: 12))
+                .font(.system(size: appState.sf(12)))
                 .foregroundStyle(.secondary)
         }
     }

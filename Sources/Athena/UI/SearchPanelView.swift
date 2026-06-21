@@ -36,13 +36,13 @@ struct SearchPanelView: View {
     private var searchBar: some View {
         HStack(spacing: 4) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 12))
+                .font(.system(size: appState.sf(12)))
                 .foregroundStyle(.secondary)
 
             @Bindable var state = appState
             TextField("Search", text: $state.searchQuery)
                 .textFieldStyle(.plain)
-                .font(.system(size: 13))
+                .font(.system(size: appState.sf(13)))
                 .onSubmit { triggerSearch() }
                 .onChange(of: appState.searchQuery) { _, _ in scheduleDebounce() }
 
@@ -56,7 +56,7 @@ struct SearchPanelView: View {
                 Image(systemName: showFilters
                       ? "line.3.horizontal.decrease.circle.fill"
                       : "line.3.horizontal.decrease.circle")
-                    .font(.system(size: 13))
+                    .font(.system(size: appState.sf(13)))
                     .foregroundStyle(showFilters ? Color.accentColor : Color.secondary)
             }
             .buttonStyle(.plain)
@@ -70,7 +70,7 @@ struct SearchPanelView: View {
                     Task { await appState.searchService.cancel() }
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 12))
+                        .font(.system(size: appState.sf(12)))
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
@@ -105,12 +105,12 @@ struct SearchPanelView: View {
     private func filterRow(label: String, placeholder: String, text: Binding<String>) -> some View {
         HStack(spacing: 6) {
             Text(label)
-                .font(.system(size: 10))
+                .font(.system(size: appState.sf(10)))
                 .foregroundStyle(.secondary)
                 .frame(width: 44, alignment: .trailing)
             TextField(placeholder, text: text)
                 .textFieldStyle(.plain)
-                .font(.system(size: 12))
+                .font(.system(size: appState.sf(12)))
                 .onSubmit { triggerSearch() }
                 .onChange(of: text.wrappedValue) { _, _ in scheduleDebounce() }
         }
@@ -130,7 +130,7 @@ struct SearchPanelView: View {
             if !appState.searchQuery.isEmpty { triggerSearch() }
         } label: {
             Text(symbol)
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .font(.system(size: appState.sf(11), weight: .medium, design: .monospaced))
                 .foregroundStyle(isOn.wrappedValue ? Color.accentColor : Color.secondary)
                 .frame(width: 24, height: 20)
                 .background(
@@ -154,7 +154,7 @@ struct SearchPanelView: View {
                     .scaleEffect(0.6)
                     .frame(width: 14, height: 14)
                 Text("Searching…")
-                    .font(.system(size: 11))
+                    .font(.system(size: appState.sf(11)))
                     .foregroundStyle(.secondary)
             } else if !appState.searchQuery.isEmpty {
                 let fileCount = fileGroups.count
@@ -164,7 +164,7 @@ struct SearchPanelView: View {
                         ? "No results"
                         : "\(matchCount) result\(matchCount == 1 ? "" : "s") in \(fileCount) file\(fileCount == 1 ? "" : "s")"
                 )
-                .font(.system(size: 11))
+                .font(.system(size: appState.sf(11)))
                 .foregroundStyle(.secondary)
             }
             Spacer()
@@ -231,10 +231,10 @@ struct SearchPanelView: View {
     private func emptyPrompt(icon: String, message: String) -> some View {
         VStack(spacing: 10) {
             Image(systemName: icon)
-                .font(.system(size: 28))
+                .font(.system(size: appState.sf(28)))
                 .foregroundStyle(.secondary)
             Text(message)
-                .font(.system(size: 12))
+                .font(.system(size: appState.sf(12)))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 16)
@@ -296,6 +296,7 @@ private struct SearchFileGroupView: View {
     let group: SearchFileGroup
     let workspaceRoot: URL?
     let onSelect: (SearchResult) -> Void
+    @Environment(AppState.self) private var appState
 
     @State private var isExpanded: Bool = true
 
@@ -324,17 +325,17 @@ private struct SearchFileGroupView: View {
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 10, weight: .medium))
+                        .font(.system(size: appState.sf(10), weight: .medium))
                         .foregroundStyle(.secondary)
                         .frame(width: 12)
 
                     Text(fileName)
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.system(size: appState.sf(12), weight: .semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
 
                     Text(relativePath)
-                        .font(.system(size: 11))
+                        .font(.system(size: appState.sf(11)))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -343,7 +344,7 @@ private struct SearchFileGroupView: View {
 
                     // Match count badge
                     Text("\(group.results.count)")
-                        .font(.system(size: 10, weight: .medium))
+                        .font(.system(size: appState.sf(10), weight: .medium))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 5)
                         .padding(.vertical, 1)
@@ -375,6 +376,7 @@ private struct SearchFileGroupView: View {
 private struct SearchResultRowView: View {
     let result: SearchResult
     let onSelect: () -> Void
+    @Environment(AppState.self) private var appState
 
     @State private var isHovered: Bool = false
 
@@ -383,14 +385,14 @@ private struct SearchResultRowView: View {
             HStack(alignment: .top, spacing: 0) {
                 // Line number column
                 Text("\(result.lineNumber)")
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(.system(size: appState.sf(11), design: .monospaced))
                     .foregroundStyle(.secondary)
                     .frame(width: 36, alignment: .trailing)
                     .padding(.trailing, 8)
 
                 // Line content
                 Text(result.lineContent.trimmingCharacters(in: .whitespaces))
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(.system(size: appState.sf(12), design: .monospaced))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .truncationMode(.tail)

@@ -48,7 +48,7 @@ struct GitPanelView: View {
     private var gitHeader: some View {
         HStack(spacing: 6) {
             Text("SOURCE CONTROL")
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: appState.sf(11), weight: .semibold))
                 .foregroundStyle(.secondary)
                 .tracking(0.5)
 
@@ -68,7 +68,7 @@ struct GitPanelView: View {
                     }
                 } label: {
                     Image(systemName: "checkmark.circle")
-                        .font(.system(size: 13))
+                        .font(.system(size: appState.sf(13)))
                         .foregroundStyle(.green)
                 }
                 .buttonStyle(.plain)
@@ -81,7 +81,7 @@ struct GitPanelView: View {
                 Task { await appState.refreshGitStatus() }
             } label: {
                 Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 12))
+                    .font(.system(size: appState.sf(12)))
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
@@ -102,7 +102,7 @@ struct GitPanelView: View {
                     get: { appState.commitMessage },
                     set: { appState.commitMessage = $0 }
                 ))
-                .font(.system(size: 12))
+                .font(.system(size: appState.sf(12)))
                 .frame(minHeight: 60)
                 .scrollContentBackground(.hidden)
                 .background(Color(nsColor: .textBackgroundColor))
@@ -115,7 +115,7 @@ struct GitPanelView: View {
                 // Placeholder
                 if appState.commitMessage.isEmpty {
                     Text("Message (Cmd+Return to commit)")
-                        .font(.system(size: 12))
+                        .font(.system(size: appState.sf(12)))
                         .foregroundStyle(.tertiary)
                         .padding(.horizontal, 5)
                         .padding(.vertical, 8)
@@ -136,7 +136,7 @@ struct GitPanelView: View {
                 }
             } label: {
                 Text("Commit")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: appState.sf(12), weight: .semibold))
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
@@ -187,10 +187,10 @@ struct GitPanelView: View {
     private var emptyState: some View {
         VStack(spacing: 8) {
             Image(systemName: "checkmark.seal")
-                .font(.system(size: 28))
+                .font(.system(size: appState.sf(28)))
                 .foregroundStyle(.tertiary)
             Text("No changes")
-                .font(.system(size: 12))
+                .font(.system(size: appState.sf(12)))
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -204,10 +204,10 @@ struct GitPanelView: View {
         HStack(spacing: 8) {
             // Branch name
             Image(systemName: "arrow.triangle.branch")
-                .font(.system(size: 10))
+                .font(.system(size: appState.sf(10)))
                 .foregroundStyle(.secondary)
             Text(appState.gitStatus.branch)
-                .font(.system(size: 11))
+                .font(.system(size: appState.sf(11)))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -216,12 +216,12 @@ struct GitPanelView: View {
 
             if appState.gitStatus.ahead > 0 {
                 Label("\(appState.gitStatus.ahead)", systemImage: "arrow.up")
-                    .font(.system(size: 10))
+                    .font(.system(size: appState.sf(10)))
                     .foregroundStyle(.secondary)
             }
             if appState.gitStatus.behind > 0 {
                 Label("\(appState.gitStatus.behind)", systemImage: "arrow.down")
-                    .font(.system(size: 10))
+                    .font(.system(size: appState.sf(10)))
                     .foregroundStyle(.secondary)
             }
         }
@@ -250,10 +250,10 @@ private struct ChangeSection: View {
         } label: {
             HStack(spacing: 4) {
                 Text(title)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: appState.sf(11), weight: .semibold))
                     .foregroundStyle(.secondary)
                 Text("(\(changes.count))")
-                    .font(.system(size: 11))
+                    .font(.system(size: appState.sf(11)))
                     .foregroundStyle(.tertiary)
                 Spacer()
             }
@@ -277,7 +277,7 @@ private struct GitFileRow: View {
         HStack(spacing: 6) {
             // Status badge
             Text(change.status)
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .font(.system(size: appState.sf(10), weight: .bold, design: .monospaced))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 4)
                 .padding(.vertical, 1)
@@ -287,13 +287,13 @@ private struct GitFileRow: View {
             // Filename
             VStack(alignment: .leading, spacing: 0) {
                 Text(fileName)
-                    .font(.system(size: 12))
+                    .font(.system(size: appState.sf(12)))
                     .lineLimit(1)
                     .truncationMode(.middle)
 
                 if !parentPath.isEmpty {
                     Text(parentPath)
-                        .font(.system(size: 10))
+                        .font(.system(size: appState.sf(10)))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.head)
@@ -316,7 +316,7 @@ private struct GitFileRow: View {
                     }
                 } label: {
                     Image(systemName: isStaged ? "minus.circle" : "plus.circle")
-                        .font(.system(size: 12))
+                        .font(.system(size: appState.sf(12)))
                         .foregroundStyle(isStaged ? .red : .green)
                 }
                 .buttonStyle(.plain)

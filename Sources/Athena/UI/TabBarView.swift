@@ -32,7 +32,7 @@ struct TabBarView: View {
                 appState.activeTabId = newTab.id
             } label: {
                 Image(systemName: "plus")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.system(size: appState.sf(12), weight: .medium))
                     .foregroundColor(.secondary)
                     .frame(width: 32, height: tabBarHeight)
             }
@@ -62,12 +62,12 @@ private struct TabItemView: View {
         HStack(spacing: 6) {
             // Language icon
             languageIcon
-                .font(.system(size: 12))
+                .font(.system(size: appState.sf(12)))
                 .frame(width: 14)
 
             // Title
             Text(tab.title)
-                .font(.system(size: 12))
+                .font(.system(size: appState.sf(12)))
                 .foregroundColor(isActive ? .primary : .secondary)
                 .lineLimit(1)
 
@@ -86,7 +86,7 @@ private struct TabItemView: View {
                         appState.closeTab(tab.id)
                     } label: {
                         Image(systemName: "xmark")
-                            .font(.system(size: 10, weight: .medium))
+                            .font(.system(size: appState.sf(10), weight: .medium))
                             .foregroundColor(.secondary)
                             .frame(width: 14, height: 14)
                             .background(

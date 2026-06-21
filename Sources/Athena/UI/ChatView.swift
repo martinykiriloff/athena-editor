@@ -42,11 +42,11 @@ struct ChatView: View {
     private var chatHeader: some View {
         HStack(spacing: 6) {
             Image(systemName: "sparkle")
-                .font(.system(size: 11))
+                .font(.system(size: appState.sf(11)))
                 .foregroundStyle(.purple)
 
             Text("CLAUDE")
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: appState.sf(11), weight: .semibold))
                 .foregroundStyle(.secondary)
                 .tracking(0.5)
 
@@ -58,7 +58,7 @@ struct ChatView: View {
                     appState.chatMessages.removeAll()
                 } label: {
                     Image(systemName: "trash")
-                        .font(.system(size: 11))
+                        .font(.system(size: appState.sf(11)))
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
@@ -72,7 +72,7 @@ struct ChatView: View {
                 inputText = ""
             } label: {
                 Image(systemName: "plus.square")
-                    .font(.system(size: 11))
+                    .font(.system(size: appState.sf(11)))
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
@@ -89,10 +89,10 @@ struct ChatView: View {
         VStack(spacing: 12) {
             Spacer()
             Image(systemName: "key.slash")
-                .font(.system(size: 28))
+                .font(.system(size: appState.sf(28)))
                 .foregroundStyle(.tertiary)
             Text("Set Claude API key in Settings")
-                .font(.system(size: 13))
+                .font(.system(size: appState.sf(13)))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
             Button("Open Settings") {
@@ -157,7 +157,7 @@ struct ChatView: View {
                 // Multiline text editor
                 ZStack(alignment: .topLeading) {
                     TextEditor(text: $inputText)
-                        .font(.system(size: 13))
+                        .font(.system(size: appState.sf(13)))
                         .frame(minHeight: 36, maxHeight: 120)
                         .scrollContentBackground(.hidden)
                         .background(Color.clear)
@@ -165,7 +165,7 @@ struct ChatView: View {
 
                     if inputText.isEmpty {
                         Text("Ask Claude…")
-                            .font(.system(size: 13))
+                            .font(.system(size: appState.sf(13)))
                             .foregroundStyle(.tertiary)
                             .padding(.horizontal, 5)
                             .padding(.vertical, 8)
@@ -186,7 +186,7 @@ struct ChatView: View {
                     sendMessage()
                 } label: {
                     Image(systemName: "arrow.up.circle.fill")
-                        .font(.system(size: 22))
+                        .font(.system(size: appState.sf(22)))
                         .foregroundStyle(
                             canSend ? Color.accentColor : Color.secondary.opacity(0.4)
                         )
@@ -200,7 +200,7 @@ struct ChatView: View {
             // Bottom meta row
             HStack {
                 Text(useContext ? "Context: active file + selection" : "No context")
-                    .font(.system(size: 10))
+                    .font(.system(size: appState.sf(10)))
                     .foregroundStyle(.tertiary)
 
                 Toggle("", isOn: $useContext)
@@ -212,7 +212,7 @@ struct ChatView: View {
 
                 let count = inputText.count
                 Text("\(count)")
-                    .font(.system(size: 10, design: .monospaced))
+                    .font(.system(size: appState.sf(10), design: .monospaced))
                     .foregroundStyle(count > 4000 ? Color.orange : Color.secondary.opacity(0.5))
             }
             .padding(.horizontal, 4)
@@ -303,6 +303,7 @@ struct ChatView: View {
 
 struct MessageBubble: View {
     let message: ChatMessage
+    @Environment(AppState.self) private var appState
 
     var body: some View {
         Group {
@@ -321,7 +322,7 @@ struct MessageBubble: View {
         HStack(alignment: .top, spacing: 0) {
             Spacer(minLength: 40)
             Text(message.content)
-                .font(.system(size: 13))
+                .font(.system(size: appState.sf(13)))
                 .foregroundStyle(.white)
                 .textSelection(.enabled)
                 .padding(.horizontal, 10)
@@ -346,6 +347,7 @@ struct MessageBubble: View {
 /// Renders assistant content with simple code-block detection.
 private struct AssistantContent: View {
     let content: String
+    @Environment(AppState.self) private var appState
 
     var body: some View {
         if content.isEmpty {
@@ -356,7 +358,7 @@ private struct AssistantContent: View {
                     switch segment {
                     case .text(let t):
                         Text(t)
-                            .font(.system(size: 13))
+                            .font(.system(size: appState.sf(13)))
                             .foregroundStyle(.primary)
                             .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
@@ -364,14 +366,14 @@ private struct AssistantContent: View {
                         VStack(alignment: .leading, spacing: 0) {
                             if !lang.isEmpty {
                                 Text(lang)
-                                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                    .font(.system(size: appState.sf(10), weight: .semibold, design: .monospaced))
                                     .foregroundStyle(.secondary)
                                     .padding(.horizontal, 8)
                                     .padding(.top, 5)
                             }
                             ScrollView(.horizontal, showsIndicators: false) {
                                 Text(code)
-                                    .font(.system(size: 12, design: .monospaced))
+                                    .font(.system(size: appState.sf(12), design: .monospaced))
                                     .foregroundStyle(.primary)
                                     .textSelection(.enabled)
                                     .padding(.horizontal, 8)

@@ -47,10 +47,10 @@ struct QuickOpenView: View {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
                         .foregroundStyle(.secondary)
-                        .font(.system(size: 14))
+                        .font(.system(size: appState.sf(14)))
 
                     TextField("Go to file…", text: $query)
-                        .font(.system(size: 16))
+                        .font(.system(size: appState.sf(16)))
                         .textFieldStyle(.plain)
                         .focused($searchFocused)
                         // Arrow keys — navigate the list
@@ -69,7 +69,7 @@ struct QuickOpenView: View {
                     Divider()
                     Text("No results for \"\(query)\"")
                         .foregroundStyle(.secondary)
-                        .font(.system(size: 12))
+                        .font(.system(size: appState.sf(12)))
                         .padding(20)
                 } else if !results.isEmpty {
                     Divider()
@@ -136,23 +136,24 @@ private struct QuickOpenRow: View {
     let file: FileNode
     let isSelected: Bool
     let workspaceURL: URL?
+    @Environment(AppState.self) private var appState
 
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "doc")
-                .font(.system(size: 11))
+                .font(.system(size: appState.sf(11)))
                 .foregroundStyle(isSelected ? .white.opacity(0.8) : .secondary)
                 .frame(width: 14)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(file.name)
-                    .font(.system(size: 13))
+                    .font(.system(size: appState.sf(13)))
                     .foregroundStyle(isSelected ? .white : .primary)
                     .lineLimit(1)
 
                 if let rel = relativePath {
                     Text(rel)
-                        .font(.system(size: 11))
+                        .font(.system(size: appState.sf(11)))
                         .foregroundStyle(isSelected ? .white.opacity(0.65) : .secondary)
                         .lineLimit(1)
                 }

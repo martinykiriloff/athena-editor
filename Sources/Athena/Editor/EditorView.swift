@@ -340,9 +340,9 @@ extension EditorView {
             }
         }
 
-        /// Scans the line at `charIndex` for a quoted string literal that looks
-        /// like an import path (the line must contain an import/require keyword).
-        /// Returns the unquoted path, or `nil`.
+        /// Returns the import path from the line containing `charIndex`, or `nil`.
+        /// Matches any click anywhere on an import/require/from/export line —
+        /// the user doesn't need to click precisely on the quoted string.
         private func extractImportPath(from text: String, at charIndex: Int) -> String? {
             let ns = text as NSString
             guard charIndex < ns.length else { return nil }
@@ -354,32 +354,27 @@ extension EditorView {
             let keywords = ["import ", "require(", " from ", "@import", "#include", "export "]
             guard keywords.contains(where: { line.contains($0) }) else { return nil }
 
-            // Walk through all quoted strings on this line; return the one that
-            // contains charIndex.
+            // Return the LAST quoted string on the line — for `import X from './path'`
+            // the path is always the last quoted token, avoiding false hits on
+            // `import type { "Named" } from './types'` style comments.
             let lineStart = lineRange.location
             let lineEnd   = NSMaxRange(lineRange)
-            var i = lineStart
+            var i         = lineStart
+            var lastPath: String? = nil
 
             while i < lineEnd {
                 let c = ns.character(at: i)
                 // Opening quote: 34=" 39=' 96=`
                 if c == 34 || c == 39 || c == 96 {
                     let openQuote = c
-                    let openPos   = i
+                    let openPos   = i + 1
                     i += 1
                     while i < lineEnd {
                         let c2 = ns.character(at: i)
                         if c2 == openQuote {
-                            let closePos = i
-                            // charIndex is inside this quoted span?
-                            if charIndex > openPos && charIndex <= closePos {
-                                let path = ns.substring(with: NSRange(
-                                    location: openPos + 1,
-                                    length:   closePos - openPos - 1
-                                ))
-                                return path.isEmpty ? nil : path
-                            }
-                            i = closePos + 1
+                            let path = ns.substring(with: NSRange(location: openPos, length: i - openPos))
+                            if !path.isEmpty { lastPath = path }
+                            i += 1
                             break
                         }
                         i += 1
@@ -389,7 +384,7 @@ extension EditorView {
                 }
             }
 
-            return nil
+            return lastPath
         }
 
         private func handle(_ command: EditorCommand) {

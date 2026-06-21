@@ -58,6 +58,13 @@ final class AppState {
 
     // MARK: - Editor settings (mirrored from SettingsService on launch)
     var editorFontSize:          CGFloat = 14
+
+    /// Scale factor for all UI chrome fonts (sidebar, tabs, panels…).
+    /// Derived from editorFontSize so Cmd+= / Cmd+- zooms the whole window.
+    var uiScale: CGFloat { editorFontSize / 14.0 }
+
+    /// Returns `base` multiplied by the current UI zoom scale.
+    func sf(_ base: CGFloat) -> CGFloat { base * uiScale }
     var editorFontFamily:        String  = "JetBrains Mono"
     var editorFontLigatures:     Bool    = true
     var editorLineHeight:        CGFloat = 1.0

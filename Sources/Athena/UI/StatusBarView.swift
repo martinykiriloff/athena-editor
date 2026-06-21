@@ -105,7 +105,7 @@ struct StatusBarView: View {
             }
             .padding(.trailing, 12)
         }
-        .font(.system(size: 11, design: .monospaced))
+        .font(.system(size: appState.sf(11), design: .monospaced))
         .foregroundStyle(.secondary)
         .frame(maxWidth: .infinity)
         .frame(height: 22)
