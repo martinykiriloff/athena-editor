@@ -38,11 +38,28 @@ struct EditorView: NSViewRepresentable {
     // MARK: NSViewRepresentable
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSTextView.scrollableTextView()
+        // Build the scrollable-text-view stack manually so we can use our
+        // AthenaTextView subclass (which overrides mouseDown for Cmd+Click).
+        let textStorage  = NSTextStorage()
+        let layoutMgr    = NSLayoutManager()
+        textStorage.addLayoutManager(layoutMgr)
+        let inf = CGFloat.greatestFiniteMagnitude
+        let container = NSTextContainer(size: NSSize(width: 0, height: inf))
+        container.widthTracksTextView = true
+        layoutMgr.addTextContainer(container)
 
-        guard let textView = scrollView.documentView as? NSTextView else {
-            return scrollView
-        }
+        let textView = AthenaTextView(frame: .zero, textContainer: container)
+        textView.minSize                  = NSSize(width: 0, height: 0)
+        textView.maxSize                  = NSSize(width: inf, height: inf)
+        textView.isVerticallyResizable    = true
+        textView.isHorizontallyResizable  = false
+        textView.autoresizingMask         = NSView.AutoresizingMask.width
+
+        let scrollView = NSScrollView()
+        scrollView.hasVerticalScroller   = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autoresizingMask      = [NSView.AutoresizingMask.width, NSView.AutoresizingMask.height]
+        scrollView.documentView          = textView
 
         configureTextView(textView, coordinator: context.coordinator)
 
@@ -71,7 +88,14 @@ struct EditorView: NSViewRepresentable {
         // Let the keybinding system reach this editor (find, comment, indent…).
         context.coordinator.textView = textView
         context.coordinator.installCommandObserver()
-        context.coordinator.installImportClickRecognizer(on: textView)
+
+        // Wire Cmd+Click: the subclass calls back with the char index.
+        let coord = context.coordinator
+        textView.onCmdClick = { [weak coord, weak textView] (charIdx: Int) in
+            guard let coord, let tv = textView else { return }
+            guard let path = coord.importPath(from: tv.string, at: charIdx) else { return }
+            coord.parent.onImportClick(path, coord.parent.fileURL)
+        }
 
         return scrollView
     }
@@ -164,6 +188,10 @@ struct EditorView: NSViewRepresentable {
 
         textView.textContainerInset = NSSize(width: 8, height: 8)
         textView.delegate = coordinator
+
+        // Suppress the default blue-underline link styling so import paths
+        // look like normal code. Cmd+Click still fires textView(_:clickedOnLink:at:).
+        textView.linkTextAttributes = [:]
     }
 
     private func applyWordWrap(_ wrap: Bool, to textView: NSTextView) {
@@ -303,37 +331,11 @@ extension EditorView {
             }
         }
 
-        // MARK: Import click — Cmd+Click anywhere on an import line opens the file
-
-        /// Attaches an NSClickGestureRecognizer for Cmd+Click to the text view.
-        /// This is far more reliable than an NSEvent local monitor because
-        /// `location(in:)` gives the click point directly in the text view's own
-        /// coordinate system — no window-to-view conversion required.
-        func installImportClickRecognizer(on textView: NSTextView) {
-            let gr = NSClickGestureRecognizer(
-                target: self,
-                action: #selector(handleImportClick(_:))
-            )
-            gr.buttonMask             = 0x1     // left button
-            gr.numberOfClicksRequired = 1
-            textView.addGestureRecognizer(gr)
-        }
-
-        @objc private func handleImportClick(_ gr: NSClickGestureRecognizer) {
-            // Only handle Cmd+Click — modifierMask isn't bridged on NSClickGestureRecognizer
-            guard NSEvent.modifierFlags.contains(.command) else { return }
-            guard let tv = textView else { return }
-            let point   = gr.location(in: tv)   // already in TV coordinates — no conversion needed
-            let charIdx = tv.characterIndex(for: point)
-            let nsStr   = tv.string as NSString
-            guard charIdx != NSNotFound, charIdx < nsStr.length else { return }
-            guard let path = importPath(from: tv.string, at: charIdx) else { return }
-            parent.onImportClick(path, parent.fileURL)
-        }
+        // MARK: Import click — wired via AthenaTextView.onCmdClick in makeNSView
 
         /// Returns the last quoted string on the import/require line that contains
         /// `charIndex`. Works when clicked anywhere on the line, not just on the path.
-        private func importPath(from text: String, at charIndex: Int) -> String? {
+        func importPath(from text: String, at charIndex: Int) -> String? {
             let ns = text as NSString
             guard charIndex < ns.length else { return nil }
 
@@ -528,6 +530,50 @@ extension EditorView {
             if selectedRange.location <= maxLocation {
                 textView.setSelectedRange(selectedRange)
             }
+
+            // After overwriting all attributes, re-stamp import paths with
+            // NSLinkAttributeName so Cmd+Click fires textView(_:clickedOnLink:at:).
+            addImportLinkAttributes(to: textView)
+        }
+
+        private func addImportLinkAttributes(to textView: NSTextView) {
+            guard let ts = textView.textStorage else { return }
+            let text     = ts.string as NSString
+            let keywords = ["import ", "require(", " from ", "@import", "#include", "export "]
+            var pos      = 0
+            ts.beginEditing()
+            while pos < text.length {
+                let lineRange = text.lineRange(for: NSRange(location: pos, length: 0))
+                let line      = text.substring(with: lineRange)
+                if keywords.contains(where: { line.contains($0) }) {
+                    var i       = lineRange.location
+                    let lineEnd = NSMaxRange(lineRange)
+                    while i < lineEnd {
+                        let c = text.character(at: i)
+                        if c == 34 || c == 39 || c == 96 {   // " ' `
+                            let openQ    = c
+                            let pathStart = i + 1
+                            i += 1
+                            while i < lineEnd {
+                                if text.character(at: i) == openQ {
+                                    let r    = NSRange(location: pathStart, length: i - pathStart)
+                                    let path = text.substring(with: r)
+                                    if !path.isEmpty {
+                                        ts.addAttribute(.link, value: path, range: r)
+                                    }
+                                    i += 1
+                                    break
+                                }
+                                i += 1
+                            }
+                        } else { i += 1 }
+                    }
+                }
+                let next = NSMaxRange(lineRange)
+                guard next > pos else { break }
+                pos = next
+            }
+            ts.endEditing()
         }
 
         // MARK: NSTextViewDelegate
@@ -537,6 +583,13 @@ extension EditorView {
             parent.onContentChange(textView.string)
             // Re-colour after every edit so tokens track the user's keystrokes.
             applyHighlighting(to: textView)
+        }
+
+        // Called by NSTextView when Cmd+Click lands on a .link attribute (editable TV).
+        func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
+            guard let path = link as? String else { return false }
+            parent.onImportClick(path, parent.fileURL)
+            return true   // handled — don't let NSTextView try to open it as a URL
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {

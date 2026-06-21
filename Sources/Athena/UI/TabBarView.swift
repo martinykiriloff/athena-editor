@@ -2,6 +2,7 @@
 // Athena — horizontal scrollable tab bar above the editor.
 // Swift 6, strict concurrency.
 
+import AppKit
 import SwiftUI
 
 // MARK: - TabBarView
@@ -113,11 +114,7 @@ private struct TabItemView: View {
         .contentShape(Rectangle())
         .onHover { isHovering = $0 }
         .onTapGesture { appState.activeTabId = tab.id }
-        // Middle-click to close
-        .simultaneousGesture(
-            TapGesture(count: 1)
-                .modifiers(.init())
-        )
+        .overlay { MiddleClickDetector { appState.closeTab(tab.id) } }
         .contextMenu {
             Button("Close") { appState.closeTab(tab.id) }
             Button("Close Others") {
@@ -172,5 +169,48 @@ private struct TabItemView: View {
         case .markdown:   return .white
         case .plaintext:  return .secondary
         }
+    }
+}
+
+// MARK: - Middle-click support
+
+// Transparent overlay that intercepts button-2 (scroll-wheel click) events and
+// closes the tab. hitTest returns nil for every other event so left-click,
+// hover, and context-menu handling fall through to the SwiftUI content below.
+private struct MiddleClickDetector: NSViewRepresentable {
+    let action: () -> Void
+
+    func makeNSView(context: Context) -> MiddleClickNSView {
+        MiddleClickNSView(action: action)
+    }
+
+    func updateNSView(_ nsView: MiddleClickNSView, context: Context) {
+        nsView.action = action
+    }
+}
+
+final class MiddleClickNSView: NSView {
+    var action: () -> Void
+
+    init(action: @escaping () -> Void) {
+        self.action = action
+        super.init(frame: .zero)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    // Accept hit only for middle-click; everything else falls through to SwiftUI.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        if let event = NSApp.currentEvent,
+           event.type == .otherMouseDown,
+           event.buttonNumber == 2,
+           bounds.contains(point) {
+            return self
+        }
+        return nil
+    }
+
+    override func otherMouseDown(with event: NSEvent) {
+        guard event.buttonNumber == 2 else { super.otherMouseDown(with: event); return }
+        action()
     }
 }
