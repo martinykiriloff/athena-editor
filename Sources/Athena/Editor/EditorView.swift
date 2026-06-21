@@ -71,7 +71,7 @@ struct EditorView: NSViewRepresentable {
         // Let the keybinding system reach this editor (find, comment, indent…).
         context.coordinator.textView = textView
         context.coordinator.installCommandObserver()
-        context.coordinator.installMouseMonitor(on: scrollView)
+        context.coordinator.installImportClickRecognizer(on: textView)
 
         return scrollView
     }
@@ -227,7 +227,7 @@ extension EditorView {
         weak var textView: NSTextView?
         nonisolated(unsafe) private var scrollObserver: NSObjectProtocol?
         nonisolated(unsafe) private var commandObserver: NSObjectProtocol?
-        nonisolated(unsafe) private var mouseMonitor: Any?
+        // no mouseMonitor needed — using NSClickGestureRecognizer instead
 
         // Blame annotation
         var blameAnnotationLabel: NSTextField?
@@ -286,9 +286,6 @@ extension EditorView {
             if let obs = commandObserver {
                 NotificationCenter.default.removeObserver(obs)
             }
-            if let mon = mouseMonitor {
-                NSEvent.removeMonitor(mon)
-            }
         }
 
         // MARK: Editor commands (find / go-to-line / comment / indent)
@@ -306,72 +303,61 @@ extension EditorView {
             }
         }
 
-        // MARK: Import click (click on quoted import path → open file)
+        // MARK: Import click — Cmd+Click anywhere on an import line opens the file
 
-        func installMouseMonitor(on scrollView: NSScrollView) {
-            mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self, weak scrollView] event in
-                guard let self,
-                      let scrollView,
-                      let tv = scrollView.documentView as? NSTextView,
-                      event.modifierFlags.contains(.command)   // Cmd+Click only
-                else { return event }
-
-                // Verify the click landed inside our scroll view (not sidebar etc.)
-                let svPoint = scrollView.convert(event.locationInWindow, from: nil)
-                guard scrollView.bounds.contains(svPoint) else { return event }
-
-                // Map to text-view coords and get the character index.
-                let tvPoint = tv.convert(event.locationInWindow, from: nil)
-                let charIdx = tv.characterIndex(for: tvPoint)
-                let nsStr   = tv.string as NSString
-                guard charIdx != NSNotFound, charIdx < nsStr.length else { return event }
-
-                // Extract path on main thread (local monitors always fire on main).
-                // NSEvent isn't Sendable, so keep it outside assumeIsolated.
-                let path = MainActor.assumeIsolated {
-                    self.extractImportPath(from: tv.string, at: charIdx)
-                }
-                if let path {
-                    MainActor.assumeIsolated {
-                        self.parent.onImportClick(path, self.parent.fileURL)
-                    }
-                }
-                return event  // always pass through so cursor moves normally
-            }
+        /// Attaches an NSClickGestureRecognizer for Cmd+Click to the text view.
+        /// This is far more reliable than an NSEvent local monitor because
+        /// `location(in:)` gives the click point directly in the text view's own
+        /// coordinate system — no window-to-view conversion required.
+        func installImportClickRecognizer(on textView: NSTextView) {
+            let gr = NSClickGestureRecognizer(
+                target: self,
+                action: #selector(handleImportClick(_:))
+            )
+            gr.buttonMask             = 0x1     // left button
+            gr.numberOfClicksRequired = 1
+            textView.addGestureRecognizer(gr)
         }
 
-        /// Returns the import path from the line containing `charIndex`, or `nil`.
-        /// Matches any click anywhere on an import/require/from/export line —
-        /// the user doesn't need to click precisely on the quoted string.
-        private func extractImportPath(from text: String, at charIndex: Int) -> String? {
+        @objc private func handleImportClick(_ gr: NSClickGestureRecognizer) {
+            // Only handle Cmd+Click — modifierMask isn't bridged on NSClickGestureRecognizer
+            guard NSEvent.modifierFlags.contains(.command) else { return }
+            guard let tv = textView else { return }
+            let point   = gr.location(in: tv)   // already in TV coordinates — no conversion needed
+            let charIdx = tv.characterIndex(for: point)
+            let nsStr   = tv.string as NSString
+            guard charIdx != NSNotFound, charIdx < nsStr.length else { return }
+            guard let path = importPath(from: tv.string, at: charIdx) else { return }
+            parent.onImportClick(path, parent.fileURL)
+        }
+
+        /// Returns the last quoted string on the import/require line that contains
+        /// `charIndex`. Works when clicked anywhere on the line, not just on the path.
+        private func importPath(from text: String, at charIndex: Int) -> String? {
             let ns = text as NSString
             guard charIndex < ns.length else { return nil }
 
             let lineRange = ns.lineRange(for: NSRange(location: charIndex, length: 0))
             let line      = ns.substring(with: lineRange)
 
-            // Only lines that look like imports.
-            let keywords = ["import ", "require(", " from ", "@import", "#include", "export "]
+            let keywords  = ["import ", "require(", " from ", "@import", "#include", "export "]
             guard keywords.contains(where: { line.contains($0) }) else { return nil }
 
-            // Return the LAST quoted string on the line — for `import X from './path'`
-            // the path is always the last quoted token, avoiding false hits on
-            // `import type { "Named" } from './types'` style comments.
+            // Collect all quoted strings on the line; return the last one.
+            // For `import X from './path'` the path is always the last quoted token.
             let lineStart = lineRange.location
             let lineEnd   = NSMaxRange(lineRange)
             var i         = lineStart
-            var lastPath: String? = nil
+            var lastPath: String?
 
             while i < lineEnd {
                 let c = ns.character(at: i)
-                // Opening quote: 34=" 39=' 96=`
-                if c == 34 || c == 39 || c == 96 {
+                if c == 34 || c == 39 || c == 96 {     // " ' `
                     let openQuote = c
                     let openPos   = i + 1
                     i += 1
                     while i < lineEnd {
-                        let c2 = ns.character(at: i)
-                        if c2 == openQuote {
+                        if ns.character(at: i) == openQuote {
                             let path = ns.substring(with: NSRange(location: openPos, length: i - openPos))
                             if !path.isEmpty { lastPath = path }
                             i += 1
@@ -383,7 +369,6 @@ extension EditorView {
                     i += 1
                 }
             }
-
             return lastPath
         }
 
