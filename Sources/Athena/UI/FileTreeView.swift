@@ -345,8 +345,10 @@ private struct FileNodeRow: View {
 
     private func iconName(for language: Language) -> String {
         switch language {
-        case .swift, .typescript, .javascript, .python, .rust, .go, .json, .css, .html:
+        case .swift, .typescript, .javascript, .python, .rust, .go, .json, .css, .html, .ds:
             return "doc.text.fill"
+        case .isml:
+            return "curlybraces.square.fill"
         case .markdown:
             return "doc.richtext.fill"
         case .plaintext:
@@ -365,6 +367,8 @@ private struct FileNodeRow: View {
         case .json:       return .gray
         case .css:        return .purple
         case .html:       return .orange
+        case .isml:       return Color(red: 0.0, green: 0.68, blue: 0.94)
+        case .ds:         return Color(red: 0.0, green: 0.68, blue: 0.94)
         case .markdown:   return .white
         case .plaintext:  return .secondary
         }

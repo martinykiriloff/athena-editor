@@ -69,10 +69,11 @@ struct BottomPanelView: View {
 
     private func panelLabel(_ panel: BottomPanel) -> String {
         switch panel {
-        case .terminal: return "Terminal"
-        case .problems: return "Problems"
-        case .output:   return "Output"
-        case .chat:     return "Claude"
+        case .terminal:  return "Terminal"
+        case .problems:  return "Problems"
+        case .output:    return "Output"
+        case .chat:      return "Claude"
+        case .sfcclogs:  return "SFCC Logs"
         }
     }
 
@@ -81,10 +82,11 @@ struct BottomPanelView: View {
     @ViewBuilder
     private var panelContent: some View {
         switch appState.activeBottomPanel {
-        case .terminal: TerminalView()
-        case .problems: ProblemsView()
-        case .output:   OutputView()
-        case .chat:     ChatView()
+        case .terminal:  TerminalView()
+        case .problems:  ProblemsView()
+        case .output:    OutputView()
+        case .chat:      ChatView()
+        case .sfcclogs:  SFCCLogView()
         }
     }
 }

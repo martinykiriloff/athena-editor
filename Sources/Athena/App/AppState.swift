@@ -22,6 +22,7 @@ final class AppState {
     let keyBindingService: KeyBindingService
     let blameService: GitBlameService
     let importResolver: ImportResolver
+    let sfccService: SFCCService
 
     // MARK: - UI State
 
@@ -45,6 +46,12 @@ final class AppState {
     var commitMessage: String = ""
     var currentTheme: EditorTheme = .darcula
     var dbConnections: [DBConnection] = []
+    var sfccConnections: [SFCCConnection] = []
+    var sfccAvailableLogs: [String] = []
+    var sfccSelectedLog: String = ""
+    var sfccLogContent: String = ""
+    var sfccLogOffset: Int = 0
+    @ObservationIgnored private var sfccLogTask: Task<Void, Never>?
     var activeClaudeAccount: ClaudeAccount = .personal
     var claudeMessages: [ClaudeMessage] = []
     var claudeIsStreaming: Bool = false
@@ -114,7 +121,8 @@ final class AppState {
         lspManager: LSPManager = LSPManager(),
         keyBindingService: KeyBindingService = KeyBindingService(),
         blameService: GitBlameService = GitBlameService(),
-        importResolver: ImportResolver = ImportResolver()
+        importResolver: ImportResolver = ImportResolver(),
+        sfccService: SFCCService = SFCCService()
     ) {
         self.fileService = fileService
         self.gitService = gitService
@@ -126,6 +134,7 @@ final class AppState {
         self.keyBindingService = keyBindingService
         self.blameService = blameService
         self.importResolver = importResolver
+        self.sfccService = sfccService
     }
 
     // MARK: - Methods
@@ -284,7 +293,6 @@ final class AppState {
 
         do {
             try await fileService.writeFile(url, content: tab.content)
-            // Update isDirty on the stored tab model.
             if let index = openTabs.firstIndex(where: { $0.id == tab.id }) {
                 openTabs[index].isDirty = false
                 tab = openTabs[index]
@@ -292,7 +300,76 @@ final class AppState {
             statusMessage = "Saved \(url.lastPathComponent)"
         } catch {
             statusMessage = "Error saving \(url.lastPathComponent): \(error.localizedDescription)"
+            return
         }
+
+        // Upload to active SFCC sandbox if one is configured.
+        if let conn = sfccConnections.first(where: { $0.isActive }),
+           let ws = workspace {
+            let savedURL = url
+            let workspaceURL = ws.rootURL
+            Task {
+                do {
+                    let msg = try await sfccService.upload(
+                        fileURL: savedURL, connection: conn, workspaceURL: workspaceURL
+                    )
+                    statusMessage = msg
+                } catch SFCCError.notInCartridge {
+                    // File is outside cartridges root — silently skip
+                } catch {
+                    statusMessage = "SFCC: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    // MARK: - SFCC log viewer
+
+    func refreshSFCCLogs(for connection: SFCCConnection) async {
+        do {
+            let logs = try await sfccService.listLogs(connection: connection)
+            sfccAvailableLogs = logs.sorted()
+            if !logs.isEmpty && (sfccSelectedLog.isEmpty || !logs.contains(sfccSelectedLog)) {
+                sfccSelectedLog = logs.first(where: { $0.contains("customerror") })
+                    ?? logs.first(where: { $0.contains("error") })
+                    ?? logs[0]
+                sfccLogContent = ""
+                sfccLogOffset = 0
+            }
+        } catch {
+            statusMessage = "SFCC logs: \(error.localizedDescription)"
+        }
+    }
+
+    func startSFCCLogPolling() async {
+        guard let conn = sfccConnections.first(where: { $0.isActive }) else { return }
+        if sfccAvailableLogs.isEmpty { await refreshSFCCLogs(for: conn) }
+        sfccLogTask?.cancel()
+        sfccLogTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.pollLogOnce()
+                try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 s
+            }
+        }
+    }
+
+    func stopSFCCLogPolling() {
+        sfccLogTask?.cancel()
+        sfccLogTask = nil
+    }
+
+    private func pollLogOnce() async {
+        guard let conn = sfccConnections.first(where: { $0.isActive }),
+              !sfccSelectedLog.isEmpty else { return }
+        do {
+            let (text, next) = try await sfccService.fetchLogTail(
+                logName: sfccSelectedLog, connection: conn, fromByte: sfccLogOffset
+            )
+            if !text.isEmpty {
+                sfccLogContent += text
+                sfccLogOffset = next
+            }
+        } catch { }   // swallow poll errors silently
     }
 
     /// Refreshes the Git status for the current workspace.

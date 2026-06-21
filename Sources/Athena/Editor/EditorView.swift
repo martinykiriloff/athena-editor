@@ -432,8 +432,8 @@ extension EditorView {
             switch currentLanguage {
             case .python:                         return "#"
             case .swift, .typescript, .javascript,
-                 .rust, .go, .css:                return "//"
-            case .json, .html, .markdown, .plaintext: return ""
+                 .rust, .go, .css, .ds:            return "//"
+            case .json, .html, .isml, .markdown, .plaintext: return ""
             }
         }
 

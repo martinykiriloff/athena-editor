@@ -8,7 +8,7 @@ import SwiftUI
 // MARK: - Panels
 
 enum SidebarPanel: String, Sendable, CaseIterable {
-    case files, git, search, database
+    case files, git, search, database, sfcc
 }
 
 // MARK: - Database connections
@@ -70,7 +70,7 @@ struct DBConnection: Identifiable, Codable, Sendable {
 }
 
 enum BottomPanel: String, Sendable, CaseIterable {
-    case terminal, problems, output, chat
+    case terminal, problems, output, chat, sfcclogs
 }
 
 // MARK: - Language
@@ -85,6 +85,8 @@ enum Language: String, Sendable, CaseIterable {
     case json
     case css
     case html
+    case isml
+    case ds
     case markdown
     case plaintext
 
@@ -100,6 +102,8 @@ enum Language: String, Sendable, CaseIterable {
         case .json:       return ["json", "jsonc"]
         case .css:        return ["css", "scss", "less"]
         case .html:       return ["html", "htm"]
+        case .isml:       return ["isml"]
+        case .ds:         return ["ds"]
         case .markdown:   return ["md", "markdown"]
         case .plaintext:  return []
         }
@@ -115,6 +119,19 @@ enum Language: String, Sendable, CaseIterable {
         }
         return .plaintext
     }
+}
+
+// MARK: - SFCC / Demandware
+
+struct SFCCConnection: Identifiable, Codable, Sendable {
+    var id: UUID          = UUID()
+    var name: String
+    var hostname: String       // e.g. "dev01-abc.demandware.net"
+    var username: String       = ""
+    var password: String       = ""   // TODO: move to Keychain
+    var codeVersion: String    = "version1"
+    var cartridgesPath: String = "cartridges"  // relative or absolute
+    var isActive: Bool         = false
 }
 
 // MARK: - Diagnostics

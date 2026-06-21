@@ -244,6 +244,52 @@ final class SyntaxHighlighter {
             add("<!DOCTYPE[^>]*>", color: cmt)
 
         // --------------------------------------------------------------------
+        // ISML — Salesforce Commerce Cloud template language (HTML superset).
+        // ISML tags (<isif>, <isloop>, <isprint> …) get keyword colour;
+        // standard HTML tags get function colour; ${expr} gets string colour.
+        case .isml:
+            // Standard HTML tags (function colour, applied first)
+            add("</?([a-zA-Z][a-zA-Z0-9]*)(?=[\\s/>]|$)", color: fn, group: 1)
+            // ISML tags override with keyword colour
+            add("</?+(is[a-zA-Z]+)(?=[\\s/>]|$)", color: kw, group: 1)
+            // HTML / tag attributes
+            add("\\b([a-zA-Z][a-zA-Z0-9_-]*)(?=\\s*=)", color: typ, group: 1)
+            // SFCC pipeline / expression ${...}
+            add("\\$\\{[^}]*\\}", color: str)
+            // Quoted attribute values and strings
+            add("\"(?:[^\"\\\\]|\\\\.)*\"", color: str)
+            add("'(?:[^'\\\\]|\\\\.)*'", color: str)
+            // Standard HTML comment (before ISML comment so triple-dash wins)
+            add("<!--[\\s\\S]*?-->", color: cmt)
+            // ISML triple-dash comment <!--- ... ---> (applied last → overrides)
+            add("<!---[\\s\\S]*?--->", color: cmt)
+            add("<!DOCTYPE[^>]*>", color: cmt)
+
+        // --------------------------------------------------------------------
+        // DS — Demandware Script (ECMAScript 3 + SFCC extensions).
+        // Treated as JavaScript with extra SFCC-specific keywords.
+        case .ds:
+            let dsKeywords = [
+                "var", "function", "return", "if", "else", "for", "while",
+                "do", "switch", "case", "break", "continue", "throw", "try",
+                "catch", "finally", "new", "delete", "typeof", "instanceof",
+                "in", "this", "true", "false", "null", "undefined", "void",
+                "with", "default",
+                // SFCC additions
+                "importPackage", "importClass", "require"
+            ]
+            add("\\b(\(dsKeywords.joined(separator: "|")))\\b", color: kw, group: 1)
+            add("\\b([A-Z][A-Za-z0-9_]*)\\b", color: typ, group: 1)
+            add("\\b([a-z_][A-Za-z0-9_]*)(?=\\s*\\()", color: fn, group: 1)
+            // Highlight dw.* package paths
+            add("\\bdw(?:\\.[a-zA-Z]+)+\\b", color: typ)
+            add("\"(?:[^\"\\\\]|\\\\.)*\"", color: str)
+            add("'(?:[^'\\\\]|\\\\.)*'", color: str)
+            add("\\b\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?\\b", color: num)
+            add("//[^\\n]*", color: cmt)
+            add("/\\*[\\s\\S]*?\\*/", color: cmt)
+
+        // --------------------------------------------------------------------
         case .markdown:
             add("^#{1,6}[^\\n]*", color: kw)
             add("\\*\\*[^*]+\\*\\*", color: typ)

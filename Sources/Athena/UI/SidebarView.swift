@@ -27,6 +27,8 @@ struct SidebarView: View {
                     SearchPanelView()
                 case .database:
                     DBConnectionsView()
+                case .sfcc:
+                    SFCCSidebarView()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -45,6 +47,7 @@ struct SidebarView: View {
         case .git:        return "Source Control"
         case .search:     return "Search"
         case .database:   return "DB Connections"
+        case .sfcc:       return "SFCC Sandboxes"
         }
     }
 }

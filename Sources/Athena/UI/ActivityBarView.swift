@@ -16,6 +16,7 @@ struct ActivityBarView: View {
         (.git,      "arrow.triangle.branch"),
         (.search,   "magnifyingglass"),
         (.database, "cylinder.split.1x2.fill"),
+        (.sfcc,     "cloud.fill"),
     ]
 
     var body: some View {
