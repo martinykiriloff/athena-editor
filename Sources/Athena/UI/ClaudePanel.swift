@@ -580,10 +580,6 @@ struct ClaudePanel: View {
             return "List all currently running background tasks and their status."
         case "workflows":
             return "List all running and recently completed workflows with their progress."
-        case "stop":
-            return "Stop the current background session and preserve the transcript."
-        case "loop":
-            return "Run this task on a loop: "
 
         // ── Config commands ──────────────────────────────────────────────────
         case "config":
