@@ -14,7 +14,7 @@ struct AthenaApp: App {
     var body: some Scene {
         // MARK: - Main editor window
 
-        WindowGroup {
+        WindowGroup(id: "main") {
             MainWindowView()
                 .environment(appState)
                 .environment(updateService)

@@ -101,6 +101,7 @@ private struct EditorSplitView: View {
 struct MainWindowView: View {
     @Environment(AppState.self)      private var appState
     @Environment(UpdateService.self) private var updateService
+    @Environment(\.openWindow)       private var openWindow
 
     @State private var dragBaseSidebarWidth: CGFloat = 0
     @State private var dragBaseClaudeWidth: CGFloat = 0
@@ -198,6 +199,18 @@ struct MainWindowView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .athenaCheckForUpdates)) { _ in
             Task { await updateService.checkForUpdates() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .athenaNewWindow)) { _ in
+            openWindow(id: "main")
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .athenaSaveAs)) { _ in
+            Task { await appState.saveActiveTabAs() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .athenaRevertFile)) { _ in
+            Task { await appState.revertActiveTab() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .athenaCloseFolder)) { _ in
+            appState.closeFolder()
         }
     }
 }

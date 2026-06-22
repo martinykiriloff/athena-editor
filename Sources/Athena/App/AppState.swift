@@ -110,6 +110,7 @@ final class AppState {
     // MARK: - Init
 
     @ObservationIgnored private var keyEventMonitor: Any? = nil
+    @ObservationIgnored private var autoSaveTask:    Task<Void, Never>? = nil
 
     init(
         fileService: FileService = FileService(),
@@ -157,6 +158,7 @@ final class AppState {
             openTabs.append(tab)
             activeTabId = tab.id
             statusMessage = "Opened \(url.lastPathComponent)"
+            AppState.registerRecentPath(url)
         } catch {
             statusMessage = "Error opening \(url.lastPathComponent): \(error.localizedDescription)"
         }
@@ -208,6 +210,7 @@ final class AppState {
         statusMessage = url.lastPathComponent
 
         try? await settingsService.setValue(url.path, for: "lastWorkspacePath")
+        AppState.registerRecentPath(url)
     }
 
     // MARK: - Git Blame
@@ -323,6 +326,72 @@ final class AppState {
         }
     }
 
+    // MARK: - Save As / Revert / Close Folder
+
+    func saveActiveTabAs() async {
+        guard let tab = activeTab else { return }
+        let panel = NSSavePanel()
+        panel.title = "Save As"
+        if let url = tab.fileURL {
+            panel.directoryURL = url.deletingLastPathComponent()
+            panel.nameFieldStringValue = url.lastPathComponent
+        } else {
+            panel.nameFieldStringValue = "Untitled"
+        }
+        let response = await withCheckedContinuation { cont in
+            panel.begin { cont.resume(returning: $0) }
+        }
+        guard response == .OK, let newURL = panel.url else { return }
+        do {
+            try await fileService.writeFile(newURL, content: tab.content)
+            if let index = openTabs.firstIndex(where: { $0.id == tab.id }) {
+                openTabs[index].fileURL    = newURL
+                openTabs[index].title      = newURL.lastPathComponent
+                openTabs[index].isDirty    = false
+                openTabs[index].language   = Language.detect(from: newURL)
+            }
+            statusMessage = "Saved \(newURL.lastPathComponent)"
+            AppState.registerRecentPath(newURL)
+        } catch {
+            statusMessage = "Save failed: \(error.localizedDescription)"
+        }
+    }
+
+    func revertActiveTab() async {
+        guard let tab = activeTab, let url = tab.fileURL else { return }
+        do {
+            let content = try await fileService.readFile(url)
+            if let index = openTabs.firstIndex(where: { $0.id == tab.id }) {
+                openTabs[index].content = content
+                openTabs[index].isDirty = false
+            }
+            statusMessage = "Reverted \(url.lastPathComponent)"
+        } catch {
+            statusMessage = "Revert failed: \(error.localizedDescription)"
+        }
+    }
+
+    func closeFolder() {
+        workspace    = nil
+        fileTree     = []
+        gitStatus    = GitStatus()
+        openTabs     = []
+        activeTabId  = nil
+        statusMessage = ""
+    }
+
+    /// Registers `url` at the top of the recent-paths list (max 15 entries).
+    static func registerRecentPath(_ url: URL) {
+        let key   = "athenaRecentPaths"
+        var paths = (UserDefaults.standard.string(forKey: key) ?? "")
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .map(String.init)
+        let path  = url.path
+        paths.removeAll { $0 == path }
+        paths.insert(path, at: 0)
+        UserDefaults.standard.set(Array(paths.prefix(15)).joined(separator: "\n"), forKey: key)
+    }
+
     // MARK: - SFCC log viewer
 
     func refreshSFCCLogs(for connection: SFCCConnection) async {
@@ -388,6 +457,16 @@ final class AppState {
         guard let index = openTabs.firstIndex(where: { $0.id == id }) else { return }
         openTabs[index].content = content
         openTabs[index].isDirty = true
+
+        // Auto-save: debounce 1 s after the last keystroke.
+        if UserDefaults.standard.bool(forKey: "athenaAutoSave") {
+            autoSaveTask?.cancel()
+            autoSaveTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard !Task.isCancelled else { return }
+                await self?.saveActiveTab()
+            }
+        }
     }
 
     // MARK: - Claude sidebar
