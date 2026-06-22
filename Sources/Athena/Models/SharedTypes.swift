@@ -8,7 +8,52 @@ import SwiftUI
 // MARK: - Panels
 
 enum SidebarPanel: String, Sendable, CaseIterable {
-    case files, git, search, database, sfcc
+    case files, git, search, database, sfcc, npm, debug
+}
+
+// MARK: - Debugger
+
+enum DebugState: Sendable, Equatable {
+    case idle
+    case launching
+    case running
+    case paused(reason: String)
+    case stopped
+}
+
+struct DebugBreakpoint: Identifiable, Sendable {
+    let id: UUID = UUID()
+    let filePath: String
+    let line: Int
+    var isVerified: Bool = false
+}
+
+struct DebugStackFrame: Identifiable, Sendable {
+    let id: Int
+    let name: String
+    let sourceURL: URL?
+    let line: Int
+    let column: Int
+}
+
+struct DebugVariable: Identifiable, Sendable {
+    let id: UUID = UUID()
+    let name: String
+    let value: String
+    let type: String?
+    let variablesReference: Int
+}
+
+struct LaunchConfig: Identifiable, Codable, Sendable {
+    var id: UUID = UUID()
+    var type: String       // "lldb", "python", "node"
+    var request: String    // "launch" or "attach"
+    var name: String
+    var program: String    // path or ${file}
+    var args: [String] = []
+    var env: [String: String] = [:]
+    var cwd: String = "${workspaceFolder}"
+    var stopOnEntry: Bool = false
 }
 
 // MARK: - Database connections

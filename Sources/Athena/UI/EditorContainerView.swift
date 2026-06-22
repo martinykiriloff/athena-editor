@@ -19,12 +19,19 @@ struct EditorContainerView: View {
 
     @ViewBuilder
     private var editorContent: some View {
-        if appState.activeTab != nil {
-            CodeEditorView(tab: activeTabBinding)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-            WelcomeView()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        VStack(spacing: 0) {
+            // Show debug toolbar whenever a session is active.
+            if appState.debugState != .idle && appState.debugState != .stopped {
+                DebugToolbarView()
+            }
+
+            if appState.activeTab != nil {
+                CodeEditorView(tab: activeTabBinding)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                WelcomeView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
     }
 
@@ -54,6 +61,17 @@ struct CodeEditorView: View {
     private var blameInfo: [Int: BlameLine] {
         guard let url = tab.fileURL else { return [:] }
         return appState.blameCache[url.path] ?? [:]
+    }
+
+    private var fileBreakpoints: Set<Int> {
+        guard let path = tab.fileURL?.path else { return [] }
+        return appState.debugBreakpoints[path] ?? []
+    }
+
+    private var fileDebugLine: Int? {
+        guard let path = tab.fileURL?.path,
+              appState.debugCurrentFile?.path == path else { return nil }
+        return appState.debugCurrentLine
     }
 
     var body: some View {
@@ -88,7 +106,13 @@ struct CodeEditorView: View {
                     guard let fileURL else { return }
                     Task { await appState.openImportedFile(importPath, from: fileURL) }
                 },
-                scrollProxy: $scrollProxy
+                scrollProxy: $scrollProxy,
+                breakpoints: fileBreakpoints,
+                debugLine:   fileDebugLine,
+                onToggleBreakpoint: { line in
+                    guard let path = tab.fileURL?.path else { return }
+                    appState.toggleBreakpoint(filePath: path, line: line)
+                }
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .task(id: tab.id) { await appState.loadBlame(for: tab) }

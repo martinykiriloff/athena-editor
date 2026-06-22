@@ -29,6 +29,10 @@ struct SidebarView: View {
                     DBConnectionsView()
                 case .sfcc:
                     SFCCSidebarView()
+                case .npm:
+                    NPMScriptsView()
+                case .debug:
+                    DebugSidebarView()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -48,6 +52,8 @@ struct SidebarView: View {
         case .search:     return "Search"
         case .database:   return "DB Connections"
         case .sfcc:       return "SFCC Sandboxes"
+        case .npm:        return "NPM Scripts"
+        case .debug:      return "Run & Debug"
         }
     }
 }

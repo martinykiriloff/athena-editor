@@ -34,6 +34,12 @@ struct EditorView: NSViewRepresentable {
     var onImportClick: (String, URL?) -> Void = { _, _ in }
     /// Set by the representable so external callers can scroll the editor.
     var scrollProxy: Binding<EditorScrollProxy?>? = nil
+    /// Breakpoints for the current file (1-based line numbers).
+    var breakpoints: Set<Int> = []
+    /// Current debug line to highlight (1-based, nil when not debugging).
+    var debugLine: Int? = nil
+    /// Called when the user clicks in the gutter to toggle a breakpoint.
+    var onToggleBreakpoint: (Int) -> Void = { _ in }
 
     // MARK: NSViewRepresentable
 
@@ -60,6 +66,21 @@ struct EditorView: NSViewRepresentable {
         scrollView.hasHorizontalScroller = false
         scrollView.autoresizingMask      = [NSView.AutoresizingMask.width, NSView.AutoresizingMask.height]
         scrollView.documentView          = textView
+
+        // Install breakpoint / line-number gutter.
+        let gutter = GutterView(scrollView: scrollView, orientation: .verticalRuler)
+        gutter.clientView = textView
+        gutter.breakpoints = breakpoints
+        gutter.debugLine   = debugLine
+        scrollView.verticalRulerView = gutter
+        scrollView.hasVerticalRuler  = true
+        scrollView.rulersVisible     = true
+        context.coordinator.gutterView = gutter
+        let coordinator = context.coordinator
+        gutter.onToggleBreakpoint = { [weak coordinator] line in
+            coordinator?.parent.onToggleBreakpoint(line)
+        }
+        gutter.installObservers(textView: textView)
 
         configureTextView(textView, coordinator: context.coordinator)
 
@@ -162,6 +183,15 @@ struct EditorView: NSViewRepresentable {
             coord.currentBlameInfo = blameInfo
             coord.updateBlameLabel(in: textView, fontSize: fontSize, fontFamily: fontFamily, theme: theme)
         }
+
+        // Sync gutter breakpoints / debug line.
+        if let gutter = coord.gutterView {
+            if gutter.breakpoints != breakpoints || gutter.debugLine != debugLine {
+                gutter.breakpoints = breakpoints
+                gutter.debugLine   = debugLine
+                gutter.needsDisplay = true
+            }
+        }
     }
 
     func makeCoordinator() -> Coordinator {
@@ -260,6 +290,9 @@ extension EditorView {
         // Blame annotation
         var blameAnnotationLabel: NSTextField?
         var currentBlameInfo: [Int: BlameLine] = [:]
+
+        // Gutter (line numbers + breakpoints)
+        weak var gutterView: GutterView?
 
         init(_ parent: EditorView) {
             self.parent              = parent

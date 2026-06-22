@@ -192,18 +192,49 @@ private struct DiagnosticRowView: View {
 
 struct OutputView: View {
     @Environment(AppState.self) private var appState
-    private let placeholder: String = """
-        [Athena] Output log initialised.
-        [Athena] Waiting for events…
-        """
+    @State private var scrollProxy: ScrollViewProxy? = nil
 
     var body: some View {
-        ScrollView {
-            Text(placeholder)
-                .font(.system(size: appState.sf(12), design: .monospaced))
-                .foregroundColor(.primary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(8)
+        VStack(spacing: 0) {
+            // toolbar
+            HStack(spacing: 0) {
+                Spacer()
+                if !appState.scriptOutput.isEmpty {
+                    Button {
+                        appState.scriptOutput = ""
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.system(size: appState.sf(12)))
+                            .foregroundColor(.secondary)
+                            .frame(width: 28, height: 24)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Clear output")
+                }
+            }
+            .frame(height: 24)
+            .background(Color(nsColor: .controlBackgroundColor))
+
+            Divider()
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    Text(appState.scriptOutput.isEmpty
+                         ? "[Athena] Output log initialised.\n[Athena] Run a script to see output…"
+                         : appState.scriptOutput)
+                        .font(.system(size: appState.sf(12), design: .monospaced))
+                        .foregroundColor(appState.scriptOutput.isEmpty ? .secondary : .primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                        .id("bottom")
+                }
+                .onChange(of: appState.scriptOutput) { _, _ in
+                    proxy.scrollTo("bottom", anchor: .bottom)
+                }
+                .onAppear {
+                    proxy.scrollTo("bottom", anchor: .bottom)
+                }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .textBackgroundColor))

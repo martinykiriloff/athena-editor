@@ -17,6 +17,8 @@ struct ActivityBarView: View {
         (.search,   "magnifyingglass"),
         (.database, "cylinder.split.1x2.fill"),
         (.sfcc,     "cloud.fill"),
+        (.npm,      "shippingbox.fill"),
+        (.debug,    "ladybug.fill"),
     ]
 
     var body: some View {

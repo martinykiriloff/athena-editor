@@ -52,6 +52,26 @@ final class AppState {
     var sfccLogContent: String = ""
     var sfccLogOffset: Int = 0
     @ObservationIgnored private var sfccLogTask: Task<Void, Never>?
+
+    // MARK: - NPM Scripts
+    var npmPackages: [NPMPackageInfo] = []
+    var scriptOutput: String = ""
+    var runningScriptKeys: Set<String> = []
+    @ObservationIgnored private var runningScriptProcesses: [String: Process] = [:]
+    let npmScriptService: NPMScriptService = NPMScriptService()
+
+    // MARK: - Debugger
+    var debugState: DebugState = .idle
+    var debugBreakpoints: [String: Set<Int>] = [:]   // filePath → line numbers
+    var debugStackFrames: [DebugStackFrame] = []
+    var debugVariables: [DebugVariable] = []
+    var debugCurrentFile: URL? = nil
+    var debugCurrentLine: Int? = nil
+    var debugOutput: String = ""
+    var launchConfigs: [LaunchConfig] = []
+    var selectedLaunchConfigId: UUID? = nil
+    @ObservationIgnored let debugService: DebugService = DebugService()
+
     var activeClaudeAccount: ClaudeAccount = .personal
     var claudeMessages: [ClaudeMessage] = []
     var claudeIsStreaming: Bool = false
@@ -211,6 +231,8 @@ final class AppState {
 
         try? await settingsService.setValue(url.path, for: "lastWorkspacePath")
         AppState.registerRecentPath(url)
+
+        await discoverNPMPackages()
     }
 
     // MARK: - Git Blame
@@ -390,6 +412,209 @@ final class AppState {
         paths.removeAll { $0 == path }
         paths.insert(path, at: 0)
         UserDefaults.standard.set(Array(paths.prefix(15)).joined(separator: "\n"), forKey: key)
+    }
+
+    // MARK: - NPM Scripts
+
+    func discoverNPMPackages() async {
+        guard let ws = workspace else { npmPackages = []; return }
+        npmPackages = await npmScriptService.discoverPackages(in: ws.rootURL)
+    }
+
+    func runNPMScript(_ script: String, in package: NPMPackageInfo) {
+        let dir = package.path.deletingLastPathComponent()
+        let key = package.id + ":" + script
+        let pm  = package.packageManager.rawValue
+
+        showBottomPanel = true
+        activeBottomPanel = .output
+        scriptOutput += "\n$ \(pm) run \(script)\n"
+
+        let process = Process()
+        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        process.executableURL = URL(fileURLWithPath: shell)
+        process.arguments = ["-l", "-c", "\(pm) run \(script)"]
+        process.currentDirectoryURL = dir
+
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+
+        pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+            Task { @MainActor [weak self] in
+                self?.scriptOutput += text
+            }
+        }
+
+        process.terminationHandler = { [weak self] proc in
+            Task { @MainActor [weak self] in
+                self?.scriptOutput += "\n[Process exited with code \(proc.terminationStatus)]\n"
+                self?.runningScriptKeys.remove(key)
+                self?.runningScriptProcesses.removeValue(forKey: key)
+            }
+        }
+
+        do {
+            try process.run()
+            runningScriptProcesses[key] = process
+            runningScriptKeys.insert(key)
+        } catch {
+            scriptOutput += "Error: \(error.localizedDescription)\n"
+        }
+    }
+
+    func stopNPMScript(key: String) {
+        runningScriptProcesses[key]?.terminate()
+    }
+
+    // MARK: - Debugger
+
+    func toggleBreakpoint(filePath: String, line: Int) {
+        if debugBreakpoints[filePath] == nil {
+            debugBreakpoints[filePath] = []
+        }
+        if debugBreakpoints[filePath]!.contains(line) {
+            debugBreakpoints[filePath]!.remove(line)
+        } else {
+            debugBreakpoints[filePath]!.insert(line)
+        }
+    }
+
+    func startDebugging() async {
+        guard debugState == .idle || debugState == .stopped,
+              let config = launchConfigs.first(where: { $0.id == selectedLaunchConfigId })
+               ?? launchConfigs.first
+        else { return }
+
+        debugState = .launching
+        debugOutput = ""
+        debugStackFrames = []
+        debugVariables = []
+        debugCurrentFile = nil
+        debugCurrentLine = nil
+        showBottomPanel = true
+        activeBottomPanel = .output
+
+        // Wire up callbacks before launching.
+        await debugService.setCallbacks(
+            onStateChange: { [weak self] state in self?.debugState = state },
+            onOutput:      { [weak self] text  in self?.debugOutput += text },
+            onStopped:     { [weak self] stop  in
+                guard let self else { return }
+                if let path = stop.filePath {
+                    self.debugCurrentFile = URL(fileURLWithPath: path)
+                    self.debugCurrentLine = stop.line
+                    Task { await self.refreshDebugState() }
+                }
+            }
+        )
+
+        let bpMap = debugBreakpoints.mapValues { Array($0) }
+
+        do {
+            try await debugService.launch(config, workspaceURL: workspace?.rootURL, breakpointsByFile: bpMap)
+            debugOutput += "[Athena] Debug session started: \(config.name)\n"
+        } catch {
+            debugOutput += "[Athena] Failed to start debugger: \(error.localizedDescription)\n"
+            debugState = .stopped
+        }
+    }
+
+    func stopDebugging() async {
+        await debugService.disconnect()
+        debugCurrentFile = nil
+        debugCurrentLine = nil
+        debugStackFrames = []
+        debugVariables   = []
+    }
+
+    func debugContinue() async {
+        try? await debugService.continueExecution()
+        debugCurrentLine = nil
+    }
+
+    func debugStepOver() async {
+        try? await debugService.stepOver()
+    }
+
+    func debugStepIn() async {
+        try? await debugService.stepIn()
+    }
+
+    func debugStepOut() async {
+        try? await debugService.stepOut()
+    }
+
+    func debugPause() async {
+        try? await debugService.pause()
+    }
+
+    private func refreshDebugState() async {
+        guard case .paused = debugState else { return }
+        do {
+            debugStackFrames = try await debugService.fetchStackFrames()
+            if let topFrame = debugStackFrames.first {
+                debugVariables = try await debugService.fetchVariables(frameId: topFrame.id)
+            }
+            // Navigate to the paused file if it's different from the active tab.
+            if let file = debugCurrentFile {
+                await openFile(file)
+            }
+        } catch {
+            debugOutput += "[Athena] Error fetching debug state: \(error.localizedDescription)\n"
+        }
+    }
+
+    func loadLaunchConfigs() {
+        guard let ws = workspace else { launchConfigs = builtInLaunchConfigs(); return }
+        let launchJSON = ws.rootURL
+            .appendingPathComponent(".vscode")
+            .appendingPathComponent("launch.json")
+
+        if let data = try? Data(contentsOf: launchJSON),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let configs = json["configurations"] as? [[String: Any]] {
+            launchConfigs = configs.compactMap { c -> LaunchConfig? in
+                guard let type = c["type"] as? String,
+                      let name = c["name"] as? String,
+                      let req  = c["request"] as? String,
+                      let prog = c["program"] as? String else { return nil }
+                return LaunchConfig(
+                    type: type, request: req, name: name, program: prog,
+                    args: c["args"] as? [String] ?? [],
+                    cwd:  c["cwd"] as? String ?? "${workspaceFolder}",
+                    stopOnEntry: c["stopOnEntry"] as? Bool ?? false
+                )
+            }
+        } else {
+            launchConfigs = builtInLaunchConfigs()
+        }
+
+        if selectedLaunchConfigId == nil || !launchConfigs.contains(where: { $0.id == selectedLaunchConfigId }) {
+            selectedLaunchConfigId = launchConfigs.first?.id
+        }
+    }
+
+    private func builtInLaunchConfigs() -> [LaunchConfig] {
+        var configs: [LaunchConfig] = []
+        if let tab = activeTab {
+            switch tab.language {
+            case .swift:
+                configs.append(LaunchConfig(type: "lldb", request: "launch",
+                    name: "Debug Swift", program: "${workspaceFolder}/.build/debug/\(workspace?.name ?? "App")"))
+            case .python:
+                configs.append(LaunchConfig(type: "python", request: "launch",
+                    name: "Debug Python", program: "${file}"))
+            case .javascript, .typescript:
+                configs.append(LaunchConfig(type: "node", request: "launch",
+                    name: "Debug Node", program: "${file}"))
+            default:
+                break
+            }
+        }
+        return configs
     }
 
     // MARK: - SFCC log viewer
