@@ -73,9 +73,12 @@ actor CDPClient {
 
     // MARK: - Messaging
 
-    func send(_ method: String, params: [String: Any] = [:]) async throws -> Response {
+    // `sending` transfers ownership of the non-Sendable [String: Any] to CDPClient,
+    // eliminating the data-race diagnostic without @unchecked Sendable.
+    func send(_ method: String, params: sending [String: Any] = [:]) async throws -> Response {
         let id = mid; mid += 1
-        let payload: [String: Any] = ["id": id, "method": method, "params": params]
+        var payload: [String: Any] = ["id": id, "method": method]
+        if !params.isEmpty { payload["params"] = params }
         let data = try JSONSerialization.data(withJSONObject: payload)
         guard let str = String(data: data, encoding: .utf8) else { throw CDPError.encodingFailed }
         try await wsTask?.send(.string(str))
