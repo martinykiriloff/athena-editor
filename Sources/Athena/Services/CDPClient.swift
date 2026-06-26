@@ -73,9 +73,21 @@ actor CDPClient {
 
     // MARK: - Messaging
 
-    // `sending` transfers ownership of the non-Sendable [String: Any] to CDPClient,
-    // eliminating the data-race diagnostic without @unchecked Sendable.
-    func send(_ method: String, params: sending [String: Any] = [:]) async throws -> Response {
+    // No-params overload — avoids materialising [String: Any] on the caller's actor.
+    func send(_ method: String) async throws -> Response {
+        try await buildAndSend(method, params: [:])
+    }
+
+    // Params are pre-encoded to Data (Sendable) by the caller so [String: Any]
+    // never crosses the actor boundary.
+    func send(_ method: String, paramsJSON: Data) async throws -> Response {
+        guard let params = try? JSONSerialization.jsonObject(with: paramsJSON) as? [String: Any]
+        else { throw CDPError.encodingFailed }
+        return try await buildAndSend(method, params: params)
+    }
+
+    // Stays inside the actor — [String: Any] is fine here.
+    private func buildAndSend(_ method: String, params: [String: Any]) async throws -> Response {
         let id = mid; mid += 1
         var payload: [String: Any] = ["id": id, "method": method]
         if !params.isEmpty { payload["params"] = params }

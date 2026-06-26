@@ -184,18 +184,14 @@ actor DebugService {
         for (filePath, lines) in breakpoints {
             for line in lines {
                 if isChrome {
-                    // Use urlRegex so source-mapped filenames match.
                     let filename = (URL(fileURLWithPath: filePath).lastPathComponent)
                         .replacingOccurrences(of: ".", with: "\\.")
-                    _ = try? await cdp.send("Debugger.setBreakpointByUrl", params: [
-                        "urlRegex":   ".*\(filename).*",
-                        "lineNumber": line - 1
-                    ])
+                    // cdpJSON keeps [String: Any] inside the DebugService actor — only Data crosses.
+                    _ = try? await cdp.send("Debugger.setBreakpointByUrl",
+                        paramsJSON: cdpJSON(["urlRegex": ".*\(filename).*", "lineNumber": line - 1]))
                 } else {
-                    _ = try? await cdp.send("Debugger.setBreakpointByUrl", params: [
-                        "url":        "file://\(filePath)",
-                        "lineNumber": line - 1
-                    ])
+                    _ = try? await cdp.send("Debugger.setBreakpointByUrl",
+                        paramsJSON: cdpJSON(["url": "file://\(filePath)", "lineNumber": line - 1]))
                 }
             }
         }
@@ -299,9 +295,8 @@ actor DebugService {
                 guard let obj      = scope["object"] as? [String: Any],
                       let objectId = obj["objectId"] as? String,
                       let cdp      = cdpClient else { continue }
-                let resp  = try? await cdp.send("Runtime.getProperties", params: [
-                    "objectId": objectId, "ownProperties": true, "generatePreview": false
-                ])
+                let resp  = try? await cdp.send("Runtime.getProperties",
+                    paramsJSON: cdpJSON(["objectId": objectId, "ownProperties": true, "generatePreview": false]))
                 let props = resp?.json["result"] as? [[String: Any]] ?? []
                 for prop in props {
                     guard let name = prop["name"] as? String, !name.hasPrefix("__") else { continue }
@@ -411,6 +406,12 @@ actor DebugService {
     }
 
     // MARK: - CDP helpers
+
+    // Encodes a [String: Any] dict to JSON Data within the actor so [String: Any]
+    // never crosses the actor boundary — only the Sendable Data value does.
+    private func cdpJSON(_ dict: [String: Any]) -> Data {
+        (try? JSONSerialization.data(withJSONObject: dict)) ?? Data()
+    }
 
     private func cdpOutput(_ text: String) {
         cbOutput?(text)
