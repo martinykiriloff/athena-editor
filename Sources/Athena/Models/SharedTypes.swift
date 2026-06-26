@@ -406,6 +406,22 @@ struct CompletionItem: Identifiable, Sendable {
     var insertText: String
 }
 
+// MARK: - Ghost Text Provider
+
+enum GhostTextProvider: String, CaseIterable, Codable, Sendable {
+    case none   = "none"
+    case claude = "claude"
+    case ollama = "ollama"
+
+    var displayName: String {
+        switch self {
+        case .none:   return "Off"
+        case .claude: return "Claude (Haiku)"
+        case .ollama: return "Local — Ollama"
+        }
+    }
+}
+
 // MARK: - App Settings
 
 struct AppSettings: Codable, Sendable {

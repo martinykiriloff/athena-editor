@@ -57,6 +57,9 @@ final class AppState {
     // MARK: - Drizzle + AI Completion
     let drizzleService: DrizzleCompletionService = DrizzleCompletionService()
     var claudeAPIKey: String = ""
+    var ghostTextProvider: GhostTextProvider = .none
+    var ollamaEndpoint:    String = "http://localhost:11434"
+    var ollamaModel:       String = "qwen2.5-coder:7b"
 
     // MARK: - NPM Scripts
     var npmPackages: [NPMPackageInfo] = []
@@ -315,6 +318,14 @@ final class AppState {
         editorDetectIndentation = await di
         currentTheme            = EditorTheme.named(await th)
 
+        // Ghost text / predictive completion provider
+        async let gtp = settingsService.value(for: "ghostTextProvider", default: "none")
+        async let oep = settingsService.value(for: "ollamaEndpoint",    default: "http://localhost:11434")
+        async let om  = settingsService.value(for: "ollamaModel",       default: "qwen2.5-coder:7b")
+        ghostTextProvider = GhostTextProvider(rawValue: await gtp) ?? .none
+        ollamaEndpoint    = await oep
+        ollamaModel       = await om
+
         // Claude API key (shared with chat) — stored in the Keychain
         await loadClaudeAPIKey()
     }
@@ -352,6 +363,14 @@ final class AppState {
     /// Calls claude-haiku for a short inline code completion at the cursor.
     /// Returns `nil` when no API key is configured or the request fails.
     func requestInlineCompletion(prefix: String, suffix: String) async -> String? {
+        switch ghostTextProvider {
+        case .none:   return nil
+        case .claude: return await requestClaudeInlineCompletion(prefix: prefix, suffix: suffix)
+        case .ollama: return await requestOllamaInlineCompletion(prefix: prefix, suffix: suffix)
+        }
+    }
+
+    private func requestClaudeInlineCompletion(prefix: String, suffix: String) async -> String? {
         guard !claudeAPIKey.isEmpty else { return nil }
 
         let context = String(prefix.suffix(600)) + "<CURSOR>" + String(suffix.prefix(200))
@@ -367,6 +386,7 @@ final class AppState {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue(claudeAPIKey,        forHTTPHeaderField: "x-api-key")
         req.setValue("2023-06-01",        forHTTPHeaderField: "anthropic-version")
+        req.timeoutInterval = 10
         guard let data = try? JSONSerialization.data(withJSONObject: body) else { return nil }
         req.httpBody = data
 
@@ -375,6 +395,42 @@ final class AppState {
             let json = try? JSONSerialization.jsonObject(with: respData) as? [String: Any],
             let content = json["content"] as? [[String: Any]],
             let text = content.first?["text"] as? String,
+            !text.isEmpty
+        else { return nil }
+
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func requestOllamaInlineCompletion(prefix: String, suffix: String) async -> String? {
+        let base = ollamaEndpoint.hasSuffix("/") ? String(ollamaEndpoint.dropLast()) : ollamaEndpoint
+        guard let url = URL(string: "\(base)/v1/chat/completions") else { return nil }
+
+        let context = String(prefix.suffix(400)) + "<CURSOR>" + String(suffix.prefix(100))
+        let body: [String: Any] = [
+            "model":       ollamaModel,
+            "max_tokens":  80,
+            "temperature": 0.1,
+            "stream":      false,
+            "messages": [
+                ["role": "system",
+                 "content": "Code completion engine. Output ONLY the text at <CURSOR>. No explanation, no markdown."],
+                ["role": "user", "content": context],
+            ],
+        ]
+
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 15
+        guard let data = try? JSONSerialization.data(withJSONObject: body) else { return nil }
+        req.httpBody = data
+
+        guard
+            let (respData, _) = try? await URLSession.shared.data(for: req),
+            let json    = try? JSONSerialization.jsonObject(with: respData) as? [String: Any],
+            let choices = json["choices"] as? [[String: Any]],
+            let message = choices.first?["message"] as? [String: Any],
+            let text    = message["content"] as? String,
             !text.isEmpty
         else { return nil }
 

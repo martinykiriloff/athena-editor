@@ -83,5 +83,7 @@ final class GhostTextController {
         suggestion = ""
         ghostLabel?.alphaValue = 0
         ghostLabel?.stringValue = ""
+        // Reset frame to zero so the invisible label doesn't block hit-testing.
+        ghostLabel?.frame = .zero
     }
 }

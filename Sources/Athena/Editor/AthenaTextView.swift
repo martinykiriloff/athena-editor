@@ -12,8 +12,11 @@ final class AthenaTextView: NSTextView {
 
     /// Return `true` to consume the key event (completion popup, ghost text accept, etc.).
     var onKeyDown: ((NSEvent) -> Bool)?
+    /// Called on every mouseDown so the coordinator can dismiss popups before the click lands.
+    var onMouseDown: (() -> Void)?
 
     override func mouseDown(with event: NSEvent) {
+        onMouseDown?()
         if event.modifierFlags.contains(.command) {
             let point   = convert(event.locationInWindow, from: nil)
             let charIdx = characterIndex(for: point)

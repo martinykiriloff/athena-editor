@@ -266,12 +266,49 @@ struct SettingsView: View {
                     appState.persistSetting(v, for: "claudeModel")
                 }
             }
+
+            Section("Predictive Completion (Ghost Text)") {
+                Picker("Provider", selection: Bindable(appState).ghostTextProvider) {
+                    ForEach(GhostTextProvider.allCases, id: \.self) { p in
+                        Text(p.displayName).tag(p)
+                    }
+                }
+                .onChange(of: appState.ghostTextProvider) { _, v in
+                    appState.persistSetting(v.rawValue, for: "ghostTextProvider")
+                }
+
+                if appState.ghostTextProvider == .ollama {
+                    HStack {
+                        Text("Endpoint")
+                        Spacer()
+                        TextField("http://localhost:11434", text: Bindable(appState).ollamaEndpoint)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 220)
+                            .onChange(of: appState.ollamaEndpoint) { _, v in
+                                appState.persistSetting(v, for: "ollamaEndpoint")
+                            }
+                    }
+                    HStack {
+                        Text("Model")
+                        Spacer()
+                        TextField("qwen2.5-coder:7b", text: Bindable(appState).ollamaModel)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 220)
+                            .onChange(of: appState.ollamaModel) { _, v in
+                                appState.persistSetting(v, for: "ollamaModel")
+                            }
+                    }
+                    Text("Any model available in Ollama works. Run `ollama pull <model>` to install.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
         }
         .formStyle(.grouped)
         .task {
             guard !aiLoaded else { return }
             aiLoaded = true
-            apiKey      = appState.claudeAPIKey   // loaded from Keychain at launch
+            apiKey      = appState.claudeAPIKey
             claudeModel = await appState.settingsService.value(for: "claudeModel",  default: "claude-opus-4-5")
         }
     }

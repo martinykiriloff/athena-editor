@@ -138,6 +138,12 @@ struct EditorView: NSViewRepresentable {
             coord?.handleKeyDown(event) ?? false
         }
 
+        // Dismiss popup and ghost text on any click so they don't block Cmd+Click.
+        textView.onMouseDown = { [weak coord] in
+            coord?.completionController.dismiss()
+            coord?.ghostController.dismiss()
+        }
+
         return scrollView
     }
 
