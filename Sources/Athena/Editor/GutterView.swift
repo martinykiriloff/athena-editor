@@ -139,15 +139,18 @@ final class GutterView: NSRulerView {
 
     // MARK: - Click handling
 
+    // Ruler views must not steal focus — the text view keeps first responder.
+    override var acceptsFirstResponder: Bool { false }
+
     override func mouseDown(with event: NSEvent) {
         guard let textView = clientView as? NSTextView,
               let lm = textView.layoutManager,
               let tc = textView.textContainer
         else { return }
 
-        let local   = convert(event.locationInWindow, from: nil)
-        let textY   = local.y + textView.visibleRect.minY - textView.textContainerOrigin.y
-        let pt      = NSPoint(x: textView.textContainerInset.width, y: max(0, textY))
+        let local    = convert(event.locationInWindow, from: nil)
+        let textY    = local.y + textView.visibleRect.minY - textView.textContainerOrigin.y
+        let pt       = NSPoint(x: textView.textContainerInset.width, y: max(0, textY))
         let glyphIdx = lm.glyphIndex(for: pt, in: tc)
         let charIdx  = lm.characterIndexForGlyph(at: glyphIdx)
         let str      = textView.string as NSString
@@ -161,6 +164,9 @@ final class GutterView: NSRulerView {
         }
 
         onToggleBreakpoint?(lineNum)
+
+        // Restore focus to the editor so keyboard shortcuts keep working after a gutter click.
+        textView.window?.makeFirstResponder(textView)
     }
 
     // MARK: - Helpers
