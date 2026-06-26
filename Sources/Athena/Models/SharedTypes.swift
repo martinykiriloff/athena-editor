@@ -46,14 +46,16 @@ struct DebugVariable: Identifiable, Sendable {
 
 struct LaunchConfig: Identifiable, Codable, Sendable {
     var id: UUID = UUID()
-    var type: String       // "lldb", "python", "node"
+    var type: String       // "lldb", "python", "node-cdp", "chrome", "nextjs"
     var request: String    // "launch" or "attach"
     var name: String
-    var program: String    // path or ${file}
+    var program: String    // path, ${file}, or "" for browser configs
     var args: [String] = []
     var env: [String: String] = [:]
     var cwd: String = "${workspaceFolder}"
     var stopOnEntry: Bool = false
+    var debugPort: Int? = nil    // CDP port: 9229 for Node, 9222 for Chrome
+    var url: String? = nil       // Browser page URL to open / attach to
 }
 
 // MARK: - Database connections
@@ -115,7 +117,7 @@ struct DBConnection: Identifiable, Codable, Sendable {
 }
 
 enum BottomPanel: String, Sendable, CaseIterable {
-    case terminal, problems, output, chat, sfcclogs
+    case terminal, scripts, output, problems, chat, sfcclogs
 }
 
 // MARK: - Language

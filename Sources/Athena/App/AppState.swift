@@ -60,6 +60,21 @@ final class AppState {
     @ObservationIgnored private var runningScriptProcesses: [String: Process] = [:]
     let npmScriptService: NPMScriptService = NPMScriptService()
 
+    // Selected package + script for the Scripts bottom panel.
+    var selectedNPMPackageId:   String? = nil
+    var selectedNPMScriptName:  String? = nil
+
+    var selectedNPMPackage: NPMPackageInfo? {
+        guard let id = selectedNPMPackageId else { return npmPackages.first }
+        return npmPackages.first { $0.id == id } ?? npmPackages.first
+    }
+
+    var selectedScriptIsRunning: Bool {
+        guard let pkg  = selectedNPMPackage,
+              let name = selectedNPMScriptName else { return false }
+        return runningScriptKeys.contains(pkg.id + ":" + name)
+    }
+
     // MARK: - Debugger
     var debugState: DebugState = .idle
     var debugBreakpoints: [String: Set<Int>] = [:]   // filePath → line numbers
@@ -419,6 +434,10 @@ final class AppState {
     func discoverNPMPackages() async {
         guard let ws = workspace else { npmPackages = []; return }
         npmPackages = await npmScriptService.discoverPackages(in: ws.rootURL)
+        // Auto-select the first package if nothing is selected (or if previous selection is gone).
+        if selectedNPMPackageId == nil || !npmPackages.contains(where: { $0.id == selectedNPMPackageId }) {
+            selectedNPMPackageId = npmPackages.first?.id
+        }
     }
 
     func runNPMScript(_ script: String, in package: NPMPackageInfo) {
@@ -427,7 +446,8 @@ final class AppState {
         let pm  = package.packageManager.rawValue
 
         showBottomPanel = true
-        activeBottomPanel = .output
+        // Stay in Scripts panel if already there; otherwise open Output.
+        if activeBottomPanel != .scripts { activeBottomPanel = .output }
         scriptOutput += "\n$ \(pm) run \(script)\n"
 
         let process = Process()
@@ -579,13 +599,18 @@ final class AppState {
             launchConfigs = configs.compactMap { c -> LaunchConfig? in
                 guard let type = c["type"] as? String,
                       let name = c["name"] as? String,
-                      let req  = c["request"] as? String,
-                      let prog = c["program"] as? String else { return nil }
+                      let req  = c["request"] as? String else { return nil }
                 return LaunchConfig(
-                    type: type, request: req, name: name, program: prog,
-                    args: c["args"] as? [String] ?? [],
-                    cwd:  c["cwd"] as? String ?? "${workspaceFolder}",
-                    stopOnEntry: c["stopOnEntry"] as? Bool ?? false
+                    type:         type,
+                    request:      req,
+                    name:         name,
+                    program:      c["program"] as? String ?? "",
+                    args:         c["args"]    as? [String]         ?? [],
+                    env:          c["env"]     as? [String: String] ?? [:],
+                    cwd:          c["cwd"]     as? String ?? "${workspaceFolder}",
+                    stopOnEntry:  c["stopOnEntry"] as? Bool ?? false,
+                    debugPort:    c["port"] as? Int ?? c["debugPort"] as? Int,
+                    url:          c["url"] as? String
                 )
             }
         } else {
@@ -599,21 +624,38 @@ final class AppState {
 
     private func builtInLaunchConfigs() -> [LaunchConfig] {
         var configs: [LaunchConfig] = []
+
+        // Language-specific configs for the active tab.
         if let tab = activeTab {
             switch tab.language {
             case .swift:
-                configs.append(LaunchConfig(type: "lldb", request: "launch",
-                    name: "Debug Swift", program: "${workspaceFolder}/.build/debug/\(workspace?.name ?? "App")"))
+                configs.append(LaunchConfig(
+                    type: "lldb", request: "launch", name: "Debug Swift",
+                    program: "${workspaceFolder}/.build/debug/\(workspace?.name ?? "App")"))
             case .python:
-                configs.append(LaunchConfig(type: "python", request: "launch",
-                    name: "Debug Python", program: "${file}"))
-            case .javascript, .typescript:
-                configs.append(LaunchConfig(type: "node", request: "launch",
-                    name: "Debug Node", program: "${file}"))
+                configs.append(LaunchConfig(
+                    type: "python", request: "launch", name: "Debug Python",
+                    program: "${file}"))
             default:
                 break
             }
         }
+
+        // Node.js and browser configs are always included (no external adapter required).
+        configs += [
+            LaunchConfig(type: "node-cdp", request: "launch",
+                         name: "Debug Node.js (current file)",
+                         program: "${file}", debugPort: 9229),
+            LaunchConfig(type: "node-cdp", request: "attach",
+                         name: "Attach to Node.js (port 9229)",
+                         program: "", debugPort: 9229),
+            LaunchConfig(type: "chrome", request: "launch",
+                         name: "Debug in Chrome",
+                         program: "", debugPort: 9222, url: "http://localhost:3000"),
+            LaunchConfig(type: "nextjs", request: "launch",
+                         name: "Debug Next.js (browser)",
+                         program: "", debugPort: 9222, url: "http://localhost:3000"),
+        ]
         return configs
     }
 

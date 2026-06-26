@@ -33,7 +33,8 @@ struct DebugSidebarView: View {
             if !appState.launchConfigs.isEmpty {
                 Picker("", selection: Bindable(appState).selectedLaunchConfigId) {
                     ForEach(appState.launchConfigs) { config in
-                        Text(config.name).tag(Optional(config.id))
+                        Label(config.name, systemImage: configIcon(config.type))
+                            .tag(Optional(config.id))
                     }
                 }
                 .pickerStyle(.menu)
@@ -277,6 +278,16 @@ struct DebugSidebarView: View {
     }
 
     // MARK: Helpers
+
+    private func configIcon(_ type: String) -> String {
+        switch type {
+        case "node-cdp", "node", "pwa-node", "typescript": return "server.rack"
+        case "chrome", "nextjs":                            return "globe"
+        case "python":                                      return "terminal"
+        case "lldb", "swift":                               return "hammer"
+        default:                                            return "play.circle"
+        }
+    }
 
     private func sectionHeader(_ title: String) -> some View {
         Text(title)
