@@ -248,7 +248,7 @@ struct SettingsView: View {
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 200)
                     .onChange(of: apiKey) { _, v in
-                        appState.persistSetting(v, for: "claudeApiKey")
+                        appState.setClaudeAPIKey(v)
                     }
                     Button {
                         showApiKey.toggle()
@@ -271,7 +271,7 @@ struct SettingsView: View {
         .task {
             guard !aiLoaded else { return }
             aiLoaded = true
-            apiKey      = await appState.settingsService.value(for: "claudeApiKey", default: "")
+            apiKey      = appState.claudeAPIKey   // loaded from Keychain at launch
             claudeModel = await appState.settingsService.value(for: "claudeModel",  default: "claude-opus-4-5")
         }
     }

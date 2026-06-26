@@ -106,13 +106,48 @@ struct DBConnection: Identifiable, Codable, Sendable {
     var port: Int
     var database: String    = ""
     var username: String    = ""
-    var password: String    = ""   // TODO: move to Keychain
+    var password: String    = ""   // never persisted to disk; lives in Keychain (see KeychainService.dbPassword)
     var isConnected: Bool   = false
 
     init(name: String, type: DBType) {
         self.name = name
         self.type = type
         self.port = type.defaultPort
+    }
+}
+
+// `password` is deliberately excluded from the on-disk JSON; it round-trips
+// through the Keychain instead. Decoding still reads a legacy plaintext
+// password if present so existing settings files migrate transparently.
+extension DBConnection {
+    private enum CodingKeys: String, CodingKey {
+        case id, name, type, host, port, database, username, password, isConnected
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id          = try c.decode(UUID.self, forKey: .id)
+        name        = try c.decode(String.self, forKey: .name)
+        type        = try c.decode(DBType.self, forKey: .type)
+        host        = try c.decodeIfPresent(String.self, forKey: .host) ?? "localhost"
+        port        = try c.decode(Int.self, forKey: .port)
+        database    = try c.decodeIfPresent(String.self, forKey: .database) ?? ""
+        username    = try c.decodeIfPresent(String.self, forKey: .username) ?? ""
+        password    = try c.decodeIfPresent(String.self, forKey: .password) ?? ""  // legacy only
+        isConnected = try c.decodeIfPresent(Bool.self, forKey: .isConnected) ?? false
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id,          forKey: .id)
+        try c.encode(name,        forKey: .name)
+        try c.encode(type,        forKey: .type)
+        try c.encode(host,        forKey: .host)
+        try c.encode(port,        forKey: .port)
+        try c.encode(database,    forKey: .database)
+        try c.encode(username,    forKey: .username)
+        // password intentionally omitted — stored in the Keychain
+        try c.encode(isConnected, forKey: .isConnected)
     }
 }
 
@@ -175,10 +210,43 @@ struct SFCCConnection: Identifiable, Codable, Sendable {
     var name: String
     var hostname: String       // e.g. "dev01-abc.demandware.net"
     var username: String       = ""
-    var password: String       = ""   // TODO: move to Keychain
+    var password: String       = ""   // never persisted to disk; lives in Keychain (see KeychainService.sfccPassword)
     var codeVersion: String    = "version1"
     var cartridgesPath: String = "cartridges"  // relative or absolute
     var isActive: Bool         = false
+}
+
+// `password` is excluded from the on-disk JSON and stored in the Keychain.
+// Decoding still reads a legacy plaintext password so existing settings
+// files migrate transparently on first load.
+extension SFCCConnection {
+    private enum CodingKeys: String, CodingKey {
+        case id, name, hostname, username, password, codeVersion, cartridgesPath, isActive
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id             = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name           = try c.decode(String.self, forKey: .name)
+        hostname       = try c.decode(String.self, forKey: .hostname)
+        username       = try c.decodeIfPresent(String.self, forKey: .username) ?? ""
+        password       = try c.decodeIfPresent(String.self, forKey: .password) ?? ""  // legacy only
+        codeVersion    = try c.decodeIfPresent(String.self, forKey: .codeVersion) ?? "version1"
+        cartridgesPath = try c.decodeIfPresent(String.self, forKey: .cartridgesPath) ?? "cartridges"
+        isActive       = try c.decodeIfPresent(Bool.self, forKey: .isActive) ?? false
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id,             forKey: .id)
+        try c.encode(name,           forKey: .name)
+        try c.encode(hostname,       forKey: .hostname)
+        try c.encode(username,       forKey: .username)
+        // password intentionally omitted — stored in the Keychain
+        try c.encode(codeVersion,    forKey: .codeVersion)
+        try c.encode(cartridgesPath, forKey: .cartridgesPath)
+        try c.encode(isActive,       forKey: .isActive)
+    }
 }
 
 // MARK: - Diagnostics

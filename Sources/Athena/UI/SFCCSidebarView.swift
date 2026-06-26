@@ -81,7 +81,9 @@ struct SFCCSidebarView: View {
                         connection: $conn,
                         onEdit:   { editingConn = conn },
                         onDelete: {
-                            appState.sfccConnections.removeAll { $0.id == conn.id }
+                            let removedID = conn.id
+                            appState.sfccConnections.removeAll { $0.id == removedID }
+                            Task { try? await appState.keychainService.delete(account: KeychainService.sfccPassword(removedID)) }
                             persistConnections()
                         },
                         onToggle: {
@@ -103,16 +105,33 @@ struct SFCCSidebarView: View {
     // MARK: Persistence
 
     private func loadConnections() async {
-        let decoded = await appState.settingsService.value(
+        var decoded = await appState.settingsService.value(
             for: "sfccConnections",
             default: [SFCCConnection]()
         )
+        var didMigrate = false
+        for i in decoded.indices {
+            let account = KeychainService.sfccPassword(decoded[i].id)
+            if let pw = await appState.keychainService.get(account: account), !pw.isEmpty {
+                decoded[i].password = pw
+            } else if !decoded[i].password.isEmpty {
+                // Legacy plaintext password from an older settings file — move it to the Keychain.
+                try? await appState.keychainService.set(decoded[i].password, account: account)
+                didMigrate = true
+            }
+        }
         appState.sfccConnections = decoded
+        if didMigrate { persistConnections() }  // rewrites the JSON without passwords
     }
 
     private func persistConnections() {
         let snapshot = appState.sfccConnections
-        Task { try? await appState.settingsService.setValue(snapshot, for: "sfccConnections") }
+        Task {
+            for conn in snapshot {
+                try? await appState.keychainService.set(conn.password, account: KeychainService.sfccPassword(conn.id))
+            }
+            try? await appState.settingsService.setValue(snapshot, for: "sfccConnections")
+        }
     }
 }
 

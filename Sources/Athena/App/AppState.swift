@@ -18,6 +18,7 @@ final class AppState {
     let claudeCLIService: ClaudeCLIService
     let searchService: SearchService
     let settingsService: SettingsService
+    let keychainService: KeychainService
     let lspManager: LSPManager
     let keyBindingService: KeyBindingService
     let blameService: GitBlameService
@@ -158,6 +159,7 @@ final class AppState {
         claudeCLIService: ClaudeCLIService = ClaudeCLIService(),
         searchService: SearchService = SearchService(),
         settingsService: SettingsService = SettingsService(),
+        keychainService: KeychainService = KeychainService(),
         lspManager: LSPManager = LSPManager(),
         keyBindingService: KeyBindingService = KeyBindingService(),
         blameService: GitBlameService = GitBlameService(),
@@ -170,6 +172,7 @@ final class AppState {
         self.claudeCLIService = claudeCLIService
         self.searchService = searchService
         self.settingsService = settingsService
+        self.keychainService = keychainService
         self.lspManager = lspManager
         self.keyBindingService = keyBindingService
         self.blameService = blameService
@@ -312,13 +315,36 @@ final class AppState {
         editorDetectIndentation = await di
         currentTheme            = EditorTheme.named(await th)
 
-        // Claude API key (shared with chat)
-        claudeAPIKey = await settingsService.claudeApiKey()
+        // Claude API key (shared with chat) — stored in the Keychain
+        await loadClaudeAPIKey()
     }
 
     /// Persists a single setting value, ignoring errors.
     func persistSetting<T: Codable & Sendable>(_ value: T, for key: String) {
         Task { try? await settingsService.setValue(value, for: key) }
+    }
+
+    // MARK: - Claude API key (Keychain-backed)
+
+    /// Loads the API key from the Keychain, migrating any legacy plaintext key
+    /// that an older build persisted in the settings JSON.
+    func loadClaudeAPIKey() async {
+        if let key = await keychainService.get(account: KeychainService.claudeAPIKeyAccount), !key.isEmpty {
+            claudeAPIKey = key
+            return
+        }
+        let legacy = await settingsService.claudeApiKey()
+        if !legacy.isEmpty {
+            try? await keychainService.set(legacy, account: KeychainService.claudeAPIKeyAccount)
+            await settingsService.reset(key: "claudeApiKey")
+        }
+        claudeAPIKey = legacy
+    }
+
+    /// Updates the in-memory key and persists it to the Keychain.
+    func setClaudeAPIKey(_ key: String) {
+        claudeAPIKey = key
+        Task { try? await keychainService.set(key, account: KeychainService.claudeAPIKeyAccount) }
     }
 
     // MARK: - AI Ghost Text

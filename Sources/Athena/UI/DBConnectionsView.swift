@@ -82,7 +82,9 @@ struct DBConnectionsView: View {
                     DBConnectionRow(connection: $conn, onEdit: {
                         editingConnection = conn
                     }, onDelete: {
-                        appState.dbConnections.removeAll { $0.id == conn.id }
+                        let removedID = conn.id
+                        appState.dbConnections.removeAll { $0.id == removedID }
+                        Task { try? await appState.keychainService.delete(account: KeychainService.dbPassword(removedID)) }
                         persistConnections()
                     }, onToggle: {
                         conn.isConnected.toggle()
@@ -97,16 +99,31 @@ struct DBConnectionsView: View {
     // MARK: Persistence
 
     private func loadConnections() async {
-        let decoded = await appState.settingsService.value(
+        var decoded = await appState.settingsService.value(
             for: "dbConnections",
             default: [DBConnection]()
         )
+        var didMigrate = false
+        for i in decoded.indices {
+            let account = KeychainService.dbPassword(decoded[i].id)
+            if let pw = await appState.keychainService.get(account: account), !pw.isEmpty {
+                decoded[i].password = pw
+            } else if !decoded[i].password.isEmpty {
+                // Legacy plaintext password from an older settings file — move it to the Keychain.
+                try? await appState.keychainService.set(decoded[i].password, account: account)
+                didMigrate = true
+            }
+        }
         appState.dbConnections = decoded
+        if didMigrate { persistConnections() }  // rewrites the JSON without passwords
     }
 
     private func persistConnections() {
         let snapshot = appState.dbConnections
         Task {
+            for conn in snapshot {
+                try? await appState.keychainService.set(conn.password, account: KeychainService.dbPassword(conn.id))
+            }
             try? await appState.settingsService.setValue(snapshot, for: "dbConnections")
         }
     }
