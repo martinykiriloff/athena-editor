@@ -53,6 +53,10 @@ final class AppState {
     var sfccLogOffset: Int = 0
     @ObservationIgnored private var sfccLogTask: Task<Void, Never>?
 
+    // MARK: - Drizzle + AI Completion
+    let drizzleService: DrizzleCompletionService = DrizzleCompletionService()
+    var claudeAPIKey: String = ""
+
     // MARK: - NPM Scripts
     var npmPackages: [NPMPackageInfo] = []
     var scriptOutput: String = ""
@@ -307,11 +311,48 @@ final class AppState {
         editorAutoIndent        = await ai
         editorDetectIndentation = await di
         currentTheme            = EditorTheme.named(await th)
+
+        // Claude API key (shared with chat)
+        claudeAPIKey = await settingsService.claudeApiKey()
     }
 
     /// Persists a single setting value, ignoring errors.
     func persistSetting<T: Codable & Sendable>(_ value: T, for key: String) {
         Task { try? await settingsService.setValue(value, for: key) }
+    }
+
+    // MARK: - AI Ghost Text
+
+    /// Calls claude-haiku for a short inline code completion at the cursor.
+    /// Returns `nil` when no API key is configured or the request fails.
+    func requestInlineCompletion(prefix: String, suffix: String) async -> String? {
+        guard !claudeAPIKey.isEmpty else { return nil }
+
+        let context = String(prefix.suffix(600)) + "<CURSOR>" + String(suffix.prefix(200))
+        let body: [String: Any] = [
+            "model":      "claude-haiku-4-5-20251001",
+            "max_tokens": 80,
+            "system":     "You are a code completion engine. Output ONLY the text that should appear at <CURSOR>. No explanation, no markdown, no backticks. Complete at most one line.",
+            "messages":   [["role": "user", "content": context]],
+        ]
+
+        var req = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue(claudeAPIKey,        forHTTPHeaderField: "x-api-key")
+        req.setValue("2023-06-01",        forHTTPHeaderField: "anthropic-version")
+        guard let data = try? JSONSerialization.data(withJSONObject: body) else { return nil }
+        req.httpBody = data
+
+        guard
+            let (respData, _) = try? await URLSession.shared.data(for: req),
+            let json = try? JSONSerialization.jsonObject(with: respData) as? [String: Any],
+            let content = json["content"] as? [[String: Any]],
+            let text = content.first?["text"] as? String,
+            !text.isEmpty
+        else { return nil }
+
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Reopens the last workspace if one was saved; called on app launch.

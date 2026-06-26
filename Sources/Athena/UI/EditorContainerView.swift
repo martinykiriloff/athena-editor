@@ -112,6 +112,32 @@ struct CodeEditorView: View {
                 onToggleBreakpoint: { line in
                     guard let path = tab.fileURL?.path else { return }
                     appState.toggleBreakpoint(filePath: path, line: line)
+                },
+                onRequestCompletion: { line, col in
+                    // LSP completions (0-indexed internally)
+                    let lspItems: [CompletionItem]
+                    if let fileURL = tab.fileURL {
+                        lspItems = (try? await appState.lspManager.complete(
+                            fileURL: fileURL, line: line - 1, character: col - 1
+                        )) ?? []
+                    } else {
+                        lspItems = []
+                    }
+                    // Drizzle ORM completions
+                    let drizzleItems: [CompletionItem]
+                    if let fileURL = tab.fileURL {
+                        drizzleItems = await appState.drizzleService.complete(
+                            text: tab.content, line: line, col: col, fileURL: fileURL
+                        )
+                    } else {
+                        drizzleItems = []
+                    }
+                    // Merge: Drizzle first, then LSP; deduplicate by label
+                    var seen = Set<String>()
+                    return (drizzleItems + lspItems).filter { seen.insert($0.label).inserted }
+                },
+                onRequestGhostText: { prefix, suffix in
+                    await appState.requestInlineCompletion(prefix: prefix, suffix: suffix)
                 }
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)

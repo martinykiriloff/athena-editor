@@ -41,6 +41,11 @@ struct EditorView: NSViewRepresentable {
     /// Called when the user clicks in the gutter to toggle a breakpoint.
     var onToggleBreakpoint: (Int) -> Void = { _ in }
 
+    /// Returns merged completion items (LSP + Drizzle) for the given 1-based line/col.
+    var onRequestCompletion: (Int, Int) async -> [CompletionItem] = { _, _ in [] }
+    /// Returns an AI ghost-text suggestion given the text before and after the cursor.
+    var onRequestGhostText: (String, String) async -> String? = { _, _ in nil }
+
     // MARK: NSViewRepresentable
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -87,7 +92,7 @@ struct EditorView: NSViewRepresentable {
         textView.string = content
         context.coordinator.applyHighlighting(to: textView)
 
-        // Inline blame annotation label — ghost text after the cursor line.
+        // Inline blame annotation label.
         let blameLabel = NSTextField(labelWithString: "")
         blameLabel.isEditable     = false
         blameLabel.isBordered     = false
@@ -96,6 +101,16 @@ struct EditorView: NSViewRepresentable {
         blameLabel.alphaValue     = 0
         textView.addSubview(blameLabel)
         context.coordinator.blameAnnotationLabel = blameLabel
+
+        // AI ghost text overlay — positioned after cursor, scrolls with content.
+        let ghostLabel = NSTextField(labelWithString: "")
+        ghostLabel.isEditable      = false
+        ghostLabel.isBordered      = false
+        ghostLabel.drawsBackground = false
+        ghostLabel.isSelectable    = false
+        ghostLabel.alphaValue      = 0
+        textView.addSubview(ghostLabel)
+        context.coordinator.ghostController.install(label: ghostLabel)
 
         // Expose scroll view via proxy so the minimap can drive scrolling.
         let proxy = EditorScrollProxy()
@@ -116,6 +131,11 @@ struct EditorView: NSViewRepresentable {
             guard let coord, let tv = textView else { return }
             guard let path = coord.importPath(from: tv.string, at: charIdx) else { return }
             coord.parent.onImportClick(path, coord.parent.fileURL)
+        }
+
+        // Wire key interception for completion popup and ghost text accept.
+        textView.onKeyDown = { [weak coord] event in
+            coord?.handleKeyDown(event) ?? false
         }
 
         return scrollView
@@ -293,6 +313,12 @@ extension EditorView {
 
         // Gutter (line numbers + breakpoints)
         weak var gutterView: GutterView?
+
+        // Completion popup and ghost text
+        let completionController = CompletionWindowController()
+        let ghostController      = GhostTextController()
+        @ObservationIgnored private var completionDebounce: Task<Void, Never>?
+        @ObservationIgnored private var ghostDebounce:      Task<Void, Never>?
 
         init(_ parent: EditorView) {
             self.parent              = parent
@@ -614,8 +640,23 @@ extension EditorView {
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
             parent.onContentChange(textView.string)
-            // Re-colour after every edit so tokens track the user's keystrokes.
             applyHighlighting(to: textView)
+
+            // Dismiss ghost text on every keystroke; reschedule both triggers.
+            completionDebounce?.cancel()
+            ghostDebounce?.cancel()
+            ghostController.dismiss()
+
+            completionDebounce = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 150_000_000)  // 150 ms
+                guard !Task.isCancelled, let self else { return }
+                await self.triggerCompletion()
+            }
+            ghostDebounce = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 700_000_000)  // 700 ms
+                guard !Task.isCancelled, let self else { return }
+                await self.triggerGhostText()
+            }
         }
 
         // Called by NSTextView when Cmd+Click lands on a .link attribute (editable TV).
@@ -706,6 +747,146 @@ extension EditorView {
             case 2592000..<31536000: return "\(seconds / 2592000)mo ago"
             default:             return "\(seconds / 31536000)y ago"
             }
+        }
+
+        // MARK: - Key interception (completion popup + ghost text)
+
+        /// Called by `AthenaTextView.keyDown` before AppKit processes the event.
+        /// Returns `true` to consume the event.
+        func handleKeyDown(_ event: NSEvent) -> Bool {
+            switch event.keyCode {
+            case 36:  // Return — accept completion
+                if completionController.isVisible {
+                    return completionController.confirmSelection()
+                }
+                return false
+            case 48:  // Tab — accept completion or ghost text
+                if completionController.isVisible {
+                    return completionController.confirmSelection()
+                }
+                if ghostController.hasSuggestion, let tv = textView {
+                    let accepted = ghostController.accept(in: tv)
+                    if accepted {
+                        parent.onContentChange(tv.string)
+                        applyHighlighting(to: tv)
+                    }
+                    return accepted
+                }
+                return false
+            case 53:  // Escape — dismiss popup or ghost text
+                if completionController.isVisible  { completionController.dismiss(); return true }
+                if ghostController.hasSuggestion   { ghostController.dismiss();      return true }
+                return false
+            case 125: // Down arrow — navigate popup
+                if completionController.isVisible  { completionController.moveDown(); return true }
+                return false
+            case 126: // Up arrow — navigate popup
+                if completionController.isVisible  { completionController.moveUp();   return true }
+                return false
+            default:
+                return false
+            }
+        }
+
+        // MARK: - Completion trigger
+
+        private func triggerCompletion() async {
+            guard let tv = textView else { return }
+            let (line, col) = cursorPosition(in: tv)
+            let word = currentWord(in: tv)
+
+            // Trigger only when the cursor is in a word or immediately after "."
+            let nsStr = tv.string as NSString
+            let idx   = tv.selectedRange().location
+            let prev  = idx > 0 ? nsStr.character(at: idx - 1) : 0
+            guard !word.isEmpty || prev == 46 /* "." */ else {
+                completionController.dismiss()
+                return
+            }
+
+            let items = await parent.onRequestCompletion(line, col)
+            guard !items.isEmpty else { completionController.dismiss(); return }
+
+            let lower    = word.lowercased()
+            let filtered = word.isEmpty
+                ? Array(items.prefix(20))
+                : items.filter { $0.label.lowercased().hasPrefix(lower) }.prefix(20).map { $0 }
+
+            guard !filtered.isEmpty else { completionController.dismiss(); return }
+
+            let wRange  = currentWordRange(in: tv)
+            var actual  = NSRange()
+            let screenRect = tv.firstRect(
+                forCharacterRange: NSRange(location: wRange.location, length: 0),
+                actualRange: &actual
+            )
+
+            completionController.show(items: filtered, wordRange: wRange, screenRect: screenRect)
+            completionController.onAccept = { [weak self, weak tv] item, range in
+                guard let self, let textView = tv else { return }
+                self.insertCompletion(item, wordRange: range, in: textView)
+            }
+        }
+
+        // MARK: - Ghost text trigger
+
+        private func triggerGhostText() async {
+            guard let tv = textView else { return }
+            let cursorIdx = tv.selectedRange().location
+            let text      = tv.string
+            guard cursorIdx > 0 else { return }
+
+            let prefix = String(text.prefix(cursorIdx))
+            let suffix = String(text.suffix(text.count - min(cursorIdx, text.count)))
+
+            // Skip if cursor is at whitespace — no meaningful context for AI.
+            guard let lastChar = prefix.last, !lastChar.isWhitespace && lastChar != "\n" else { return }
+
+            guard let suggestion = await parent.onRequestGhostText(prefix, suffix) else { return }
+            guard !suggestion.isEmpty else { return }
+
+            let font = tv.font ?? NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+            ghostController.show(text: suggestion, after: cursorIdx, font: font, in: tv)
+        }
+
+        // MARK: - Completion helpers
+
+        private func currentWord(in textView: NSTextView) -> String {
+            let idx  = textView.selectedRange().location
+            let text = textView.string as NSString
+            var start = idx
+            while start > 0 {
+                let c = text.character(at: start - 1)
+                if c == 95 || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) {
+                    start -= 1
+                } else { break }
+            }
+            return text.substring(with: NSRange(location: start, length: idx - start))
+        }
+
+        private func currentWordRange(in textView: NSTextView) -> NSRange {
+            let idx  = textView.selectedRange().location
+            let text = textView.string as NSString
+            var start = idx
+            while start > 0 {
+                let c = text.character(at: start - 1)
+                if c == 95 || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) {
+                    start -= 1
+                } else { break }
+            }
+            return NSRange(location: start, length: idx - start)
+        }
+
+        private func insertCompletion(_ item: CompletionItem, wordRange: NSRange, in textView: NSTextView) {
+            guard let ts = textView.textStorage else { return }
+            let text = item.insertText.isEmpty ? item.label : item.insertText
+            ts.beginEditing()
+            ts.replaceCharacters(in: wordRange, with: text)
+            ts.endEditing()
+            textView.setSelectedRange(NSRange(location: wordRange.location + text.count, length: 0))
+            parent.onContentChange(textView.string)
+            applyHighlighting(to: textView)
+            completionController.dismiss()
         }
 
         // MARK: Private
