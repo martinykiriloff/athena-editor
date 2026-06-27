@@ -403,38 +403,85 @@ final class AppState {
 
     private func requestOllamaInlineCompletion(prefix: String, suffix: String) async -> String? {
         let base = ollamaEndpoint.hasSuffix("/") ? String(ollamaEndpoint.dropLast()) : ollamaEndpoint
-        guard let url = URL(string: "\(base)/v1/chat/completions") else { return nil }
+        // Use the native generate endpoint with fill-in-middle: it returns ONLY the
+        // continuation rather than echoing the prompt back (which chat models do).
+        guard let url = URL(string: "\(base)/api/generate") else { return nil }
 
-        let context = String(prefix.suffix(400)) + "<CURSOR>" + String(suffix.prefix(100))
+        // qwen3-coder and similar instruct models reject FIM "suffix" ("does not
+        // support insert"), so we send prompt-only and strip the echoed prefix below.
+        let promptHead = String(prefix.suffix(2000))
         let body: [String: Any] = [
-            "model":       ollamaModel,
-            "max_tokens":  80,
-            "temperature": 0.1,
-            "stream":      false,
-            "messages": [
-                ["role": "system",
-                 "content": "Code completion engine. Output ONLY the text at <CURSOR>. No explanation, no markdown."],
-                ["role": "user", "content": context],
+            "model":  ollamaModel,
+            "prompt": promptHead,
+            "stream": false,
+            "options": [
+                "temperature": 0.1,
+                "num_predict": 96,
             ],
         ]
 
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.timeoutInterval = 15
+        req.timeoutInterval = 20
         guard let data = try? JSONSerialization.data(withJSONObject: body) else { return nil }
         req.httpBody = data
 
+        let respData: Data
+        let response: URLResponse
+        do {
+            (respData, response) = try await URLSession.shared.data(for: req)
+        } catch {
+            statusMessage = "Ollama unreachable at \(base): \(error.localizedDescription)"
+            return nil
+        }
+
+        if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+            let detail = String(data: respData, encoding: .utf8)?.prefix(200) ?? ""
+            statusMessage = "Ollama error \(http.statusCode) (model \(ollamaModel)): \(detail)"
+            return nil
+        }
+
         guard
-            let (respData, _) = try? await URLSession.shared.data(for: req),
-            let json    = try? JSONSerialization.jsonObject(with: respData) as? [String: Any],
-            let choices = json["choices"] as? [[String: Any]],
-            let message = choices.first?["message"] as? [String: Any],
-            let text    = message["content"] as? String,
-            !text.isEmpty
+            let json = try? JSONSerialization.jsonObject(with: respData) as? [String: Any],
+            let text = json["response"] as? String
         else { return nil }
 
-        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return Self.cleanInlineCompletion(text, prefix: promptHead)
+    }
+
+    /// Strips markdown fences and any echoed prefix from a raw model completion,
+    /// returning `nil` when nothing usable remains. Instruct models like
+    /// qwen3-coder reproduce the prompt before continuing it, so we cut the
+    /// longest suffix of `prefix` that the response repeats at its head.
+    private static func cleanInlineCompletion(_ raw: String, prefix: String) -> String? {
+        var text = raw
+
+        // Drop a leading ```lang fence and any trailing ``` fence.
+        if text.hasPrefix("```") {
+            if let firstNewline = text.firstIndex(of: "\n") {
+                text = String(text[text.index(after: firstNewline)...])
+            }
+            if let fence = text.range(of: "```") {
+                text = String(text[..<fence.lowerBound])
+            }
+        }
+        text = text.trimmingCharacters(in: .newlines)
+
+        // Remove echoed prompt: find the longest suffix of `prefix` (up to 400
+        // chars) that the response repeats at its start, and drop it.
+        let maxOverlap = min(prefix.count, text.count, 400)
+        if maxOverlap > 0 {
+            for len in stride(from: maxOverlap, through: 1, by: -1) {
+                if text.hasPrefix(String(prefix.suffix(len))) {
+                    text = String(text.dropFirst(len))
+                    break
+                }
+            }
+        }
+
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     /// Reopens the last workspace if one was saved; called on app launch.

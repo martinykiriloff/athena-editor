@@ -133,6 +133,12 @@ struct EditorView: NSViewRepresentable {
             coord.parent.onImportClick(path, coord.parent.fileURL)
         }
 
+        // Switch to the pointing-hand cursor while Cmd-hovering a clickable target.
+        textView.isClickableTarget = { [weak coord, weak textView] (charIdx: Int) in
+            guard let coord, let tv = textView else { return false }
+            return coord.isCmdClickable(in: tv.string, at: charIdx)
+        }
+
         // Wire key interception for completion popup and ghost text accept.
         textView.onKeyDown = { [weak coord] event in
             coord?.handleKeyDown(event) ?? false
@@ -437,6 +443,24 @@ extension EditorView {
                 }
             }
             return lastPath
+        }
+
+        /// Whether the character at `charIndex` is a Cmd-clickable navigation
+        /// target: anywhere on an import line, or any code identifier (so
+        /// methods/functions also show the pointing-hand cursor).
+        func isCmdClickable(in text: String, at charIndex: Int) -> Bool {
+            if importPath(from: text, at: charIndex) != nil { return true }
+            let ns = text as NSString
+            guard charIndex >= 0, charIndex < ns.length else { return false }
+            return Self.isIdentifierChar(ns.character(at: charIndex))
+        }
+
+        /// ASCII identifier characters: `A–Z`, `a–z`, `0–9`, `_`, `$`.
+        private static func isIdentifierChar(_ c: unichar) -> Bool {
+            (c >= 65 && c <= 90)  ||   // A–Z
+            (c >= 97 && c <= 122) ||   // a–z
+            (c >= 48 && c <= 57)  ||   // 0–9
+            c == 95 || c == 36         // _ $
         }
 
         private func handle(_ command: EditorCommand) {
@@ -845,8 +869,9 @@ extension EditorView {
             let prefix = String(text.prefix(cursorIdx))
             let suffix = String(text.suffix(text.count - min(cursorIdx, text.count)))
 
-            // Skip if cursor is at whitespace — no meaningful context for AI.
-            guard let lastChar = prefix.last, !lastChar.isWhitespace && lastChar != "\n" else { return }
+            // Need at least some code before the cursor to complete from; fill-in-middle
+            // still works right after whitespace (e.g. after `return ` or a fresh indent).
+            guard prefix.contains(where: { !$0.isWhitespace }) else { return }
 
             guard let suggestion = await parent.onRequestGhostText(prefix, suffix) else { return }
             guard !suggestion.isEmpty else { return }
