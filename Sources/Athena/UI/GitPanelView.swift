@@ -272,6 +272,7 @@ private struct GitFileRow: View {
     let isStaged: Bool
 
     @State private var isHovering: Bool = false
+    @State private var showDiscardConfirmation: Bool = false
 
     var body: some View {
         HStack(spacing: 6) {
@@ -330,6 +331,14 @@ private struct GitFileRow: View {
         .contentShape(Rectangle())
         .onHover { isHovering = $0 }
         .contextMenu { contextMenuItems }
+        .alert("Discard changes to \"\(fileName)\"?", isPresented: $showDiscardConfirmation) {
+            Button("Discard Changes", role: .destructive) {
+                Task { await discardChanges() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This action cannot be undone.")
+        }
     }
 
     // MARK: Helpers
@@ -368,15 +377,7 @@ private struct GitFileRow: View {
 
             if !isStaged {
                 Button("Discard Changes", role: .destructive) {
-                    Task {
-                        // Checkout the file to discard unstaged changes
-                        _ = try? await appState.gitService.diff(
-                            path: change.path,
-                            staged: false,
-                            at: ws.rootURL
-                        )
-                        await appState.refreshGitStatus()
-                    }
+                    showDiscardConfirmation = true
                 }
             }
 
@@ -391,5 +392,11 @@ private struct GitFileRow: View {
                 }
             }
         }
+    }
+
+    /// Reverts the file's unstaged working-tree changes back to HEAD/index and
+    /// refreshes Git status; see `AppState.discardChanges(path:)`.
+    private func discardChanges() async {
+        await appState.discardChanges(path: change.path)
     }
 }

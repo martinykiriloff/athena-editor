@@ -88,6 +88,7 @@ struct CodeEditorView: View {
                 renderWhitespace: appState.editorRenderWhitespace,
                 tabSize:          appState.editorTabSize,
                 insertSpaces:     appState.editorInsertSpaces,
+                autoIndent:       appState.editorAutoIndent,
                 blameInfo:        blameInfo,
                 fileURL:          tab.fileURL,
                 onCursorMove: { line, col in

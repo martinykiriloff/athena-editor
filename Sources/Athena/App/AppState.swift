@@ -154,6 +154,7 @@ final class AppState {
 
     @ObservationIgnored private var keyEventMonitor: Any? = nil
     @ObservationIgnored private var autoSaveTask:    Task<Void, Never>? = nil
+    @ObservationIgnored private var diagnosticsTask: Task<Void, Never>? = nil
 
     init(
         fileService: FileService = FileService(),
@@ -204,6 +205,17 @@ final class AppState {
             activeTabId = tab.id
             statusMessage = "Opened \(url.lastPathComponent)"
             AppState.registerRecentPath(url)
+
+            // Bring up the language server (no-op if none is installed) and tell
+            // it about the newly opened document. Fired unstructured so file
+            // opening itself stays instant.
+            if let workspace {
+                let language = tab.language
+                Task {
+                    try? await self.lspManager.startServer(for: language, workspaceURL: workspace.rootURL)
+                    await self.lspManager.didOpen(fileURL: url, content: content)
+                }
+            }
         } catch {
             statusMessage = "Error opening \(url.lastPathComponent): \(error.localizedDescription)"
         }
@@ -226,6 +238,11 @@ final class AppState {
     func closeTab(_ id: UUID) {
         guard let index = openTabs.firstIndex(where: { $0.id == id }) else { return }
 
+        if let url = openTabs[index].fileURL {
+            Task { await self.lspManager.didClose(fileURL: url) }
+            diagnostics.removeValue(forKey: url)
+        }
+
         openTabs.remove(at: index)
 
         // If we just closed the active tab, select an adjacent one.
@@ -242,6 +259,15 @@ final class AppState {
 
     /// Opens a workspace directory, builds the file tree, and refreshes Git status.
     func openWorkspace(_ url: URL) async {
+        // Tear down any language servers (and their diagnostics) left over from
+        // a previously open workspace before switching roots. This must be
+        // awaited before any file in the new workspace can be opened, otherwise
+        // LSPManager.startServer(for:workspaceURL:) — which only checks whether a
+        // server for the language already exists — would find the stale server
+        // still registered and skip starting a correctly-rooted one.
+        await lspManager.stopAllServers()
+        diagnostics = [:]
+
         workspace = WorkspaceModel(rootURL: url)
         statusMessage = "Opening workspace \(url.lastPathComponent)…"
 
@@ -578,7 +604,13 @@ final class AppState {
         }
     }
 
-    func closeFolder() {
+    func closeFolder() async {
+        // Must be awaited before any new workspace/file can be opened — see the
+        // comment in openWorkspace(_:) for why an unawaited Task here would let a
+        // stale, wrong-rootUri server keep serving the next-opened workspace.
+        await lspManager.stopAllServers()
+        diagnostics  = [:]
+
         workspace    = nil
         fileTree     = []
         gitStatus    = GitStatus()
@@ -889,11 +921,44 @@ final class AppState {
         }
     }
 
+    /// Discards unstaged working-tree changes to `path` (relative to the
+    /// workspace root), reverting it to its last-committed contents, then
+    /// refreshes Git status. Destructive and irreversible — callers must
+    /// confirm with the user first.
+    ///
+    /// If the file is currently open in a tab, its buffer is reloaded from
+    /// disk directly (not via `updateTabContent`, which would mark the tab
+    /// dirty again and fire an unwanted LSP `didChange`).
+    func discardChanges(path: String) async {
+        guard let workspace else { return }
+        let url = workspace.rootURL.appendingPathComponent(path)
+
+        do {
+            try await gitService.restore([path], at: workspace.rootURL)
+        } catch {
+            statusMessage = "Discard failed: \(error.localizedDescription)"
+            return
+        }
+
+        await refreshGitStatus()
+
+        if let index = openTabs.firstIndex(where: { $0.fileURL == url }),
+           let content = try? await fileService.readFile(url)
+        {
+            openTabs[index].content = content
+            openTabs[index].isDirty = false
+        }
+    }
+
     /// Updates the text content of a tab and marks it as dirty.
     func updateTabContent(_ id: UUID, content: String) {
         guard let index = openTabs.firstIndex(where: { $0.id == id }) else { return }
         openTabs[index].content = content
         openTabs[index].isDirty = true
+
+        if let url = openTabs[index].fileURL {
+            Task { await self.lspManager.didChange(fileURL: url, content: content) }
+        }
 
         // Auto-save: debounce 1 s after the last keystroke.
         if UserDefaults.standard.bool(forKey: "athenaAutoSave") {
@@ -943,6 +1008,23 @@ final class AppState {
             claudeMessages[idx].isStreaming = false
         }
         claudeIsStreaming = false
+    }
+
+    // MARK: - LSP
+
+    /// Starts consuming `LSPManager`'s diagnostics stream, populating
+    /// `diagnostics` as running servers publish them. Idempotent — call once
+    /// at app launch. The Task is created from this MainActor-isolated method
+    /// so it inherits MainActor isolation, matching `autoSaveTask`/`sfccLogTask`.
+    func startDiagnosticsConsumer() {
+        guard diagnosticsTask == nil else { return }
+        diagnosticsTask = Task { [weak self] in
+            guard let self else { return }
+            let stream = await self.lspManager.diagnosticsStream()
+            for await (url, diags) in stream {
+                self.diagnostics[url] = diags
+            }
+        }
     }
 
     // MARK: - Key bindings

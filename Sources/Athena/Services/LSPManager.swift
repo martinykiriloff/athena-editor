@@ -24,6 +24,8 @@ actor LSPManager {
     // MARK: State
 
     private var servers: [Language: LSPServerProcess] = [:]
+    /// Continuation feeding `diagnosticsStream()`; nil until a consumer subscribes.
+    private var diagnosticsContinuation: AsyncStream<(URL, [Diagnostic])>.Continuation?
 
     // MARK: - Public API
 
@@ -136,6 +138,57 @@ actor LSPManager {
             ],
         ]
         sendNotification(method: "textDocument/didChange", params: params, language: language)
+    }
+
+    /// Notifies the language server that a file has been opened in the editor.
+    func didOpen(fileURL: URL, content: String) async {
+        let language = Language.detect(from: fileURL)
+        guard servers[language] != nil else { return }
+
+        let params: [String: Any] = [
+            "textDocument": [
+                "uri":        fileURL.absoluteString,
+                "languageId": language.rawValue,
+                "version":    1,
+                "text":       content,
+            ],
+        ]
+        sendNotification(method: "textDocument/didOpen", params: params, language: language)
+    }
+
+    /// Notifies the language server that a file has been closed in the editor.
+    func didClose(fileURL: URL) async {
+        let language = Language.detect(from: fileURL)
+        guard servers[language] != nil else { return }
+
+        let params: [String: Any] = [
+            "textDocument": ["uri": fileURL.absoluteString],
+        ]
+        sendNotification(method: "textDocument/didClose", params: params, language: language)
+    }
+
+    /// Shuts down every currently running language server. Used when tearing
+    /// down a workspace (opening another folder, or closing the current one).
+    func stopAllServers() async {
+        for language in Array(servers.keys) {
+            await stopServer(for: language)
+        }
+    }
+
+    /// Returns a stream of `(fileURL, diagnostics)` pairs, yielded every time a
+    /// running server pushes a `textDocument/publishDiagnostics` notification.
+    /// Only one subscriber is supported at a time (the latest one wins), which
+    /// matches how `AppState` consumes it — a single long-lived Task at launch.
+    func diagnosticsStream() -> AsyncStream<(URL, [Diagnostic])> {
+        AsyncStream { continuation in
+            Task { self.storeDiagnosticsContinuation(continuation) }
+        }
+    }
+
+    private func storeDiagnosticsContinuation(
+        _ continuation: AsyncStream<(URL, [Diagnostic])>.Continuation
+    ) {
+        diagnosticsContinuation = continuation
     }
 
     // MARK: - Executable discovery
@@ -272,12 +325,15 @@ actor LSPManager {
             let bodyData = server.stdoutHandle.readData(ofLength: length)
             guard !bodyData.isEmpty else { break }
 
-            // Resolve the pending continuation, if any
-            if let json = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any],
-               let id = json["id"] as? Int
-            {
-                servers[language]?.pending[id]?.resume(returning: bodyData)
-                servers[language]?.pending.removeValue(forKey: id)
+            if let json = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any] {
+                if let id = json["id"] as? Int {
+                    // Resolve the pending continuation for a request response.
+                    servers[language]?.pending[id]?.resume(returning: bodyData)
+                    servers[language]?.pending.removeValue(forKey: id)
+                } else if let method = json["method"] as? String {
+                    // Server-initiated notification (no "id" field).
+                    handleNotification(method: method, params: json["params"] as? [String: Any])
+                }
             }
 
             // Yield to avoid starving other tasks on the cooperative executor
@@ -306,6 +362,60 @@ actor LSPManager {
             }
         }
         return nil
+    }
+
+    // MARK: - Server-initiated notifications
+
+    /// Dispatches a JSON-RPC notification pushed by the server (no matching
+    /// pending request). Currently only `textDocument/publishDiagnostics` is
+    /// handled; anything else is silently ignored.
+    private func handleNotification(method: String, params: [String: Any]?) {
+        guard method == "textDocument/publishDiagnostics", let params else { return }
+        parseDiagnostics(from: params)
+    }
+
+    /// Parses a `publishDiagnostics` notification's `params` object and yields
+    /// the resulting `[Diagnostic]` (keyed by file URL) to `diagnosticsStream()`.
+    private func parseDiagnostics(from params: [String: Any]) {
+        guard
+            let uriString = params["uri"] as? String,
+            let url = URL(string: uriString)
+        else { return }
+
+        let rawDiagnostics = params["diagnostics"] as? [[String: Any]] ?? []
+
+        let diagnostics: [Diagnostic] = rawDiagnostics.compactMap { entry in
+            guard
+                let range      = entry["range"] as? [String: Any],
+                let start      = range["start"] as? [String: Any],
+                let line       = start["line"] as? Int,
+                let character  = start["character"] as? Int,
+                let message    = entry["message"] as? String
+            else { return nil }
+
+            // LSP positions are 0-based; the rest of the app (gutter, cursor,
+            // breakpoints) uses 1-based line/column.
+            return Diagnostic(
+                fileURL:  url,
+                line:     line + 1,
+                column:   character + 1,
+                message:  message,
+                severity: diagnosticSeverity(from: entry["severity"] as? Int)
+            )
+        }
+
+        diagnosticsContinuation?.yield((url, diagnostics))
+    }
+
+    /// Maps the LSP `DiagnosticSeverity` integer (1=Error … 4=Hint) to our
+    /// domain type. Servers that omit `severity` default to `.error`, per spec.
+    private func diagnosticSeverity(from value: Int?) -> DiagnosticSeverity {
+        switch value {
+        case 2:  return .warning
+        case 3:  return .information
+        case 4:  return .hint
+        default: return .error
+        }
     }
 
     // MARK: - Response parsing

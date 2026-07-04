@@ -22,6 +22,7 @@ struct EditorView: NSViewRepresentable {
     var renderWhitespace: Bool  = true
     var tabSize:        Int     = 4
     var insertSpaces:   Bool    = true
+    var autoIndent:     Bool    = true
     var blameInfo: [Int: BlameLine] = [:]
     /// The URL of the file being edited — used for import path resolution.
     var fileURL: URL? = nil
@@ -160,6 +161,7 @@ struct EditorView: NSViewRepresentable {
         coord.parent = self          // keep fileURL and callbacks fresh on every render
         coord.currentTabSize      = tabSize
         coord.currentInsertSpaces = insertSpaces
+        coord.currentAutoIndent   = autoIndent
         let themeChanged = coord.currentTheme != theme
         let langChanged  = coord.currentLanguage != language
         let fontChanged  = coord.currentFontSize != fontSize
@@ -313,6 +315,7 @@ extension EditorView {
         var currentRenderWhitespace: Bool = true
         var currentTabSize:       Int     = 4
         var currentInsertSpaces:  Bool    = true
+        var currentAutoIndent:    Bool    = true
         var scrollProxy: EditorScrollProxy?
         weak var textView: NSTextView?
         nonisolated(unsafe) private var scrollObserver: NSObjectProtocol?
@@ -344,6 +347,7 @@ extension EditorView {
             self.currentRenderWhitespace = parent.renderWhitespace
             self.currentTabSize      = parent.tabSize
             self.currentInsertSpaces = parent.insertSpaces
+            self.currentAutoIndent   = parent.autoIndent
             self.highlighter = SyntaxHighlighter(
                 language: parent.language, theme: parent.theme,
                 fontSize: parent.fontSize, fontFamily: parent.fontFamily,
@@ -596,6 +600,46 @@ extension EditorView {
             replace(lineRange, with: newBlock, in: tv, selectWhole: true)
         }
 
+        /// Inserts a newline followed by the same leading indentation as the
+        /// current line, bumped one level deeper when the character just
+        /// before the cursor opens a block (`{`, `(`, `[`, `:`). Returns `true`
+        /// having consumed the event, so callers should suppress the default
+        /// NSTextView newline handling.
+        private func handleAutoIndentReturn(in tv: NSTextView) -> Bool {
+            let range = tv.selectedRange()
+            let ns = tv.string as NSString
+            let cursor = range.location
+
+            // Walk back to the start of the current line.
+            var lineStart = cursor
+            while lineStart > 0, ns.character(at: lineStart - 1) != 0x0A /* \n */ {
+                lineStart -= 1
+            }
+
+            // Leading whitespace of the current line, up to the cursor.
+            var indentEnd = lineStart
+            while indentEnd < cursor {
+                let c = ns.character(at: indentEnd)
+                guard c == 0x20 /* space */ || c == 0x09 /* tab */ else { break }
+                indentEnd += 1
+            }
+            let currentIndent = ns.substring(with: NSRange(location: lineStart, length: indentEnd - lineStart))
+
+            // One extra indent level after an opening bracket or a trailing colon.
+            var newIndent = currentIndent
+            if cursor > 0 {
+                switch ns.character(at: cursor - 1) {
+                case 0x7B, 0x28, 0x5B, 0x3A: // { ( [ :
+                    newIndent += indentUnit
+                default:
+                    break
+                }
+            }
+
+            replace(range, with: "\n" + newIndent, in: tv)
+            return true
+        }
+
         /// Replaces `range` with `text` through the undo-aware path and keeps
         /// highlighting and the bound content in sync.
         private func replace(_ range: NSRange, with text: String, in tv: NSTextView, selectWhole: Bool = false) {
@@ -785,9 +829,12 @@ extension EditorView {
         /// Returns `true` to consume the event.
         func handleKeyDown(_ event: NSEvent) -> Bool {
             switch event.keyCode {
-            case 36:  // Return — accept completion
+            case 36:  // Return — accept completion, or auto-indent the new line
                 if completionController.isVisible {
                     return completionController.confirmSelection()
+                }
+                if currentAutoIndent, let tv = textView {
+                    return handleAutoIndentReturn(in: tv)
                 }
                 return false
             case 48:  // Tab — accept completion or ghost text

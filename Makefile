@@ -26,6 +26,28 @@ SIGN_ID     := -
 # SPM uses git internally; unset the env vars the shell hook injects.
 SWIFT_ENV   := unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0;
 
+# ── Swift Testing on bare Xcode Command Line Tools ────────────────────────────
+# When only Xcode Command Line Tools are installed (no Xcode.app), the
+# `Testing` module's swiftinterface and its runtime dylibs (libTesting,
+# lib_TestingInterop) live under the CLT tree at paths that aren't part of the
+# toolchain's default module/framework search path or rpath. Without them,
+# `import Testing` fails to compile, and — this is the part that actually
+# matters for `make test` reliably reporting a result — `swift test` silently
+# builds without ever invoking the test run. Passing these explicitly forces a
+# correct build *and* run. A full Xcode.app installation resolves `Testing`
+# through its own toolchain paths, so this is a no-op there.
+DEVELOPER_DIR    := $(shell xcode-select -p 2>/dev/null)
+CLT_FRAMEWORKS   := $(DEVELOPER_DIR)/Library/Developer/Frameworks
+CLT_INTEROP_LIB  := $(DEVELOPER_DIR)/Library/Developer/usr/lib
+ifeq ($(shell test -d "$(CLT_FRAMEWORKS)/Testing.framework" 2>/dev/null && echo yes),yes)
+TEST_FLAGS := -Xswiftc -F -Xswiftc "$(CLT_FRAMEWORKS)" \
+              -Xlinker -F -Xlinker "$(CLT_FRAMEWORKS)" \
+              -Xlinker -rpath -Xlinker "$(CLT_FRAMEWORKS)" \
+              -Xlinker -rpath -Xlinker "$(CLT_INTEROP_LIB)"
+else
+TEST_FLAGS :=
+endif
+
 # ── Phony targets ──────────────────────────────────────────────────────────────
 
 .PHONY: all run build-debug build-release bundle dmg dmg-pretty test clean open help
@@ -100,7 +122,7 @@ dmg-pretty: bundle
 
 test:
 	@echo "🧪 Running tests…"
-	$(SWIFT_ENV) swift test
+	$(SWIFT_ENV) swift test $(TEST_FLAGS)
 
 # ── Open in Xcode (for GUI archive / notarisation) ────────────────────────────
 

@@ -188,7 +188,7 @@ private struct FileNotificationHandlers: ViewModifier {
                 Task { await appState.revertActiveTab() }
             }
             .onReceive(NotificationCenter.default.publisher(for: .athenaCloseFolder)) { _ in
-                appState.closeFolder()
+                Task { await appState.closeFolder() }
             }
             .onReceive(NotificationCenter.default.publisher(for: .athenaNewWindow)) { _ in
                 newWindow()

@@ -118,6 +118,12 @@ actor GitService {
         _ = try await run(args: ["add", "-A"], at: url)
     }
 
+    /// Discards unstaged working-tree changes for `paths`, restoring them to
+    /// their last-committed (HEAD/index) contents. Destructive and irreversible.
+    func restore(_ paths: [String], at url: URL) async throws {
+        _ = try await run(args: ["checkout", "--"] + paths, at: url)
+    }
+
     // MARK: - Commit / Push / Pull
 
     func commit(message: String, at url: URL) async throws {
