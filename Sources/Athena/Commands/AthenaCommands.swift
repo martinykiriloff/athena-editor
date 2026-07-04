@@ -247,10 +247,14 @@ struct AthenaCommands: Commands {
     @CommandsBuilder
     private var goCommands: some Commands {
         CommandMenu("Go") {
-            // ⌘P and ⌘⌃G are owned by the keybinding monitor; clicks route
-            // through the same actions.
+            // ⌘P, ⇧⌘P, and ⌘⌃G are owned by the keybinding monitor; clicks
+            // route through the same actions.
             Button("Go to File…") {
                 performAction(.quickOpen)
+            }
+
+            Button("Command Palette…") {
+                performAction(.commandPalette)
             }
 
             Button("Go to Line…") {

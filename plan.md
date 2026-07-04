@@ -112,8 +112,16 @@ The highest-ROI work in the repo: three subsystems are ~80% built and 0% functio
 
 ### Phase 1 — Muscle-memory parity (2–3 weeks)
 
-5. **Command palette ⇧⌘P (C1)** — M
+5. ✅ **Command palette ⇧⌘P (C1)** — M — DONE (2026-07-04)
    - Reuse `QuickOpenView`'s window/list/ranking; back it with a command registry derived from the existing `KeyBinding` table + `AppState.perform(_:)` actions so every command shows its keybinding. `>` prefix in Cmd+P switches modes, matching VS Code.
+
+   **Implementation notes:**
+   - `KeyBinding.swift`: added `KeyAction.commandPalette` (`"workbench.action.showCommands"`), display name "Command Palette", grouped into the existing "Navigation" category alongside `.quickOpen`; added its VS Code default `KeyBinding(action: .commandPalette, combo: KeyCombo(key: "p", command: true, shift: true))` (⇧⌘P) to `KeyBinding.vscodeDefaults`. No new `SharedTypes.swift` type needed — reused `KeyBinding`/`KeyCombo` as-is.
+   - `AppState.swift`: extended the existing quick-open state instead of adding a parallel `showCommandPalette` bool — added `var quickOpenPrefill: String = ""`, and `presentQuickOpen(prefill:)` now seeds it ("" for `.quickOpen`, ">" for `.commandPalette`) before setting `showQuickOpen = true`. `perform(_:)` gained `case .commandPalette: presentQuickOpen(prefill: ">")`; dispatch reaches it through the same `dispatchKeyInfo` → `perform` path already used by every other binding (no key-monitor changes needed).
+   - `QuickOpenView.swift`: made mode-aware rather than adding a sibling view, so the two palettes share one visual system. `isCommandMode` = `query.hasPrefix(">")`; `.onAppear` seeds local `@State query` from `appState.quickOpenPrefill`. In command mode the list source switches to `appState.keyBindings` (the **effective**, override-aware bindings loaded by `KeyBindingService`/`installKeyMonitor`, not the raw `vscodeDefaults`) filtered by substring match against `action.displayName` with prefix-match ranked first (mirrors the existing file-search ranking). Added `CommandPaletteRow` (same padding/selection-highlight chrome as `QuickOpenRow`) showing displayName + category + the binding's `combo.displayString` (blank if unbound). Return invokes `Task { await appState.perform(action) }` then closes, matching how the key monitor itself dispatches. Arrow-key nav/auto-scroll/Escape all reused via a shared `currentResultCount`/`move`/`confirmSelection` that branch on `isCommandMode`.
+   - `AthenaCommands.swift`: added a "Command Palette…" item to the Go menu (`performAction(.commandPalette)`), matching the existing "Go to File…" wiring pattern, for menu-bar discoverability.
+   - Welcome screen's "⇧⌘P Command Palette" cheat-sheet entry now does something.
+   - Verified: `make build-debug` zero warnings/errors; `make test` — all 22 tests still pass (no new tests added — this is a UI-wiring change over existing, already-tested `perform(_:)`/`KeyBindingService` logic, not new business logic).
 6. **File watching (C4)** — M
    - New `actor FileWatchService` on `FSEventStream` (or `DispatchSource` per open file). Auto-refresh file tree; for open tabs: silently reload if not dirty, show "file changed on disk" bar if dirty. This prevents silent data loss — arguably Phase 0 severity.
 7. **Find & Replace, in-file and workspace (B4, C6)** — M

@@ -102,6 +102,9 @@ final class AppState {
     var claudePanelWidth: CGFloat = 340
     var keyBindings: [KeyBinding] = KeyBinding.vscodeDefaults
     var showQuickOpen: Bool = false
+    /// Seeds QuickOpenView's query on presentation — "" for plain file quick-open,
+    /// ">" to land directly in command-palette mode (⇧⌘P).
+    var quickOpenPrefill: String = ""
 
     // Blame data keyed by file path.
     var blameCache: [String: [Int: BlameLine]] = [:]
@@ -1112,6 +1115,8 @@ final class AppState {
             showClaudePanel.toggle()
         case .quickOpen:
             presentQuickOpen()
+        case .commandPalette:
+            presentQuickOpen(prefill: ">")
         case .nextTab:
             cycleTab(forward: true)
         case .previousTab:
@@ -1142,7 +1147,8 @@ final class AppState {
         NotificationCenter.default.post(name: .athenaEditorCommand, object: command)
     }
 
-    private func presentQuickOpen() {
+    private func presentQuickOpen(prefill: String = "") {
+        quickOpenPrefill = prefill
         showQuickOpen = true
     }
 

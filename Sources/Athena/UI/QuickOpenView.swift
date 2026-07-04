@@ -1,5 +1,6 @@
 // QuickOpenView.swift
-// Athena — ⌘P file-search palette (VS Code parity).
+// Athena — ⌘P file-search palette + ⇧⌘P command palette (VS Code parity).
+// A leading ">" switches the same palette into command mode.
 // Swift 6, strict concurrency.
 
 import SwiftUI
@@ -13,7 +14,32 @@ struct QuickOpenView: View {
     @State private var selectedIndex: Int = 0
     @FocusState private var searchFocused: Bool
 
+    // MARK: - Mode
+
+    /// Typing ">" as the first character switches the palette into command mode.
+    private var isCommandMode: Bool { query.hasPrefix(">") }
+
+    private var commandQuery: String {
+        String(query.dropFirst()).trimmingCharacters(in: .whitespaces)
+    }
+
     // MARK: - Filtered results
+
+    private var commandResults: [KeyBinding] {
+        let q = commandQuery.lowercased()
+        let all = appState.keyBindings
+        guard !q.isEmpty else {
+            return all.sorted { $0.action.displayName.localizedCompare($1.action.displayName) == .orderedAscending }
+        }
+        return all
+            .filter { $0.action.displayName.lowercased().contains(q) }
+            .sorted { a, b in
+                let aPrefix = a.action.displayName.lowercased().hasPrefix(q)
+                let bPrefix = b.action.displayName.lowercased().hasPrefix(q)
+                if aPrefix != bPrefix { return aPrefix }
+                return a.action.displayName.localizedCompare(b.action.displayName) == .orderedAscending
+            }
+    }
 
     private var results: [FileNode] {
         let all = appState.allFiles
@@ -49,14 +75,14 @@ struct QuickOpenView: View {
                         .foregroundStyle(.secondary)
                         .font(.system(size: appState.sf(14)))
 
-                    TextField("Go to file…", text: $query)
+                    TextField(isCommandMode ? "Type a command…" : "Go to file…", text: $query)
                         .font(.system(size: appState.sf(16)))
                         .textFieldStyle(.plain)
                         .focused($searchFocused)
                         // Arrow keys — navigate the list
                         .onKeyPress(.upArrow)   { move(-1); return .handled }
                         .onKeyPress(.downArrow) { move(1);  return .handled }
-                        // Return — open the selected file
+                        // Return — open the selected file / run the selected command
                         .onKeyPress(.return)    { confirmSelection(); return .handled }
                         // Escape — dismiss
                         .onKeyPress(.escape)    { close(); return .handled }
@@ -65,7 +91,38 @@ struct QuickOpenView: View {
                 .padding(.vertical, 10)
 
                 // Results or empty state
-                if results.isEmpty && !query.isEmpty {
+                if isCommandMode {
+                    if commandResults.isEmpty {
+                        Divider()
+                        Text("No matching commands")
+                            .foregroundStyle(.secondary)
+                            .font(.system(size: appState.sf(12)))
+                            .padding(20)
+                    } else {
+                        Divider()
+                        ScrollViewReader { proxy in
+                            ScrollView {
+                                LazyVStack(spacing: 0) {
+                                    ForEach(
+                                        Array(commandResults.prefix(200).enumerated()),
+                                        id: \.element.id
+                                    ) { i, binding in
+                                        CommandPaletteRow(
+                                            binding: binding,
+                                            isSelected: i == selectedIndex
+                                        )
+                                        .id(i)
+                                        .onTapGesture { invoke(binding.action) }
+                                    }
+                                }
+                            }
+                            .frame(maxHeight: 360)
+                            .onChange(of: selectedIndex) { _, idx in
+                                proxy.scrollTo(idx, anchor: .center)
+                            }
+                        }
+                    }
+                } else if results.isEmpty && !query.isEmpty {
                     Divider()
                     Text("No results for \"\(query)\"")
                         .foregroundStyle(.secondary)
@@ -103,25 +160,42 @@ struct QuickOpenView: View {
             .frame(width: 580)
             .padding(.top, 80)
         }
-        .onAppear { searchFocused = true }
+        .onAppear {
+            query = appState.quickOpenPrefill
+            searchFocused = true
+        }
         .onChange(of: query) { selectedIndex = 0 }
     }
 
     // MARK: - Actions
 
+    private var currentResultCount: Int {
+        isCommandMode ? min(commandResults.count, 200) : min(results.count, 200)
+    }
+
     private func move(_ delta: Int) {
-        let count = min(results.count, 200)
+        let count = currentResultCount
         guard count > 0 else { return }
         selectedIndex = (selectedIndex + delta + count) % count
     }
 
     private func confirmSelection() {
-        guard selectedIndex < results.count else { return }
-        open(results[selectedIndex])
+        if isCommandMode {
+            guard selectedIndex < commandResults.count else { return }
+            invoke(commandResults[selectedIndex].action)
+        } else {
+            guard selectedIndex < results.count else { return }
+            open(results[selectedIndex])
+        }
     }
 
     private func open(_ file: FileNode) {
         Task { await appState.openFile(file.url) }
+        close()
+    }
+
+    private func invoke(_ action: KeyAction) {
+        Task { await appState.perform(action) }
         close()
     }
 
@@ -174,5 +248,46 @@ private struct QuickOpenRow: View {
         let rel = String(dir.dropFirst(root.path.count))
         let trimmed = rel.hasPrefix("/") ? String(rel.dropFirst()) : rel
         return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+// MARK: - Command palette row
+
+private struct CommandPaletteRow: View {
+    let binding: KeyBinding
+    let isSelected: Bool
+    @Environment(AppState.self) private var appState
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "chevron.right")
+                .font(.system(size: appState.sf(11)))
+                .foregroundStyle(isSelected ? .white.opacity(0.8) : .secondary)
+                .frame(width: 14)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(binding.action.displayName)
+                    .font(.system(size: appState.sf(13)))
+                    .foregroundStyle(isSelected ? .white : .primary)
+                    .lineLimit(1)
+
+                Text(binding.action.category)
+                    .font(.system(size: appState.sf(11)))
+                    .foregroundStyle(isSelected ? .white.opacity(0.65) : .secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            if let combo = binding.combo {
+                Text(combo.displayString)
+                    .font(.system(size: appState.sf(11), weight: .medium))
+                    .foregroundStyle(isSelected ? .white.opacity(0.8) : .secondary)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(isSelected ? Color.accentColor : Color.clear)
+        .contentShape(Rectangle())
     }
 }

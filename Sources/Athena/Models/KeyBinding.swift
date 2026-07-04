@@ -19,6 +19,7 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
     case showClaude         = "workbench.view.claude"
     // Navigation
     case quickOpen          = "workbench.action.quickOpen"
+    case commandPalette     = "workbench.action.showCommands"
     case nextTab            = "workbench.action.nextEditor"
     case previousTab        = "workbench.action.previousEditor"
     case goToLine           = "workbench.action.gotoLine"
@@ -45,6 +46,7 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
         case .showDatabase:      return "Show DB Connections"
         case .showClaude:        return "Show Claude"
         case .quickOpen:         return "Quick Open"
+        case .commandPalette:    return "Command Palette"
         case .nextTab:           return "Next Editor"
         case .previousTab:       return "Previous Editor"
         case .goToLine:          return "Go to Line"
@@ -66,7 +68,7 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
              .showExplorer, .showSourceControl, .showSearch, .showDatabase, .showClaude,
              .zoomIn, .zoomOut, .resetZoom:
             return "View"
-        case .quickOpen, .nextTab, .previousTab, .goToLine:
+        case .quickOpen, .commandPalette, .nextTab, .previousTab, .goToLine:
             return "Navigation"
         case .findInFile, .toggleComment, .indentLine, .outdentLine:
             return "Editor"
@@ -202,6 +204,7 @@ struct KeyBinding: Identifiable, Codable, Sendable {
         KeyBinding(action: .showClaude,        combo: KeyCombo(key: "a",   command: true, shift: true)),
         // Navigation
         KeyBinding(action: .quickOpen,         combo: KeyCombo(key: "p",   command: true)),
+        KeyBinding(action: .commandPalette,    combo: KeyCombo(key: "p",   command: true, shift: true)),
         KeyBinding(action: .nextTab,           combo: KeyCombo(key: "tab", control: true)),
         KeyBinding(action: .previousTab,       combo: KeyCombo(key: "tab", shift: true, control: true)),
         KeyBinding(action: .goToLine,          combo: KeyCombo(key: "g",   control: true)),
