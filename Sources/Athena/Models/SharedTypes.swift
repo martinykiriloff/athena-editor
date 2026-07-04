@@ -322,6 +322,11 @@ struct TabModel: Identifiable, Sendable {
     var language: Language = .plaintext
     var cursorLine: Int = 1
     var cursorColumn: Int = 1
+    /// Set when the file backing this tab changed on disk while the tab had
+    /// unsaved edits (so the silent-reload path in `AppState` couldn't just
+    /// overwrite it). Drives the "file changed on disk" banner in
+    /// `CodeEditorView`.
+    var externallyModified: Bool = false
 
     static func untitled() -> TabModel {
         TabModel(title: "Untitled")
@@ -420,6 +425,19 @@ enum GhostTextProvider: String, CaseIterable, Codable, Sendable {
         case .ollama: return "Local — Ollama"
         }
     }
+}
+
+// MARK: - File Watching
+
+/// Emitted by `FileWatchService` when a watched file or directory changes on
+/// disk outside the app (git pull, another editor, a build tool).
+enum FileWatchEvent: Sendable, Equatable {
+    /// A watched file's contents were written to on disk.
+    case fileChanged(URL)
+    /// A watched file was deleted, or renamed away from the watched path.
+    case fileDeleted(URL)
+    /// A watched directory gained/lost/renamed an entry.
+    case directoryChanged(URL)
 }
 
 // MARK: - App Settings

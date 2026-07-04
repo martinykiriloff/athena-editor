@@ -75,6 +75,16 @@ struct CodeEditorView: View {
     }
 
     var body: some View {
+        VStack(spacing: 0) {
+            if tab.externallyModified {
+                ExternalChangeBanner(tab: tab)
+            }
+            editorRow
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var editorRow: some View {
         HStack(spacing: 0) {
             EditorView(
                 content: $tab.content,
@@ -159,6 +169,46 @@ struct CodeEditorView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+// MARK: - ExternalChangeBanner
+
+/// Shown above the editor when `tab`'s backing file changed on disk while the
+/// tab had unsaved edits (see `AppState.handleExternalFileChange`) — the
+/// silent-reload path can't run without discarding those edits, so this asks
+/// the user instead.
+private struct ExternalChangeBanner: View {
+    let tab: TabModel
+    @Environment(AppState.self) private var appState
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundColor(.orange)
+            Text("\(tab.title) changed on disk.")
+                .font(.system(size: 12))
+                .lineLimit(1)
+
+            Spacer()
+
+            Button("Keep My Changes") {
+                appState.keepLocalChanges(tab.id)
+            }
+            .buttonStyle(.plain)
+            .foregroundColor(.secondary)
+            .font(.system(size: 12))
+
+            Button("Reload") {
+                Task { await appState.reloadTabFromDisk(tab.id) }
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 32)
+        .background(Color.orange.opacity(0.15))
+        .overlay(alignment: .bottom) { Divider() }
     }
 }
 

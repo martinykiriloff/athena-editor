@@ -24,6 +24,7 @@ final class AppState {
     let blameService: GitBlameService
     let importResolver: ImportResolver
     let sfccService: SFCCService
+    let fileWatchService: FileWatchService
 
     // MARK: - UI State
 
@@ -158,6 +159,8 @@ final class AppState {
     @ObservationIgnored private var keyEventMonitor: Any? = nil
     @ObservationIgnored private var autoSaveTask:    Task<Void, Never>? = nil
     @ObservationIgnored private var diagnosticsTask: Task<Void, Never>? = nil
+    @ObservationIgnored private var fileWatchTask:   Task<Void, Never>? = nil
+    @ObservationIgnored private var fileTreeRebuildTask: Task<Void, Never>? = nil
 
     init(
         fileService: FileService = FileService(),
@@ -171,7 +174,8 @@ final class AppState {
         keyBindingService: KeyBindingService = KeyBindingService(),
         blameService: GitBlameService = GitBlameService(),
         importResolver: ImportResolver = ImportResolver(),
-        sfccService: SFCCService = SFCCService()
+        sfccService: SFCCService = SFCCService(),
+        fileWatchService: FileWatchService = FileWatchService()
     ) {
         self.fileService = fileService
         self.gitService = gitService
@@ -185,6 +189,7 @@ final class AppState {
         self.blameService = blameService
         self.importResolver = importResolver
         self.sfccService = sfccService
+        self.fileWatchService = fileWatchService
     }
 
     // MARK: - Methods
@@ -208,6 +213,7 @@ final class AppState {
             activeTabId = tab.id
             statusMessage = "Opened \(url.lastPathComponent)"
             AppState.registerRecentPath(url)
+            await fileWatchService.watchFile(url)
 
             // Bring up the language server (no-op if none is installed) and tell
             // it about the newly opened document. Fired unstructured so file
@@ -242,7 +248,10 @@ final class AppState {
         guard let index = openTabs.firstIndex(where: { $0.id == id }) else { return }
 
         if let url = openTabs[index].fileURL {
-            Task { await self.lspManager.didClose(fileURL: url) }
+            Task {
+                await self.lspManager.didClose(fileURL: url)
+                await self.fileWatchService.stopWatchingFile(url)
+            }
             diagnostics.removeValue(forKey: url)
         }
 
@@ -279,6 +288,9 @@ final class AppState {
         } catch {
             statusMessage = "Error building file tree: \(error.localizedDescription)"
         }
+
+        // Replaces any watch left over from a previously open workspace root.
+        await fileWatchService.watchDirectory(url)
 
         await refreshGitStatus()
         statusMessage = url.lastPathComponent
@@ -534,6 +546,9 @@ final class AppState {
             try await fileService.writeFile(url, content: tab.content)
             if let index = openTabs.firstIndex(where: { $0.id == tab.id }) {
                 openTabs[index].isDirty = false
+                // A completed save overwrites whatever triggered the
+                // "changed on disk" banner, so it's no longer relevant.
+                openTabs[index].externallyModified = false
                 tab = openTabs[index]
             }
             statusMessage = "Saved \(url.lastPathComponent)"
@@ -584,10 +599,15 @@ final class AppState {
                 openTabs[index].fileURL    = newURL
                 openTabs[index].title      = newURL.lastPathComponent
                 openTabs[index].isDirty    = false
+                openTabs[index].externallyModified = false
                 openTabs[index].language   = Language.detect(from: newURL)
             }
             statusMessage = "Saved \(newURL.lastPathComponent)"
             AppState.registerRecentPath(newURL)
+            if let previousURL = tab.fileURL {
+                await fileWatchService.stopWatchingFile(previousURL)
+            }
+            await fileWatchService.watchFile(newURL)
         } catch {
             statusMessage = "Save failed: \(error.localizedDescription)"
         }
@@ -600,6 +620,7 @@ final class AppState {
             if let index = openTabs.firstIndex(where: { $0.id == tab.id }) {
                 openTabs[index].content = content
                 openTabs[index].isDirty = false
+                openTabs[index].externallyModified = false
             }
             statusMessage = "Reverted \(url.lastPathComponent)"
         } catch {
@@ -612,6 +633,7 @@ final class AppState {
         // comment in openWorkspace(_:) for why an unawaited Task here would let a
         // stale, wrong-rootUri server keep serving the next-opened workspace.
         await lspManager.stopAllServers()
+        await fileWatchService.stopAll()
         diagnostics  = [:]
 
         workspace    = nil
@@ -950,6 +972,7 @@ final class AppState {
         {
             openTabs[index].content = content
             openTabs[index].isDirty = false
+            openTabs[index].externallyModified = false
         }
     }
 
@@ -1028,6 +1051,121 @@ final class AppState {
                 self.diagnostics[url] = diags
             }
         }
+    }
+
+    // MARK: - File Watching
+
+    /// Subscribes to `FileWatchService.eventStream()` for the app's lifetime.
+    /// Call once at launch, mirroring `startDiagnosticsConsumer()`.
+    func startFileWatchConsumer() {
+        guard fileWatchTask == nil else { return }
+        fileWatchTask = Task { [weak self] in
+            guard let self else { return }
+            let stream = await self.fileWatchService.eventStream()
+            for await event in stream {
+                await self.handleFileWatchEvent(event)
+            }
+        }
+    }
+
+    private func handleFileWatchEvent(_ event: FileWatchEvent) async {
+        switch event {
+        case .directoryChanged:
+            scheduleFileTreeRebuild()
+        case .fileChanged(let url):
+            await handleExternalFileChange(url)
+        case .fileDeleted(let url):
+            await handleExternalFileRemoval(url)
+        }
+    }
+
+    /// Debounces workspace-root directory events ~300ms before rebuilding the
+    /// file tree, so a burst of changes (e.g. `git pull`, `npm install`)
+    /// triggers one rebuild instead of one per touched file.
+    private func scheduleFileTreeRebuild() {
+        fileTreeRebuildTask?.cancel()
+        fileTreeRebuildTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+            await self?.refreshFileTree()
+        }
+    }
+
+    private func refreshFileTree() async {
+        guard let workspace else { return }
+        do {
+            fileTree = try await fileService.buildFileTree(workspace.rootURL)
+        } catch {
+            statusMessage = "Error refreshing file tree: \(error.localizedDescription)"
+        }
+    }
+
+    /// An open tab's backing file changed on disk. If the tab has no unsaved
+    /// edits, reload it silently (bypassing `updateTabContent` so this
+    /// doesn't re-mark the tab dirty or re-fire LSP `didChange` — same
+    /// reasoning as the reload in `discardChanges(path:)`). If the tab has
+    /// unsaved edits, don't clobber them — flag the tab so the editor can
+    /// show a "file changed on disk" banner instead.
+    private func handleExternalFileChange(_ url: URL) async {
+        guard let index = openTabs.firstIndex(where: { $0.fileURL == url }) else { return }
+
+        if openTabs[index].isDirty {
+            openTabs[index].externallyModified = true
+            return
+        }
+
+        guard let content = try? await fileService.readFile(url) else { return }
+        openTabs[index].content = content
+        openTabs[index].isDirty = false
+        openTabs[index].externallyModified = false
+    }
+
+    /// `FileWatchService` reports "gone" whenever the descriptor it was
+    /// watching stops resolving at `url` — which is ambiguous by itself: a
+    /// genuine delete looks identical to an atomic-save tool (`git checkout`,
+    /// many editors) that writes a temp file and renames it over the
+    /// original for durability. Disambiguate by checking whether the path
+    /// still exists: if it does, this was a rename-over — re-arm the watch
+    /// (the service already tore down the stale one) and treat it as an
+    /// ordinary content change; if it doesn't, the file is genuinely gone.
+    private func handleExternalFileRemoval(_ url: URL) async {
+        guard openTabs.contains(where: { $0.fileURL == url }) else { return }
+
+        if FileManager.default.fileExists(atPath: url.path) {
+            await fileWatchService.watchFile(url)
+            await handleExternalFileChange(url)
+        } else {
+            markFileOrphaned(url)
+        }
+    }
+
+    /// A truly-deleted file's tab: force it dirty rather than let a later
+    /// save silently fail — the status bar message is the signal for this
+    /// pass; the banner is reserved for the "changed while dirty" case above.
+    private func markFileOrphaned(_ url: URL) {
+        guard let index = openTabs.firstIndex(where: { $0.fileURL == url }) else { return }
+        openTabs[index].isDirty = true
+        statusMessage = "\(url.lastPathComponent) was deleted on disk — save to recreate it."
+    }
+
+    /// "Reload" banner action: discards local edits and reloads the tab's
+    /// content from disk.
+    func reloadTabFromDisk(_ id: UUID) async {
+        guard
+            let index = openTabs.firstIndex(where: { $0.id == id }),
+            let url = openTabs[index].fileURL,
+            let content = try? await fileService.readFile(url)
+        else { return }
+        openTabs[index].content = content
+        openTabs[index].isDirty = false
+        openTabs[index].externallyModified = false
+    }
+
+    /// "Keep My Changes" banner action: dismisses the notice without
+    /// touching the buffer — the next save overwrites the on-disk version.
+    func keepLocalChanges(_ id: UUID) {
+        guard let index = openTabs.firstIndex(where: { $0.id == id }) else { return }
+        openTabs[index].externallyModified = false
     }
 
     // MARK: - Key bindings
@@ -1160,6 +1298,7 @@ final class AppState {
                 try await fileService.writeFile(url, content: tab.content)
                 if let i = openTabs.firstIndex(where: { $0.id == tab.id }) {
                     openTabs[i].isDirty = false
+                    openTabs[i].externallyModified = false
                 }
             } catch {
                 statusMessage = "Error saving \(url.lastPathComponent): \(error.localizedDescription)"

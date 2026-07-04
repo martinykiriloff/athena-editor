@@ -25,6 +25,7 @@ struct AthenaApp: App {
                 .task {
                     await appState.loadSettings()
                     appState.startDiagnosticsConsumer()
+                    appState.startFileWatchConsumer()
                     await appState.restoreLastWorkspace()
                     await appState.installKeyMonitor()
                     // Auto-check for updates a few seconds after launch.
