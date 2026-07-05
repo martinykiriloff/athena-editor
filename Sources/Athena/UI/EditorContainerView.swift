@@ -70,6 +70,11 @@ struct CodeEditorView: View {
         return appState.debugBreakpoints[path] ?? []
     }
 
+    private var fileDiagnostics: [Diagnostic] {
+        guard let url = tab.fileURL else { return [] }
+        return appState.diagnostics[url] ?? []
+    }
+
     private var fileDebugLine: Int? {
         guard let path = tab.fileURL?.path,
               appState.debugCurrentFile?.path == path else { return nil }
@@ -102,6 +107,7 @@ struct CodeEditorView: View {
                 insertSpaces:     appState.editorInsertSpaces,
                 autoIndent:       appState.editorAutoIndent,
                 blameInfo:        blameInfo,
+                diagnostics:      fileDiagnostics,
                 fileURL:          tab.fileURL,
                 onCursorMove: { line, col in
                     guard let idx = appState.openTabs.firstIndex(where: { $0.id == tab.id }) else { return }

@@ -251,7 +251,7 @@ extension SFCCConnection {
 
 // MARK: - Diagnostics
 
-enum DiagnosticSeverity: Sendable {
+enum DiagnosticSeverity: Sendable, Equatable {
     case error, warning, information, hint
 }
 
@@ -478,13 +478,23 @@ struct TextSearchMatcher: Sendable {
 
 // MARK: - Diagnostics
 
-struct Diagnostic: Identifiable, Sendable {
+struct Diagnostic: Identifiable, Sendable, Equatable {
     let id = UUID()
     var fileURL: URL
     var line: Int
     var column: Int
     var message: String
     var severity: DiagnosticSeverity
+
+    /// Compares by content, not `id` — a fresh `publishDiagnostics` batch
+    /// reconstructs every `Diagnostic` with a new random `id` even when
+    /// nothing actually changed, so `EditorView`'s "did the diagnostics for
+    /// this file change" gate (used to decide whether to recompute squiggle
+    /// underlines) needs value equality here, not identity.
+    static func == (lhs: Diagnostic, rhs: Diagnostic) -> Bool {
+        lhs.fileURL == rhs.fileURL && lhs.line == rhs.line && lhs.column == rhs.column
+            && lhs.message == rhs.message && lhs.severity == rhs.severity
+    }
 }
 
 // MARK: - Chat

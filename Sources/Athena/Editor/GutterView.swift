@@ -12,11 +12,18 @@ final class GutterView: NSRulerView {
     // Updated from EditorView coordinator on every render.
     var breakpoints: Set<Int> = []      // 1-based line numbers with a breakpoint
     var debugLine:   Int? = nil         // 1-based line paused on (nil = not paused)
+    /// 1-based line numbers with a diagnostic worth a gutter marker, mapped
+    /// to the highest severity on that line. Only `.error`/`.warning` land
+    /// here — `.information`/`.hint` get no gutter glyph (see
+    /// `EditorView.gutterDiagnosticSeverities`), matching the editor's own
+    /// "no underline, or a very subtle one" treatment for those severities.
+    var diagnostics: [Int: DiagnosticSeverity] = [:]
     var onToggleBreakpoint: ((Int) -> Void)?
 
     // Visual constants
     private let gutterWidth:    CGFloat = 52
     private let dotRadius:      CGFloat = 5
+    private let diagDotRadius:  CGFloat = 2.5  // small, left-edge — clear of the breakpoint dot on the right
     private let numberRightPad: CGFloat = 22  // space for the dot column
 
     private let numberAttrs: [NSAttributedString.Key: Any] = [
@@ -101,6 +108,21 @@ final class GutterView: NSRulerView {
         if isDebugLine {
             NSColor.systemYellow.withAlphaComponent(0.25).setFill()
             NSRect(x: 0, y: rulerY, width: bounds.width, height: height).fill()
+        }
+
+        // Diagnostic marker — small dot at the gutter's left edge, independent
+        // of the breakpoint dot/debug arrow (drawn on the right, below), so
+        // a line can show both at once without collision.
+        if let severity = diagnostics[lineNum] {
+            let color: NSColor = severity == .error ? .systemRed : .systemOrange
+            let cx = diagDotRadius + 2
+            let cy = rulerY + height / 2
+            let path = NSBezierPath(ovalIn: NSRect(
+                x: cx - diagDotRadius, y: cy - diagDotRadius,
+                width: diagDotRadius * 2, height: diagDotRadius * 2
+            ))
+            color.setFill()
+            path.fill()
         }
 
         // Breakpoint dot or debug arrow

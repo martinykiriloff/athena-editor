@@ -24,6 +24,10 @@ struct EditorView: NSViewRepresentable {
     var insertSpaces:   Bool    = true
     var autoIndent:     Bool    = true
     var blameInfo: [Int: BlameLine] = [:]
+    /// Live LSP diagnostics for the file being edited (`AppState.diagnostics[fileURL]`),
+    /// used to paint squiggle underlines and feed the gutter's error/warning
+    /// dots and the hover tooltip's "show the diagnostic message" priority path.
+    var diagnostics: [Diagnostic] = []
     /// The URL of the file being edited — used for import path resolution.
     var fileURL: URL? = nil
     var onCursorMove: (Int, Int) -> Void = { _, _ in }
@@ -105,6 +109,7 @@ struct EditorView: NSViewRepresentable {
         gutter.clientView = textView
         gutter.breakpoints = breakpoints
         gutter.debugLine   = debugLine
+        gutter.diagnostics = Self.gutterDiagnosticSeverities(from: diagnostics)
         scrollView.verticalRulerView = gutter
         scrollView.hasVerticalRuler  = true
         scrollView.rulersVisible     = true
@@ -119,6 +124,8 @@ struct EditorView: NSViewRepresentable {
 
         textView.string = content
         context.coordinator.applyHighlighting(to: textView)
+        context.coordinator.currentDiagnostics = diagnostics
+        context.coordinator.updateDiagnosticHighlights(in: textView)
 
         // Inline blame annotation label.
         let blameLabel = NSTextField(labelWithString: "")
@@ -296,6 +303,40 @@ struct EditorView: NSViewRepresentable {
                 gutter.needsDisplay = true
             }
         }
+
+        // Fresh diagnostics from AppState (a new LSP `publishDiagnostics`
+        // batch) — recompute squiggle underlines and the gutter's
+        // error/warning dots. `Diagnostic.==` compares by content, not `id`,
+        // so this only fires when something actually changed.
+        if coord.currentDiagnostics != diagnostics {
+            coord.currentDiagnostics = diagnostics
+            coord.updateDiagnosticHighlights(in: textView)
+            if let gutter = coord.gutterView {
+                gutter.diagnostics = Self.gutterDiagnosticSeverities(from: diagnostics)
+                gutter.needsDisplay = true
+            }
+        }
+    }
+
+    /// Reduces the full diagnostics list to one highest-severity entry per
+    /// line, `.error`/`.warning` only — the subset `GutterView` draws a dot
+    /// for (see its `diagnostics` doc comment for why `.information`/`.hint`
+    /// are excluded).
+    private static func gutterDiagnosticSeverities(from diagnostics: [Diagnostic]) -> [Int: DiagnosticSeverity] {
+        var result: [Int: DiagnosticSeverity] = [:]
+        for diagnostic in diagnostics {
+            switch diagnostic.severity {
+            case .error:
+                result[diagnostic.line] = .error
+            case .warning:
+                if result[diagnostic.line] != .error {
+                    result[diagnostic.line] = .warning
+                }
+            case .information, .hint:
+                continue
+            }
+        }
+        return result
     }
 
     func makeCoordinator() -> Coordinator {
@@ -404,6 +445,20 @@ extension EditorView {
         // currently painted, so the next selection change can clear exactly
         // those without touching unrelated attributes (e.g. find-match highlights).
         private var highlightedBracketRanges: [NSRange] = []
+
+        // Diagnostic squiggle underlines — same temporary-layout-manager-attribute
+        // mechanism as bracket-pair matching above (`highlightedDiagnosticRanges`
+        // mirrors `highlightedBracketRanges`), and reapplied from the same
+        // `textViewDidChangeSelection` hook for the same reason: `applyHighlighting`'s
+        // per-keystroke `textStorage.setAttributedString` invalidates every
+        // temporary attribute in the edited range, and NSTextView always moves
+        // the selection when a character is typed, so that hook gets the
+        // "reapply after every edit" behavior for free. `currentDiagnostics` is
+        // the file's most recent `AppState.diagnostics` batch (kept in sync by
+        // `EditorView.updateNSView`/`makeNSView`), also consulted by the hover
+        // tooltip to prioritize a diagnostic's message over an LSP hover call.
+        var currentDiagnostics: [Diagnostic] = []
+        private var highlightedDiagnosticRanges: [NSRange] = []
 
         // Completion popup and ghost text
         let completionController = CompletionWindowController()
@@ -659,6 +714,16 @@ extension EditorView {
             guard let tv = textView else { return }
             let ns = tv.string as NSString
             guard charIndex >= 0, charIndex < ns.length else { return }
+
+            // A diagnostic squiggle at this position is a cheap local array
+            // lookup — check it first and prioritize it over an LSP hover
+            // round-trip (plan.md item 15, step 3).
+            if let diag = diagnostic(at: charIndex, in: ns) {
+                var actual = NSRange()
+                let rect = tv.firstRect(forCharacterRange: NSRange(location: charIndex, length: 1), actualRange: &actual)
+                hoverController.show(text: diag.message, near: rect)
+                return
+            }
 
             let (line, col) = position(in: tv.string, at: charIndex)
             guard let text = await parent.onRequestHover(line, col), !text.isEmpty else { return }
@@ -1229,6 +1294,7 @@ extension EditorView {
                 theme: parent.theme
             )
             updateBracketMatchHighlight(in: textView)
+            updateDiagnosticHighlights(in: textView)
         }
 
         // MARK: Blame annotation
@@ -1368,6 +1434,117 @@ extension EditorView {
                     if depth == 0 { return i }
                 }
                 i += step
+            }
+            return nil
+        }
+
+        // MARK: - Diagnostic squiggle underlines
+
+        /// Reapplies squiggle-underline temporary attributes for every entry
+        /// in `currentDiagnostics` — see the property's doc comment for why
+        /// this must be re-run after every keystroke (hooked into
+        /// `textViewDidChangeSelection` above) as well as whenever a fresh
+        /// diagnostics batch arrives from `AppState` (`EditorView.updateNSView`).
+        /// Mirrors `updateBracketMatchHighlight`'s clear-then-repaint shape.
+        /// Severity → style: `.error`/`.warning` get a themed dotted
+        /// underline; `.information` gets a thin, low-alpha one; `.hint` gets
+        /// none at all (plan.md item 15: "no underline, or a very subtle one,
+        /// for .information/.hint").
+        func updateDiagnosticHighlights(in textView: NSTextView) {
+            guard let lm = textView.layoutManager else { return }
+            let textLength = (textView.string as NSString).length
+            for r in highlightedDiagnosticRanges where NSMaxRange(r) <= textLength {
+                lm.removeTemporaryAttribute(.underlineStyle, forCharacterRange: r)
+                lm.removeTemporaryAttribute(.underlineColor, forCharacterRange: r)
+            }
+            highlightedDiagnosticRanges = []
+            guard !currentDiagnostics.isEmpty else { return }
+
+            let ns = textView.string as NSString
+            var newRanges: [NSRange] = []
+            for diagnostic in currentDiagnostics {
+                guard diagnostic.severity != .hint,
+                      let range = diagnosticRange(for: diagnostic, in: ns),
+                      NSMaxRange(range) <= textLength
+                else { continue }
+
+                let color: NSColor
+                let style: Int
+                switch diagnostic.severity {
+                case .error:
+                    color = currentTheme.diagnosticError
+                    style = NSUnderlineStyle.single.rawValue | NSUnderlineStyle.patternDot.rawValue
+                case .warning:
+                    color = currentTheme.diagnosticWarning
+                    style = NSUnderlineStyle.single.rawValue | NSUnderlineStyle.patternDot.rawValue
+                case .information:
+                    color = currentTheme.diagnosticInfo.withAlphaComponent(0.5)
+                    style = NSUnderlineStyle.single.rawValue
+                case .hint:
+                    continue  // excluded above; unreachable
+                }
+                lm.addTemporaryAttribute(.underlineStyle, value: style, forCharacterRange: range)
+                lm.addTemporaryAttribute(.underlineColor, value: color, forCharacterRange: range)
+                newRanges.append(range)
+            }
+            highlightedDiagnosticRanges = newRanges
+        }
+
+        /// Converts a diagnostic's 1-based line/column point into the
+        /// `NSRange` to underline. `Diagnostic` (see `SharedTypes.swift`)
+        /// carries only a point from the LSP, not an explicit end — so this
+        /// underlines the identifier/word touching that point
+        /// (`identifierWordRange`, shared with Cmd+Click/rename/⌘D) when
+        /// there is one, falling back to the whole line (minus its line
+        /// terminator) when the point doesn't land on an identifier.
+        private func diagnosticRange(for diagnostic: Diagnostic, in ns: NSString) -> NSRange? {
+            guard ns.length > 0 else { return nil }
+            let charIndex = characterIndex(forLine: diagnostic.line, column: diagnostic.column, in: ns)
+            guard charIndex >= 0, charIndex < ns.length else { return nil }
+
+            if let wordRange = identifierWordRange(in: ns, around: charIndex) {
+                return wordRange
+            }
+
+            let lineRange = ns.lineRange(for: NSRange(location: charIndex, length: 0))
+            var length = lineRange.length
+            if length > 0, ns.character(at: lineRange.location + length - 1) == 0x0A {
+                length -= 1
+                if length > 0, ns.character(at: lineRange.location + length - 1) == 0x0D { length -= 1 }
+            }
+            guard length > 0 else { return nil }
+            return NSRange(location: lineRange.location, length: length)
+        }
+
+        /// 1-based line/column → character offset. Same line-walking
+        /// convention as `EditorScrollProxy.jumpTo`/`promptGoToLine` (the
+        /// reverse of `position(in:at:)` below), duplicated here rather than
+        /// shared since none of those call sites have a common seam today.
+        private func characterIndex(forLine line: Int, column: Int, in ns: NSString) -> Int {
+            var idx = 0
+            var current = 1
+            while current < line && idx < ns.length {
+                let r = ns.range(of: "\n", options: [], range: NSRange(location: idx, length: ns.length - idx))
+                if r.location == NSNotFound { break }
+                idx = r.location + 1
+                current += 1
+            }
+            let lineRange = ns.lineRange(for: NSRange(location: min(idx, ns.length), length: 0))
+            return min(idx + max(1, column) - 1, NSMaxRange(lineRange))
+        }
+
+        /// The diagnostic (if any) whose squiggle range contains `charIndex` —
+        /// computed from the same `diagnosticRange` used to paint the
+        /// underlines, so "hovering the squiggle" can't disagree with where
+        /// it's actually drawn. Excludes `.hint` (never underlined, so never
+        /// hover-prioritized either). Checked first, and prioritized over an
+        /// LSP hover round-trip, from `triggerHover` below — it's just a
+        /// local array scan, no I/O.
+        private func diagnostic(at charIndex: Int, in ns: NSString) -> Diagnostic? {
+            for diagnostic in currentDiagnostics where diagnostic.severity != .hint {
+                if let range = diagnosticRange(for: diagnostic, in: ns), NSLocationInRange(charIndex, range) {
+                    return diagnostic
+                }
             }
             return nil
         }
