@@ -25,6 +25,7 @@ final class AppState {
     let importResolver: ImportResolver
     let sfccService: SFCCService
     let fileWatchService: FileWatchService
+    let prettierService: PrettierService
 
     // MARK: - UI State
 
@@ -175,7 +176,8 @@ final class AppState {
         blameService: GitBlameService = GitBlameService(),
         importResolver: ImportResolver = ImportResolver(),
         sfccService: SFCCService = SFCCService(),
-        fileWatchService: FileWatchService = FileWatchService()
+        fileWatchService: FileWatchService = FileWatchService(),
+        prettierService: PrettierService = PrettierService()
     ) {
         self.fileService = fileService
         self.gitService = gitService
@@ -190,6 +192,7 @@ final class AppState {
         self.importResolver = importResolver
         self.sfccService = sfccService
         self.fileWatchService = fileWatchService
+        self.prettierService = prettierService
     }
 
     // MARK: - Methods
@@ -599,12 +602,58 @@ final class AppState {
         try? await settingsService.setValue(sessions, for: "workspaceSessions")
     }
 
+    // MARK: - Format on Save
+
+    /// Web languages `PrettierService` is attempted for when LSP formatting
+    /// isn't available — matches the file types `NPMScriptService`/the
+    /// npm-script-runner feature already targets.
+    private static let prettierLanguages: Set<Language> = [
+        .typescript, .javascript, .css, .html, .json, .markdown,
+    ]
+
+    /// Runs the configured formatter(s) for `tab` when `editorFormatOnSave`
+    /// is on: the active LSP server first, then — for web languages only —
+    /// the workspace's own local Prettier install. Returns `nil` when
+    /// format-on-save is off, `tab` has no file URL, or neither formatter
+    /// produced a result (no server running / no local Prettier binary / no
+    /// changes needed); callers should keep the tab's existing content then.
+    private func formattedContent(for tab: TabModel) async -> String? {
+        guard editorFormatOnSave, let url = tab.fileURL else { return nil }
+
+        if let formatted = try? await lspManager.formatting(
+            fileURL: url,
+            content: tab.content,
+            tabSize: editorTabSize,
+            insertSpaces: editorInsertSpaces
+        ) {
+            return formatted
+        }
+
+        guard
+            AppState.prettierLanguages.contains(tab.language),
+            let ws = workspace
+        else { return nil }
+
+        return try? await prettierService.format(
+            fileURL: url,
+            content: tab.content,
+            workspaceRoot: ws.rootURL
+        )
+    }
+
     /// Saves the content of the currently active tab to disk.
     func saveActiveTab() async {
         guard
             var tab = activeTab,
             let url = tab.fileURL
         else { return }
+
+        if let formatted = await formattedContent(for: tab) {
+            tab.content = formatted
+            if let index = openTabs.firstIndex(where: { $0.id == tab.id }) {
+                openTabs[index].content = formatted
+            }
+        }
 
         do {
             try await fileService.writeFile(url, content: tab.content)
@@ -1432,12 +1481,23 @@ final class AppState {
         showQuickOpen = true
     }
 
-    /// Saves every open tab that has unsaved changes.
+    /// Saves every open tab that has unsaved changes, formatting each one
+    /// first (per-tab) when `editorFormatOnSave` is on — same formatters as
+    /// `saveActiveTab()`.
     func saveAllTabs() async {
         for tab in openTabs where tab.isDirty {
             guard let url = tab.fileURL else { continue }
+
+            var contentToSave = tab.content
+            if let formatted = await formattedContent(for: tab) {
+                contentToSave = formatted
+                if let i = openTabs.firstIndex(where: { $0.id == tab.id }) {
+                    openTabs[i].content = formatted
+                }
+            }
+
             do {
-                try await fileService.writeFile(url, content: tab.content)
+                try await fileService.writeFile(url, content: contentToSave)
                 if let i = openTabs.firstIndex(where: { $0.id == tab.id }) {
                     openTabs[i].isDirty = false
                     openTabs[i].externallyModified = false

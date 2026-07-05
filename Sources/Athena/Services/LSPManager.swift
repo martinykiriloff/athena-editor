@@ -146,6 +146,36 @@ actor LSPManager {
         return parseDefinition(from: data)
     }
 
+    /// Requests document formatting from the running language server for
+    /// `fileURL`'s language and applies the returned `TextEdit[]` to
+    /// `content`, returning the fully-formatted text. Returns `nil` when no
+    /// server is running, the server returns no edits (nothing to change),
+    /// or the response can't be parsed — callers should fall back to another
+    /// formatter (e.g. Prettier) in any of those cases.
+    func formatting(
+        fileURL: URL,
+        content: String,
+        tabSize: Int,
+        insertSpaces: Bool
+    ) async throws -> String? {
+        let language = Language.detect(from: fileURL)
+        guard servers[language] != nil else { return nil }
+
+        let params: [String: Any] = [
+            "textDocument": ["uri": fileURL.absoluteString],
+            "options": [
+                "tabSize": tabSize,
+                "insertSpaces": insertSpaces,
+            ],
+        ]
+
+        guard let data = try? await sendRequest(method: "textDocument/formatting", params: params, language: language) else {
+            return nil
+        }
+
+        return parseFormatting(from: data, originalContent: content)
+    }
+
     /// Notifies the language server that a file's content has changed.
     func didChange(fileURL: URL, content: String) async {
         let language = Language.detect(from: fileURL)
@@ -539,6 +569,40 @@ actor LSPManager {
 
         return DefinitionLocation(fileURL: url, line: line + 1, character: character + 1)
     }
+
+    /// Parses a `textDocument/formatting` response's `result` — an array of
+    /// `TextEdit` (`{range: {start, end}, newText}`) — and applies it to
+    /// `originalContent`. Returns `nil` when `result` is missing, `null`, or
+    /// an empty array (server ran but reports nothing to change).
+    private func parseFormatting(from data: Data, originalContent: String) -> String? {
+        guard
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let result = json["result"] as? [[String: Any]],
+            !result.isEmpty
+        else { return nil }
+
+        let edits: [LSPTextEdit] = result.compactMap { entry in
+            guard
+                let range     = entry["range"] as? [String: Any],
+                let start     = range["start"] as? [String: Any],
+                let end       = range["end"] as? [String: Any],
+                let startLine = start["line"] as? Int,
+                let startChar = start["character"] as? Int,
+                let endLine   = end["line"] as? Int,
+                let endChar   = end["character"] as? Int,
+                let newText   = entry["newText"] as? String
+            else { return nil }
+
+            return LSPTextEdit(
+                startLine: startLine, startCharacter: startChar,
+                endLine: endLine, endCharacter: endChar,
+                newText: newText
+            )
+        }
+
+        guard !edits.isEmpty else { return nil }
+        return applyLSPTextEdits(edits, to: originalContent)
+    }
 }
 
 // MARK: - Errors
@@ -554,4 +618,65 @@ private extension Data {
         guard count >= suffix.count else { return false }
         return self.suffix(suffix.count) == suffix
     }
+}
+
+// MARK: - TextEdit application (pure, unit-testable)
+
+/// One `TextEdit` from an LSP response: replace the half-open range
+/// `[start, end)` — expressed as 0-based `(line, character)` positions per
+/// the LSP spec, `character` counted in UTF-16 code units — with `newText`.
+struct LSPTextEdit: Sendable, Equatable {
+    var startLine: Int
+    var startCharacter: Int
+    var endLine: Int
+    var endCharacter: Int
+    var newText: String
+}
+
+/// Applies `edits` to `content` the way a real LSP client applies a
+/// `textDocument/formatting` response's `TextEdit[]`: every edit's
+/// `(line, character)` position is resolved to a UTF-16 offset against the
+/// *original*, unmodified `content` (LSP edits are always expressed relative
+/// to the document version the server was asked to format, never relative to
+/// each other), and the edits are then applied back-to-front — sorted by
+/// start offset descending — so replacing one range never shifts the offsets
+/// of an edit still waiting to be applied.
+func applyLSPTextEdits(_ edits: [LSPTextEdit], to content: String) -> String {
+    guard !edits.isEmpty else { return content }
+
+    let ns = content as NSString
+    let lineStarts = lspLineStartOffsets(in: content)
+
+    func offset(line: Int, character: Int) -> Int {
+        guard line >= 0, line < lineStarts.count else { return ns.length }
+        return min(lineStarts[line] + character, ns.length)
+    }
+
+    let ranged: [(range: NSRange, newText: String)] = edits.compactMap { edit in
+        let start = offset(line: edit.startLine, character: edit.startCharacter)
+        let end   = offset(line: edit.endLine, character: edit.endCharacter)
+        guard end >= start else { return nil }
+        return (NSRange(location: start, length: end - start), edit.newText)
+    }
+
+    let result = NSMutableString(string: content)
+    for (range, newText) in ranged.sorted(by: { $0.range.location > $1.range.location }) {
+        guard range.location + range.length <= result.length else { continue }
+        result.replaceCharacters(in: range, with: newText)
+    }
+    return result as String
+}
+
+/// Returns the UTF-16 offset at which each line starts in `content`
+/// (index 0 is always 0; index 1 is the offset right after the first
+/// `"\n"`, etc.) — used to convert LSP's 0-based `(line, character)`
+/// positions into absolute UTF-16 offsets into `content`.
+private func lspLineStartOffsets(in content: String) -> [Int] {
+    var offsets = [0]
+    var offset = 0
+    for unit in content.utf16 {
+        offset += 1
+        if unit == 0x0A { offsets.append(offset) }
+    }
+    return offsets
 }

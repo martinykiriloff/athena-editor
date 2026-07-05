@@ -456,3 +456,56 @@ struct TextSearchMatcherTests {
         #expect(replaced == "host:user")
     }
 }
+
+// MARK: - LSP TextEdit application (format-on-save)
+
+@Suite("applyLSPTextEdits")
+struct ApplyLSPTextEditsTests {
+    @Test func emptyEditsReturnsContentUnchanged() {
+        let content = "let x = 1;"
+        #expect(applyLSPTextEdits([], to: content) == content)
+    }
+
+    @Test func singleReplacementOnOneLine() {
+        // "let x=1;" -> replace "x=1" with "x = 1"
+        let content = "let x=1;"
+        let edit = LSPTextEdit(startLine: 0, startCharacter: 4, endLine: 0, endCharacter: 7, newText: "x = 1")
+        #expect(applyLSPTextEdits([edit], to: content) == "let x = 1;")
+    }
+
+    @Test func multipleEditsOnSameLineApplyInDescendingOrderWithoutInvalidatingOffsets() {
+        // Two independent single-character insertions on the same line — if
+        // applied in ascending (document) order without adjusting offsets,
+        // the second edit's stale offset would land in the wrong place after
+        // the first edit changes the string's length.
+        let content = "ab"
+        let insertAfterA = LSPTextEdit(startLine: 0, startCharacter: 1, endLine: 0, endCharacter: 1, newText: "X")
+        let insertAfterB = LSPTextEdit(startLine: 0, startCharacter: 2, endLine: 0, endCharacter: 2, newText: "Y")
+        let result = applyLSPTextEdits([insertAfterA, insertAfterB], to: content)
+        #expect(result == "aXbY")
+    }
+
+    @Test func editSpanningMultipleLines() {
+        let content = "line1\nline2\nline3"
+        // Replace "line2" entirely with "REPLACED"
+        let edit = LSPTextEdit(startLine: 1, startCharacter: 0, endLine: 1, endCharacter: 5, newText: "REPLACED")
+        #expect(applyLSPTextEdits([edit], to: content) == "line1\nREPLACED\nline3")
+    }
+
+    @Test func deletionEditRemovesRange() {
+        let content = "foo bar baz"
+        // Remove " bar" (characters 3..7)
+        let edit = LSPTextEdit(startLine: 0, startCharacter: 3, endLine: 0, endCharacter: 7, newText: "")
+        #expect(applyLSPTextEdits([edit], to: content) == "foo baz")
+    }
+
+    @Test func wholeDocumentReplacement() {
+        let content = "const x=1\nconst y=2\n"
+        let edit = LSPTextEdit(
+            startLine: 0, startCharacter: 0,
+            endLine: 2, endCharacter: 0,
+            newText: "const x = 1;\nconst y = 2;\n"
+        )
+        #expect(applyLSPTextEdits([edit], to: content) == "const x = 1;\nconst y = 2;\n")
+    }
+}
