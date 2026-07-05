@@ -16,6 +16,12 @@ final class AthenaTextView: NSTextView {
     /// Called on every mouseDown so the coordinator can dismiss popups before the click lands.
     var onMouseDown: (() -> Void)?
 
+    /// Called with the plain-text payload of every `insertText(_:replacementRange:)`
+    /// call (typing, paste, IME commit) before AppKit inserts it. Return `true` to
+    /// fully handle the insertion (auto-closing brackets/quotes, type-through,
+    /// wrap-selection); returning `false` lets the default insertion proceed.
+    var onInsertText: ((String) -> Bool)?
+
     /// Returns `true` when the character index is a Cmd-clickable navigation
     /// target (an import path or a code identifier). Drives the pointing-hand
     /// cursor shown while Cmd is held, mirroring VS Code.
@@ -38,6 +44,19 @@ final class AthenaTextView: NSTextView {
     override func keyDown(with event: NSEvent) {
         if onKeyDown?(event) == true { return }
         super.keyDown(with: event)
+    }
+
+    // MARK: - Text insertion (bracket/quote auto-close hook)
+
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        let inserted: String
+        switch string {
+        case let s as String:             inserted = s
+        case let s as NSAttributedString: inserted = s.string
+        default:                          inserted = ""
+        }
+        if !inserted.isEmpty, onInsertText?(inserted) == true { return }
+        super.insertText(string, replacementRange: replacementRange)
     }
 
     // MARK: - Cmd+hover cursor

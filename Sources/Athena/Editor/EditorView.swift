@@ -155,6 +155,11 @@ struct EditorView: NSViewRepresentable {
             coord?.handleKeyDown(event) ?? false
         }
 
+        // Wire bracket/quote auto-close, type-through, and wrap-selection.
+        textView.onInsertText = { [weak coord] str in
+            coord?.handleInsertText(str) ?? false
+        }
+
         // Dismiss popup and ghost text on any click so they don't block Cmd+Click.
         textView.onMouseDown = { [weak coord] in
             coord?.completionController.dismiss()
@@ -339,6 +344,11 @@ extension EditorView {
 
         // Gutter (line numbers + breakpoints)
         weak var gutterView: GutterView?
+
+        // Bracket-pair match highlight — the temporary layout-manager ranges
+        // currently painted, so the next selection change can clear exactly
+        // those without touching unrelated attributes (e.g. find-match highlights).
+        private var highlightedBracketRanges: [NSRange] = []
 
         // Completion popup and ghost text
         let completionController = CompletionWindowController()
@@ -665,6 +675,120 @@ extension EditorView {
             }
         }
 
+        // MARK: Bracket/quote auto-close, type-through, wrap-selection
+
+        /// Opening bracket → its closer. Shared with bracket-pair match
+        /// highlighting and the Backspace pair-delete below.
+        private static let bracketOpeners: [unichar: unichar] = [
+            0x28: 0x29,  // ( -> )
+            0x5B: 0x5D,  // [ -> ]
+            0x7B: 0x7D,  // { -> }
+        ]
+        /// Closing bracket → its opener (inverse of `bracketOpeners`).
+        private static let bracketClosers: [unichar: unichar] = [
+            0x29: 0x28, 0x5D: 0x5B, 0x7D: 0x7B,
+        ]
+        /// Quote characters, where the same glyph opens and closes a pair.
+        private static let quoteChars: Set<unichar> = [0x22, 0x27, 0x60]  // " ' `
+
+        /// Called by `AthenaTextView.insertText` before AppKit inserts typed
+        /// text. VS Code-style pairing:
+        /// - Typing an opener around a selection wraps the selection in the
+        ///   pair, preserving it inside.
+        /// - Typing an opener with no selection inserts the pair and leaves
+        ///   the caret between the two characters.
+        /// - Typing a closer (bracket or quote) "types through" when the very
+        ///   next character is already that exact closer, instead of
+        ///   inserting a duplicate.
+        /// Returns `true` to consume the insertion; `false` lets AppKit's
+        /// default `insertText` handle it (plain characters, multi-char
+        /// paste/IME commits are never routed here — see `AthenaTextView`).
+        func handleInsertText(_ string: String) -> Bool {
+            guard let tv = textView, string.utf16.count == 1, let ch = string.utf16.first else { return false }
+
+            let selection = tv.selectedRange()
+
+            // Wrap a non-empty selection in the pair rather than replacing it.
+            if selection.length > 0 {
+                if let closer = Self.bracketOpeners[ch] {
+                    wrapSelection(selection, opener: ch, closer: closer, in: tv)
+                    return true
+                }
+                if Self.quoteChars.contains(ch) {
+                    wrapSelection(selection, opener: ch, closer: ch, in: tv)
+                    return true
+                }
+                return false
+            }
+
+            let ns = tv.string as NSString
+            let cursor = selection.location
+            let nextChar: unichar? = cursor < ns.length ? ns.character(at: cursor) : nil
+
+            if let closer = Self.bracketOpeners[ch] {
+                insertPair(opener: ch, closer: closer, at: cursor, in: tv)
+                return true
+            }
+            if Self.quoteChars.contains(ch) {
+                if nextChar == ch {
+                    tv.setSelectedRange(NSRange(location: cursor + 1, length: 0))
+                    return true
+                }
+                insertPair(opener: ch, closer: ch, at: cursor, in: tv)
+                return true
+            }
+            if Self.bracketClosers[ch] != nil, nextChar == ch {
+                tv.setSelectedRange(NSRange(location: cursor + 1, length: 0))
+                return true
+            }
+            return false
+        }
+
+        /// Inserts `opener`+`closer` at `cursor` and leaves the caret between them.
+        private func insertPair(opener: unichar, closer: unichar, at cursor: Int, in tv: NSTextView) {
+            let text  = String(utf16CodeUnits: [opener, closer], count: 2)
+            let range = NSRange(location: cursor, length: 0)
+            guard tv.shouldChangeText(in: range, replacementString: text) else { return }
+            tv.replaceCharacters(in: range, with: text)
+            tv.didChangeText()
+            tv.setSelectedRange(NSRange(location: cursor + 1, length: 0))
+        }
+
+        /// Wraps `range` in `opener`/`closer`, keeping the original selection
+        /// preserved (now shifted one character in) inside the new pair.
+        private func wrapSelection(_ range: NSRange, opener: unichar, closer: unichar, in tv: NSTextView) {
+            let ns    = tv.string as NSString
+            let inner = ns.substring(with: range)
+            let text  = String(utf16CodeUnits: [opener], count: 1) + inner + String(utf16CodeUnits: [closer], count: 1)
+            guard tv.shouldChangeText(in: range, replacementString: text) else { return }
+            tv.replaceCharacters(in: range, with: text)
+            tv.didChangeText()
+            tv.setSelectedRange(NSRange(location: range.location + 1, length: range.length))
+        }
+
+        /// Deletes both characters of an auto-inserted empty pair (`()`,
+        /// `""`, …) in one step when the caret sits directly between them, so
+        /// Backspace doesn't leave a dangling closer behind. Called from
+        /// `handleKeyDown` on the Backspace key. Returns `true` if handled.
+        private func deleteEmptyPairIfPresent(in tv: NSTextView) -> Bool {
+            let selection = tv.selectedRange()
+            guard selection.length == 0, selection.location > 0 else { return false }
+            let ns = tv.string as NSString
+            let cursor = selection.location
+            guard cursor < ns.length else { return false }
+            let before = ns.character(at: cursor - 1)
+            let after  = ns.character(at: cursor)
+            let isEmptyPair = Self.bracketOpeners[before] == after
+                || (Self.quoteChars.contains(before) && before == after)
+            guard isEmptyPair else { return false }
+
+            let range = NSRange(location: cursor - 1, length: 2)
+            guard tv.shouldChangeText(in: range, replacementString: "") else { return false }
+            tv.replaceCharacters(in: range, with: "")
+            tv.didChangeText()
+            return true
+        }
+
         // MARK: Highlighting
 
         func applyHighlighting(to textView: NSTextView) {
@@ -764,6 +888,7 @@ extension EditorView {
                 fontFamily: parent.fontFamily,
                 theme: parent.theme
             )
+            updateBracketMatchHighlight(in: textView)
         }
 
         // MARK: Blame annotation
@@ -837,6 +962,76 @@ extension EditorView {
             }
         }
 
+        // MARK: - Bracket-pair match highlighting
+
+        /// Finds the bracket touching the caret — checking just after it,
+        /// then just before — and its matching partner via a simple
+        /// depth-counting scan (not a full parser: differently-typed nested
+        /// brackets aren't tracked), then paints a subtle background on both
+        /// via temporary layout-manager attributes. Mirrors
+        /// `FindReplaceController`'s match highlighting so it can't be
+        /// clobbered by, or clobber, syntax highlighting or the undo stack.
+        /// Called on every selection change; only the two previously-painted
+        /// ranges are cleared, so unrelated highlights (e.g. find matches)
+        /// are left alone.
+        private func updateBracketMatchHighlight(in textView: NSTextView) {
+            guard let lm = textView.layoutManager else { return }
+            let textLength = (textView.string as NSString).length
+            for r in highlightedBracketRanges where NSMaxRange(r) <= textLength {
+                lm.removeTemporaryAttribute(.backgroundColor, forCharacterRange: r)
+            }
+            highlightedBracketRanges = []
+
+            let selection = textView.selectedRange()
+            guard selection.length == 0 else { return }
+
+            let ns = textView.string as NSString
+            guard let (openIdx, closeIdx) = matchingBracketPair(in: ns, atCursor: selection.location) else { return }
+
+            let color  = currentTheme.selection.withAlphaComponent(0.55)
+            let ranges = [NSRange(location: openIdx, length: 1), NSRange(location: closeIdx, length: 1)]
+            for r in ranges { lm.addTemporaryAttribute(.backgroundColor, value: color, forCharacterRange: r) }
+            highlightedBracketRanges = ranges
+        }
+
+        /// Looks at the characters immediately after, then before, the caret;
+        /// if either is a bracket, scans for its matching partner and returns
+        /// both indices (opener first, closer second).
+        private func matchingBracketPair(in ns: NSString, atCursor cursor: Int) -> (Int, Int)? {
+            for idx in [cursor, cursor - 1] where idx >= 0 && idx < ns.length {
+                let c = ns.character(at: idx)
+                if let closer = Self.bracketOpeners[c],
+                   let match = scanForBracketMatch(in: ns, from: idx + 1, same: c, other: closer, step: 1) {
+                    return (idx, match)
+                }
+                if let opener = Self.bracketClosers[c],
+                   let match = scanForBracketMatch(in: ns, from: idx - 1, same: c, other: opener, step: -1) {
+                    return (match, idx)
+                }
+            }
+            return nil
+        }
+
+        /// Depth-counting scan in `step` direction (±1) from `start`: `same`
+        /// (the bracket kind scanned from) increments depth, `other` (its
+        /// partner) decrements it, and the index where depth returns to zero
+        /// is the match.
+        private func scanForBracketMatch(in ns: NSString, from start: Int, same: unichar, other: unichar, step: Int) -> Int? {
+            var depth = 1
+            var i = start
+            while i >= 0, i < ns.length {
+                let c = ns.character(at: i)
+                if c == same {
+                    depth += 1
+                } else if c == other {
+                    depth -= 1
+                    if depth == 0 { return i }
+                }
+                i += step
+            }
+            return nil
+        }
+
         // MARK: - Key interception (completion popup + ghost text)
 
         /// Called by `AthenaTextView.keyDown` before AppKit processes the event.
@@ -863,6 +1058,9 @@ extension EditorView {
                     }
                     return accepted
                 }
+                return false
+            case 51:  // Backspace — delete an auto-inserted empty pair as a unit
+                if let tv = textView, deleteEmptyPairIfPresent(in: tv) { return true }
                 return false
             case 53:  // Escape — dismiss popup, ghost text, or the find/replace bar
                 if completionController.isVisible  { completionController.dismiss(); return true }
