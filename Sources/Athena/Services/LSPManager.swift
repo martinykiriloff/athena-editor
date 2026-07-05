@@ -234,6 +234,32 @@ actor LSPManager {
         return parseFormatting(from: data, originalContent: content)
     }
 
+    /// Requests `textDocument/documentSymbol` for `fileURL` and normalizes the
+    /// response into a `[DocumentSymbol]` tree — feeds Go to Symbol (⇧⌘O),
+    /// the Outline sidebar panel, and the breadcrumbs bar (all reading from
+    /// `AppState.documentSymbols`, so this is the only request site). Per the
+    /// LSP spec `result` may be an array of hierarchical `DocumentSymbol`
+    /// (`{name, kind, range, selectionRange, children?}`) or the older, flat
+    /// `SymbolInformation` (`{name, kind, location: {uri, range}}`, never
+    /// nested) — servers don't distinguish which shape they'll send in the
+    /// response itself, so both are parsed directly off the JSON in
+    /// `parseDocumentSymbol`. Returns an empty array when no server is
+    /// running or the response can't be parsed.
+    func documentSymbols(fileURL: URL) async throws -> [DocumentSymbol] {
+        let language = Language.detect(from: fileURL)
+        guard servers[language] != nil else { return [] }
+
+        let params: [String: Any] = [
+            "textDocument": ["uri": fileURL.absoluteString],
+        ]
+
+        guard let data = try? await sendRequest(method: "textDocument/documentSymbol", params: params, language: language) else {
+            return []
+        }
+
+        return parseDocumentSymbols(from: data)
+    }
+
     /// Notifies the language server that a file's content has changed.
     func didChange(fileURL: URL, content: String) async {
         let language = Language.detect(from: fileURL)
@@ -693,6 +719,69 @@ actor LSPManager {
 
         guard !edits.isEmpty else { return nil }
         return applyLSPTextEdits(edits, to: originalContent)
+    }
+
+    /// Parses a `textDocument/documentSymbol` response's `result` array,
+    /// delegating each entry to `parseDocumentSymbol`. Returns an empty array
+    /// when `result` is missing or not an array.
+    private func parseDocumentSymbols(from data: Data) -> [DocumentSymbol] {
+        guard
+            let json   = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let result = json["result"] as? [[String: Any]]
+        else { return [] }
+
+        return result.compactMap(Self.parseDocumentSymbol)
+    }
+
+    /// Parses one entry of a `textDocument/documentSymbol` response into a
+    /// `DocumentSymbol`, handling both shapes the LSP spec allows: the
+    /// hierarchical `DocumentSymbol` (`range` + `selectionRange`, optional
+    /// `children`) and the older, flat `SymbolInformation` (`location: {uri,
+    /// range}`, no `selectionRange`, never nested) — servers that return the
+    /// latter get the symbol's full `range` reused as its `selectionRange`,
+    /// so "jump to symbol" still lands somewhere inside the symbol rather
+    /// than failing outright. Recurses into `children` for the hierarchical
+    /// form; converts 0-based LSP positions to this app's 1-based convention,
+    /// matching `LSPManager.location(from:)`.
+    private static func parseDocumentSymbol(_ entry: [String: Any]) -> DocumentSymbol? {
+        guard let name = entry["name"] as? String, let kind = entry["kind"] as? Int else { return nil }
+
+        let range: [String: Any]?
+        let selectionRange: [String: Any]?
+        if let r = entry["range"] as? [String: Any] {
+            range = r
+            selectionRange = (entry["selectionRange"] as? [String: Any]) ?? r
+        } else if let location = entry["location"] as? [String: Any], let r = location["range"] as? [String: Any] {
+            range = r
+            selectionRange = r
+        } else {
+            range = nil
+            selectionRange = nil
+        }
+
+        guard
+            let range, let selectionRange,
+            let rangeStart = range["start"] as? [String: Any],
+            let rangeStartLine = rangeStart["line"] as? Int,
+            let rangeEnd = range["end"] as? [String: Any],
+            let rangeEndLine = rangeEnd["line"] as? Int,
+            let selStart = selectionRange["start"] as? [String: Any],
+            let selLine = selStart["line"] as? Int,
+            let selChar = selStart["character"] as? Int
+        else { return nil }
+
+        let rawChildren = entry["children"] as? [[String: Any]]
+        let children = rawChildren.map { $0.compactMap(parseDocumentSymbol) }
+
+        return DocumentSymbol(
+            name: name,
+            kind: kind,
+            line: selLine + 1,
+            character: selChar + 1,
+            rangeStartLine: rangeStartLine + 1,
+            rangeEndLine: rangeEndLine + 1,
+            children: (children?.isEmpty ?? true) ? nil : children
+        )
     }
 
     /// Parses one LSP `TextEdit` (`{range: {start, end}, newText}`) object

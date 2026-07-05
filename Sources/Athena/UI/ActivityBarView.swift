@@ -16,6 +16,7 @@ struct ActivityBarView: View {
         (.git,      "arrow.triangle.branch"),
         (.search,   "magnifyingglass"),
         (.database, "cylinder.split.1x2.fill"),
+        (.outline,  "list.bullet.indent"),
         (.sfcc,     "cloud.fill"),
         (.npm,      "shippingbox.fill"),
         (.debug,    "ladybug.fill"),

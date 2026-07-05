@@ -27,6 +27,8 @@ struct SidebarView: View {
                     SearchPanelView()
                 case .database:
                     DBConnectionsView()
+                case .outline:
+                    OutlineView()
                 case .sfcc:
                     SFCCSidebarView()
                 case .npm:
@@ -51,6 +53,7 @@ struct SidebarView: View {
         case .git:        return "Source Control"
         case .search:     return "Search"
         case .database:   return "DB Connections"
+        case .outline:    return "Outline"
         case .sfcc:       return "SFCC Sandboxes"
         case .npm:        return "NPM Scripts"
         case .debug:      return "Run & Debug"

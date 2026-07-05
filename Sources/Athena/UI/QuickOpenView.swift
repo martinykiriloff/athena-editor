@@ -1,6 +1,7 @@
 // QuickOpenView.swift
 // Athena — ⌘P file-search palette + ⇧⌘P command palette (VS Code parity).
-// A leading ">" switches the same palette into command mode.
+// A leading ">" switches the same palette into command mode, "@" into
+// ⇧⌘O "Go to Symbol" mode.
 // Swift 6, strict concurrency.
 
 import SwiftUI
@@ -23,6 +24,22 @@ struct QuickOpenView: View {
         String(query.dropFirst()).trimmingCharacters(in: .whitespaces)
     }
 
+    /// Typing "@" as the first character switches the palette into "Go to
+    /// Symbol" mode (⇧⌘O, VS Code parity — `@` lists symbols in the current
+    /// file). Mutually exclusive with command mode: both check only the
+    /// first character, so only one can match at a time.
+    private var isSymbolMode: Bool { query.hasPrefix("@") }
+
+    private var symbolQuery: String {
+        String(query.dropFirst()).trimmingCharacters(in: .whitespaces)
+    }
+
+    private var placeholderText: String {
+        if isCommandMode { return "Type a command…" }
+        if isSymbolMode  { return "Go to symbol…" }
+        return "Go to file…"
+    }
+
     // MARK: - Filtered results
 
     private var commandResults: [KeyBinding] {
@@ -38,6 +55,24 @@ struct QuickOpenView: View {
                 let bPrefix = b.action.displayName.lowercased().hasPrefix(q)
                 if aPrefix != bPrefix { return aPrefix }
                 return a.action.displayName.localizedCompare(b.action.displayName) == .orderedAscending
+            }
+    }
+
+    /// The active tab's document symbols, flattened depth-first (see
+    /// `flattenDocumentSymbols`) and filtered by name — the flat list keeps
+    /// filtering simple while `depth` (rendered as indentation by
+    /// `SymbolPaletteRow`) keeps the hierarchy visible.
+    private var symbolResults: [(symbol: DocumentSymbol, depth: Int)] {
+        let flattened = flattenDocumentSymbols(appState.documentSymbols)
+        let q = symbolQuery.lowercased()
+        guard !q.isEmpty else { return flattened }
+        return flattened
+            .filter { $0.symbol.name.lowercased().contains(q) }
+            .sorted { a, b in
+                let aPrefix = a.symbol.name.lowercased().hasPrefix(q)
+                let bPrefix = b.symbol.name.lowercased().hasPrefix(q)
+                if aPrefix != bPrefix { return aPrefix }
+                return a.symbol.name.localizedCompare(b.symbol.name) == .orderedAscending
             }
     }
 
@@ -75,7 +110,7 @@ struct QuickOpenView: View {
                         .foregroundStyle(.secondary)
                         .font(.system(size: appState.sf(14)))
 
-                    TextField(isCommandMode ? "Type a command…" : "Go to file…", text: $query)
+                    TextField(placeholderText, text: $query)
                         .font(.system(size: appState.sf(16)))
                         .textFieldStyle(.plain)
                         .focused($searchFocused)
@@ -113,6 +148,38 @@ struct QuickOpenView: View {
                                         )
                                         .id(i)
                                         .onTapGesture { invoke(binding.action) }
+                                    }
+                                }
+                            }
+                            .frame(maxHeight: 360)
+                            .onChange(of: selectedIndex) { _, idx in
+                                proxy.scrollTo(idx, anchor: .center)
+                            }
+                        }
+                    }
+                } else if isSymbolMode {
+                    if symbolResults.isEmpty {
+                        Divider()
+                        Text("No matching symbols")
+                            .foregroundStyle(.secondary)
+                            .font(.system(size: appState.sf(12)))
+                            .padding(20)
+                    } else {
+                        Divider()
+                        ScrollViewReader { proxy in
+                            ScrollView {
+                                LazyVStack(spacing: 0) {
+                                    ForEach(
+                                        Array(symbolResults.prefix(200).enumerated()),
+                                        id: \.element.symbol.id
+                                    ) { i, entry in
+                                        SymbolPaletteRow(
+                                            symbol: entry.symbol,
+                                            depth: entry.depth,
+                                            isSelected: i == selectedIndex
+                                        )
+                                        .id(i)
+                                        .onTapGesture { selectSymbol(entry.symbol) }
                                     }
                                 }
                             }
@@ -170,7 +237,9 @@ struct QuickOpenView: View {
     // MARK: - Actions
 
     private var currentResultCount: Int {
-        isCommandMode ? min(commandResults.count, 200) : min(results.count, 200)
+        if isCommandMode { return min(commandResults.count, 200) }
+        if isSymbolMode  { return min(symbolResults.count, 200) }
+        return min(results.count, 200)
     }
 
     private func move(_ delta: Int) {
@@ -183,6 +252,9 @@ struct QuickOpenView: View {
         if isCommandMode {
             guard selectedIndex < commandResults.count else { return }
             invoke(commandResults[selectedIndex].action)
+        } else if isSymbolMode {
+            guard selectedIndex < symbolResults.count else { return }
+            selectSymbol(symbolResults[selectedIndex].symbol)
         } else {
             guard selectedIndex < results.count else { return }
             open(results[selectedIndex])
@@ -196,6 +268,21 @@ struct QuickOpenView: View {
 
     private func invoke(_ action: KeyAction) {
         Task { await appState.perform(action) }
+        close()
+    }
+
+    /// Jumps to `symbol` in the active tab's file via the same
+    /// `AppState.navigateTo`/`EditorScrollProxy.jumpTo` cross-view navigation
+    /// path Find All References and Rename Symbol already use — no separate
+    /// jump implementation for Go to Symbol.
+    private func selectSymbol(_ symbol: DocumentSymbol) {
+        if let fileURL = appState.activeTab?.fileURL {
+            Task {
+                await appState.navigateTo(
+                    DefinitionLocation(fileURL: fileURL, line: symbol.line, character: symbol.character)
+                )
+            }
+        }
         close()
     }
 
@@ -284,6 +371,37 @@ private struct CommandPaletteRow: View {
                     .font(.system(size: appState.sf(11), weight: .medium))
                     .foregroundStyle(isSelected ? .white.opacity(0.8) : .secondary)
             }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(isSelected ? Color.accentColor : Color.clear)
+        .contentShape(Rectangle())
+    }
+}
+
+// MARK: - Symbol palette row (Go to Symbol, ⇧⌘O)
+
+private struct SymbolPaletteRow: View {
+    let symbol: DocumentSymbol
+    let depth: Int
+    let isSelected: Bool
+    @Environment(AppState.self) private var appState
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Color.clear.frame(width: CGFloat(depth) * 14, height: 1)
+
+            Image(systemName: symbol.iconName)
+                .font(.system(size: appState.sf(11)))
+                .foregroundStyle(isSelected ? .white.opacity(0.8) : .secondary)
+                .frame(width: 14)
+
+            Text(symbol.name)
+                .font(.system(size: appState.sf(13)))
+                .foregroundStyle(isSelected ? .white : .primary)
+                .lineLimit(1)
+
+            Spacer()
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)

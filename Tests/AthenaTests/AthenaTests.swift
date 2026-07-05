@@ -509,3 +509,85 @@ struct ApplyLSPTextEditsTests {
         #expect(applyLSPTextEdits([edit], to: content) == "const x = 1;\nconst y = 2;\n")
     }
 }
+
+// MARK: - Document Symbols (Go to Symbol / Outline / Breadcrumbs)
+
+@Suite("flattenDocumentSymbols")
+struct FlattenDocumentSymbolsTests {
+    private func symbol(
+        _ name: String,
+        line: Int = 1,
+        rangeStart: Int = 1,
+        rangeEnd: Int = 1,
+        children: [DocumentSymbol]? = nil
+    ) -> DocumentSymbol {
+        DocumentSymbol(
+            name: name, kind: 12, line: line, character: 1,
+            rangeStartLine: rangeStart, rangeEndLine: rangeEnd, children: children
+        )
+    }
+
+    @Test func emptyTreeYieldsEmptyList() {
+        #expect(flattenDocumentSymbols([]).isEmpty)
+    }
+
+    @Test func flatTreeYieldsDepthZeroForEveryEntry() {
+        let symbols = [symbol("a"), symbol("b")]
+        let flattened = flattenDocumentSymbols(symbols)
+        #expect(flattened.map(\.symbol.name) == ["a", "b"])
+        #expect(flattened.allSatisfy { $0.depth == 0 })
+    }
+
+    @Test func nestedTreeIsDepthFirstWithIncreasingDepth() {
+        let grandchild = symbol("grandchild")
+        let child = symbol("child", children: [grandchild])
+        let sibling = symbol("sibling")
+        let root = symbol("root", children: [child, sibling])
+
+        let flattened = flattenDocumentSymbols([root])
+        #expect(flattened.map(\.symbol.name) == ["root", "child", "grandchild", "sibling"])
+        #expect(flattened.map(\.depth) == [0, 1, 2, 1])
+    }
+}
+
+@Suite("breadcrumbSymbolPath")
+struct BreadcrumbSymbolPathTests {
+    private func symbol(
+        _ name: String,
+        rangeStart: Int,
+        rangeEnd: Int,
+        children: [DocumentSymbol]? = nil
+    ) -> DocumentSymbol {
+        DocumentSymbol(
+            name: name, kind: 5, line: rangeStart, character: 1,
+            rangeStartLine: rangeStart, rangeEndLine: rangeEnd, children: children
+        )
+    }
+
+    @Test func lineOutsideEverySymbolYieldsEmptyPath() {
+        let symbols = [symbol("Foo", rangeStart: 1, rangeEnd: 10)]
+        #expect(breadcrumbSymbolPath(in: symbols, containingLine: 20).isEmpty)
+    }
+
+    @Test func lineInsideOuterOnlyYieldsSingleSegment() {
+        let method = symbol("bar", rangeStart: 3, rangeEnd: 5)
+        let outer = symbol("Foo", rangeStart: 1, rangeEnd: 10, children: [method])
+        let path = breadcrumbSymbolPath(in: [outer], containingLine: 8)
+        #expect(path.map(\.name) == ["Foo"])
+    }
+
+    @Test func lineInsideNestedSymbolYieldsFullChain() {
+        let method = symbol("bar", rangeStart: 3, rangeEnd: 5)
+        let outer = symbol("Foo", rangeStart: 1, rangeEnd: 10, children: [method])
+        let path = breadcrumbSymbolPath(in: [outer], containingLine: 4)
+        #expect(path.map(\.name) == ["Foo", "bar"])
+    }
+
+    @Test func deepestSiblingMatchWinsAtEachLevel() {
+        // Two top-level symbols; the line falls inside the second one only.
+        let first  = symbol("First",  rangeStart: 1, rangeEnd: 5)
+        let second = symbol("Second", rangeStart: 6, rangeEnd: 10)
+        let path = breadcrumbSymbolPath(in: [first, second], containingLine: 7)
+        #expect(path.map(\.name) == ["Second"])
+    }
+}

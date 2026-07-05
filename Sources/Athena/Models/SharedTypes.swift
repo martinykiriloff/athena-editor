@@ -8,7 +8,7 @@ import SwiftUI
 // MARK: - Panels
 
 enum SidebarPanel: String, Sendable, CaseIterable {
-    case files, git, search, database, sfcc, npm, debug
+    case files, git, search, database, sfcc, npm, debug, outline
 }
 
 // MARK: - Debugger
@@ -529,6 +529,95 @@ struct DefinitionLocation: Sendable, Equatable {
 struct NavigationRequest: Sendable, Equatable {
     var id: UUID
     var location: DefinitionLocation
+}
+
+// MARK: - Document Symbols (Go to Symbol / Outline / Breadcrumbs)
+
+/// One symbol from a `textDocument/documentSymbol` response, normalized from
+/// either shape the LSP spec allows — hierarchical `DocumentSymbol` (nested
+/// `children`) or the older, flat `SymbolInformation` (`location` instead of
+/// `range`/`selectionRange`, never nested) — see
+/// `LSPManager.documentSymbols(fileURL:)`. `line`/`character` are 1-based,
+/// this app's convention, and mark the symbol's *selection range* (the name
+/// token itself) — where "jump to symbol" lands, matching VS Code. `kind` is
+/// kept as the raw LSP `SymbolKind` integer rather than a Swift enum case
+/// (mirroring how `LSPManager.completionKindName` maps completion kinds) —
+/// `iconName` below is the readable lookup built on top of it.
+struct DocumentSymbol: Identifiable, Sendable, Equatable {
+    let id = UUID()
+    var name: String
+    var kind: Int
+    var line: Int
+    var character: Int
+    /// 1-based, inclusive start/end line of the symbol's full extent (e.g. a
+    /// function's whole body, not just its name) — used by
+    /// `AppState.breadcrumbPath` to test whether the cursor sits inside this
+    /// symbol.
+    var rangeStartLine: Int
+    var rangeEndLine: Int
+    /// `nil` for leaf symbols (no nested children) rather than an empty
+    /// array, so SwiftUI's `List(_:children:)`/`OutlineGroup` (used by
+    /// `OutlineView`) doesn't draw a disclosure triangle that expands to
+    /// nothing.
+    var children: [DocumentSymbol]?
+
+    /// SF Symbol name for `kind`, one per LSP `SymbolKind` (1…26). Falls back
+    /// to a generic glyph for anything outside that range.
+    var iconName: String {
+        switch kind {
+        case 1:  return "doc.text"                        // File
+        case 2:  return "shippingbox"                      // Module
+        case 3:  return "n.square"                         // Namespace
+        case 4:  return "shippingbox.fill"                 // Package
+        case 5:  return "c.square.fill"                    // Class
+        case 6:  return "m.square.fill"                    // Method
+        case 7:  return "p.square.fill"                    // Property
+        case 8:  return "f.square"                         // Field
+        case 9:  return "hammer.fill"                      // Constructor
+        case 10: return "e.square.fill"                    // Enum
+        case 11: return "i.square.fill"                    // Interface
+        case 12: return "function"                         // Function
+        case 13: return "v.square"                         // Variable
+        case 14: return "v.square.fill"                    // Constant
+        case 15: return "textformat.abc"                   // String
+        case 16: return "number"                            // Number
+        case 17: return "checkmark.square"                  // Boolean
+        case 18: return "square.stack"                      // Array
+        case 19: return "cube"                              // Object
+        case 20: return "key.fill"                          // Key
+        case 21: return "circle.slash"                      // Null
+        case 22: return "e.square"                          // EnumMember
+        case 23: return "s.square.fill"                     // Struct
+        case 24: return "bolt.fill"                         // Event
+        case 25: return "plus.forwardslash.minus"           // Operator
+        case 26: return "t.square"                          // TypeParameter
+        default: return "questionmark.square"
+        }
+    }
+}
+
+/// Flattens a document-symbol tree into a depth-first list, pairing each
+/// symbol with its nesting depth (0 = top-level) — used by the ⇧⌘O "Go to
+/// Symbol" palette mode, which filters/displays a single flat list but still
+/// wants to convey structure via indentation.
+func flattenDocumentSymbols(_ symbols: [DocumentSymbol], depth: Int = 0) -> [(symbol: DocumentSymbol, depth: Int)] {
+    symbols.flatMap { symbol in
+        [(symbol, depth)] + flattenDocumentSymbols(symbol.children ?? [], depth: depth + 1)
+    }
+}
+
+/// Walks `symbols` to find the chain of symbols (outermost → innermost)
+/// whose range contains `line` — the deepest containing match wins at each
+/// level. Used by `AppState.breadcrumbPath` to compute the breadcrumbs bar
+/// from the cursor's current line. Returns an empty array when `line` falls
+/// outside every symbol's range. Named distinctly from
+/// `AppState.breadcrumbPath` (the computed property callers actually read)
+/// to avoid a same-name property/function pair in the same module.
+func breadcrumbSymbolPath(in symbols: [DocumentSymbol], containingLine line: Int) -> [DocumentSymbol] {
+    for symbol in symbols where line >= symbol.rangeStartLine && line <= symbol.rangeEndLine {
+        return [symbol] + breadcrumbSymbolPath(in: symbol.children ?? [], containingLine: line)
+    }
+    return []
 }
 
 // MARK: - Identifier word matching

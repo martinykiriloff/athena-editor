@@ -105,7 +105,8 @@ final class AppState {
     var keyBindings: [KeyBinding] = KeyBinding.vscodeDefaults
     var showQuickOpen: Bool = false
     /// Seeds QuickOpenView's query on presentation — "" for plain file quick-open,
-    /// ">" to land directly in command-palette mode (⇧⌘P).
+    /// ">" to land directly in command-palette mode (⇧⌘P), "@" for Go to
+    /// Symbol (⇧⌘O).
     var quickOpenPrefill: String = ""
 
     // MARK: - Find All References / Rename Symbol
@@ -123,6 +124,32 @@ final class AppState {
     /// `EditorView`/`Coordinator.consumePendingNavigation` once the target
     /// file's content is loaded into the editor.
     var pendingNavigationTarget: NavigationRequest?
+
+    // MARK: - Document Symbols (Go to Symbol / Outline / Breadcrumbs)
+
+    /// The active tab's document-symbol tree — the single source the ⇧⌘O
+    /// "Go to Symbol" palette mode, the Outline sidebar panel, and the
+    /// breadcrumbs bar (via `breadcrumbPath`) all read from, so none of them
+    /// issue their own LSP requests. Kept in sync by `loadDocumentSymbols(for:)`
+    /// (refetched on every tab switch) and `scheduleDocumentSymbolsRefresh`
+    /// (debounced after edits).
+    var documentSymbols: [DocumentSymbol] = []
+    /// Per-file cache keyed by path, so switching back to a previously-visited
+    /// tab shows its last-known symbol tree instantly while a fresh request
+    /// for it is still in flight, rather than a blank Outline/breadcrumb for
+    /// the round-trip.
+    @ObservationIgnored private var documentSymbolsCache: [String: [DocumentSymbol]] = [:]
+    @ObservationIgnored private var documentSymbolsRefreshTask: Task<Void, Never>?
+
+    /// The chain of symbols (outermost → innermost) containing the active
+    /// tab's cursor line, derived from `documentSymbols` — feeds the
+    /// breadcrumbs bar in `EditorContainerView`. Empty when there's no active
+    /// tab, no symbols loaded yet, or the cursor sits outside every symbol's
+    /// range.
+    var breadcrumbPath: [DocumentSymbol] {
+        guard let line = activeTab?.cursorLine else { return [] }
+        return breadcrumbSymbolPath(in: documentSymbols, containingLine: line)
+    }
 
     // Blame data keyed by file path.
     var blameCache: [String: [Int: BlameLine]] = [:]
@@ -282,6 +309,11 @@ final class AppState {
         if activeTabId == id {
             if openTabs.isEmpty {
                 activeTabId = nil
+                // No `CodeEditorView` is rendered with no tabs open, so its
+                // `.task(id: tab.id)` won't fire to refresh this — clear it
+                // directly so the Outline panel / breadcrumbs / Go to Symbol
+                // don't keep showing the closed tab's stale symbol tree.
+                documentSymbols = []
             } else {
                 // Prefer the tab now at the same index; fall back to the last tab.
                 let newIndex = min(index, openTabs.count - 1)
@@ -349,6 +381,48 @@ final class AppState {
     func invalidateBlame(for fileURL: URL) {
         blameCache.removeValue(forKey: fileURL.path)
         Task { await blameService.invalidate(fileURL: fileURL) }
+    }
+
+    // MARK: - Document Symbols (Go to Symbol / Outline / Breadcrumbs)
+
+    /// Fetches `textDocument/documentSymbol` for `tab`'s file and populates
+    /// `documentSymbols`. Called from `CodeEditorView`'s `.task(id: tab.id)`
+    /// (mirroring `loadBlame(for:)`'s own per-tab task), so it refetches on
+    /// every tab switch rather than trusting a possibly-stale tree. Shows the
+    /// cached tree for this file (if any) immediately so switching back to a
+    /// previously-visited tab doesn't blank the Outline panel/breadcrumbs for
+    /// the round-trip, then replaces it with the fresh result — unless the
+    /// user has already switched to a different tab by the time the response
+    /// lands, in which case that tab's own fetch (or debounce) owns what's
+    /// displayed.
+    func loadDocumentSymbols(for tab: TabModel) async {
+        guard let fileURL = tab.fileURL else {
+            documentSymbols = []
+            return
+        }
+        documentSymbols = documentSymbolsCache[fileURL.path] ?? []
+
+        guard let symbols = try? await lspManager.documentSymbols(fileURL: fileURL) else { return }
+        guard !Task.isCancelled, activeTabId == tab.id else { return }
+        documentSymbolsCache[fileURL.path] = symbols
+        documentSymbols = symbols
+    }
+
+    /// Debounces a `textDocument/documentSymbol` refetch 800 ms after the
+    /// last keystroke in the active tab's file (called from
+    /// `updateTabContent`) — symbols don't need to track every keystroke,
+    /// only be eventually consistent, matching the debounce style
+    /// `EditorView.Coordinator` already uses for ghost text / completions.
+    private func scheduleDocumentSymbolsRefresh(tabId: UUID, fileURL: URL) {
+        documentSymbolsRefreshTask?.cancel()
+        documentSymbolsRefreshTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            guard !Task.isCancelled, let self else { return }
+            guard let symbols = try? await self.lspManager.documentSymbols(fileURL: fileURL) else { return }
+            guard !Task.isCancelled, self.activeTabId == tabId else { return }
+            self.documentSymbolsCache[fileURL.path] = symbols
+            self.documentSymbols = symbols
+        }
     }
 
     // MARK: - Settings persistence
@@ -1113,6 +1187,9 @@ final class AppState {
 
         if let url = openTabs[index].fileURL {
             Task { await self.lspManager.didChange(fileURL: url, content: content) }
+            if id == activeTabId {
+                scheduleDocumentSymbolsRefresh(tabId: id, fileURL: url)
+            }
         }
 
         // Auto-save: debounce 1 s after the last keystroke.
@@ -1678,6 +1755,8 @@ final class AppState {
             presentQuickOpen()
         case .commandPalette:
             presentQuickOpen(prefill: ">")
+        case .goToSymbol:
+            presentQuickOpen(prefill: "@")
         case .nextTab:
             cycleTab(forward: true)
         case .previousTab:

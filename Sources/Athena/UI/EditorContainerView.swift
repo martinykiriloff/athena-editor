@@ -26,6 +26,7 @@ struct EditorContainerView: View {
             }
 
             if appState.activeTab != nil {
+                BreadcrumbBarView()
                 CodeEditorView(tab: activeTabBinding)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -182,6 +183,7 @@ struct CodeEditorView: View {
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .task(id: tab.id) { await appState.loadBlame(for: tab) }
+            .task(id: tab.id) { await appState.loadDocumentSymbols(for: tab) }
             .overlay(alignment: .topTrailing) {
                 if let controller = findReplaceController, controller.isVisible {
                     FindReplaceBarView(controller: controller)
@@ -205,6 +207,61 @@ struct CodeEditorView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+// MARK: - BreadcrumbBarView
+
+/// Thin bar above the editor showing the chain of symbols containing the
+/// cursor's current line (e.g. "ClassName › methodName"), derived from
+/// `AppState.breadcrumbPath` — itself computed from the same document-symbol
+/// tree that feeds Go to Symbol (⇧⌘O) and the Outline panel, kept current by
+/// the existing `onCursorMove` wiring in `CodeEditorView.editorRow` (no extra
+/// plumbing needed — `breadcrumbPath` recomputes whenever `cursorLine` or
+/// `documentSymbols` changes). Renders nothing when there's no path to show
+/// (no symbols loaded yet, or the cursor sits outside every symbol's range).
+/// Clicking a segment jumps to that symbol via the same `jumpTo` mechanism
+/// every other cross-view navigation uses (`AppState.navigateTo`).
+private struct BreadcrumbBarView: View {
+    @Environment(AppState.self) private var appState
+
+    var body: some View {
+        let path = appState.breadcrumbPath
+        if !path.isEmpty {
+            HStack(spacing: 4) {
+                ForEach(Array(path.enumerated()), id: \.element.id) { index, symbol in
+                    if index > 0 {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: appState.sf(9)))
+                            .foregroundStyle(.tertiary)
+                    }
+                    Button {
+                        jump(to: symbol)
+                    } label: {
+                        HStack(spacing: 3) {
+                            Image(systemName: symbol.iconName)
+                                .font(.system(size: appState.sf(10)))
+                            Text(symbol.name)
+                                .font(.system(size: appState.sf(11)))
+                                .lineLimit(1)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(index == path.count - 1 ? Color.primary : Color.secondary)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 22)
+            .frame(maxWidth: .infinity)
+            .background(Color(nsColor: .controlBackgroundColor))
+            .overlay(alignment: .bottom) { Divider() }
+        }
+    }
+
+    private func jump(to symbol: DocumentSymbol) {
+        guard let fileURL = appState.activeTab?.fileURL else { return }
+        Task { await appState.navigateTo(DefinitionLocation(fileURL: fileURL, line: symbol.line, character: symbol.character)) }
     }
 }
 
