@@ -25,6 +25,7 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
     case goToLine           = "workbench.action.gotoLine"
     // Editor
     case findInFile         = "actions.find"
+    case findAndReplace     = "editor.action.startFindReplaceAction"
     case toggleComment      = "editor.action.commentLine"
     case indentLine         = "editor.action.indentLines"
     case outdentLine        = "editor.action.outdentLines"
@@ -51,6 +52,7 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
         case .previousTab:       return "Previous Editor"
         case .goToLine:          return "Go to Line"
         case .findInFile:        return "Find in File"
+        case .findAndReplace:    return "Find and Replace"
         case .toggleComment:     return "Toggle Line Comment"
         case .indentLine:        return "Indent Line"
         case .outdentLine:       return "Outdent Line"
@@ -70,7 +72,7 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
             return "View"
         case .quickOpen, .commandPalette, .nextTab, .previousTab, .goToLine:
             return "Navigation"
-        case .findInFile, .toggleComment, .indentLine, .outdentLine:
+        case .findInFile, .findAndReplace, .toggleComment, .indentLine, .outdentLine:
             return "Editor"
         }
     }
@@ -210,6 +212,7 @@ struct KeyBinding: Identifiable, Codable, Sendable {
         KeyBinding(action: .goToLine,          combo: KeyCombo(key: "g",   control: true)),
         // Editor
         KeyBinding(action: .findInFile,        combo: KeyCombo(key: "f",   command: true)),
+        KeyBinding(action: .findAndReplace,    combo: KeyCombo(key: "f",   command: true, option: true)),
         KeyBinding(action: .toggleComment,     combo: KeyCombo(key: "/",   command: true)),
         KeyBinding(action: .indentLine,        combo: KeyCombo(key: "]",   command: true)),
         KeyBinding(action: .outdentLine,       combo: KeyCombo(key: "[",   command: true)),

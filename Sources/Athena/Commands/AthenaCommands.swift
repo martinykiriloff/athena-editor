@@ -64,6 +64,7 @@ struct AthenaCommands: Commands {
     var body: some Commands {
         appInfoCommands
         fileCommands
+        findCommands
         viewCommands
         goCommands
         gitCommands
@@ -205,6 +206,23 @@ struct AthenaCommands: Commands {
                 NSApplication.shared.keyWindow?.close()
             }
             .keyboardShortcut("w", modifiers: [.command, .shift])
+        }
+    }
+
+    // MARK: - Find Menu
+
+    @CommandsBuilder
+    private var findCommands: some Commands {
+        CommandMenu("Find") {
+            // ⌘F and ⌥⌘F are owned by the keybinding monitor (so they aren't
+            // shadowed by the menu); clicks route through the same actions.
+            Button("Find…") {
+                performAction(.findInFile)
+            }
+
+            Button("Find and Replace…") {
+                performAction(.findAndReplace)
+            }
         }
     }
 

@@ -997,6 +997,80 @@ final class AppState {
         }
     }
 
+    // MARK: - Workspace Search & Replace
+
+    /// Replaces every match of `query` with `replacement` across every file
+    /// `SearchService` currently reports a hit for, writing each change to
+    /// disk via `fileService.writeFile` (not ripgrep's own `--replace`, so
+    /// results stay consistent with how the rest of the app writes files).
+    ///
+    /// Re-runs the search itself (rather than trusting the possibly-stale
+    /// `searchResults` the panel already has) so this always acts on the
+    /// current contents of the workspace. Any open tab for a touched file is
+    /// reloaded directly (the same bypass-`updateTabContent` pattern
+    /// `discardChanges` uses) and marked **not** dirty, since the write
+    /// already landed on disk. Returns the total occurrences replaced and
+    /// the number of files touched, for a status-bar summary — bulk replace
+    /// across a workspace is destructive enough to warrant visible feedback.
+    func replaceAllInWorkspace(
+        query: String,
+        replacement: String,
+        regex: Bool,
+        caseSensitive: Bool,
+        wholeWord: Bool,
+        filter: SearchFilter = SearchFilter()
+    ) async -> (occurrences: Int, files: Int) {
+        guard let workspace, !query.isEmpty else { return (0, 0) }
+        guard let matcher = TextSearchMatcher(
+            query: query, isRegex: regex, caseSensitive: caseSensitive, wholeWord: wholeWord
+        ) else {
+            statusMessage = "Invalid regular expression"
+            return (0, 0)
+        }
+
+        var filePaths: [String] = []
+        var seen = Set<String>()
+        await searchService.cancel()
+        let stream = await searchService.search(
+            query: query, in: workspace.rootURL,
+            regex: regex, caseSensitive: caseSensitive, filter: filter
+        )
+        for await result in stream where seen.insert(result.filePath).inserted {
+            filePaths.append(result.filePath)
+        }
+
+        var totalOccurrences = 0
+        var filesChanged = 0
+
+        for path in filePaths {
+            let url = URL(fileURLWithPath: path)
+            guard let original = try? await fileService.readFile(url) else { continue }
+            let (replaced, count) = matcher.replacingAll(in: original, with: replacement)
+            guard count > 0 else { continue }
+
+            do {
+                try await fileService.writeFile(url, content: replaced)
+            } catch {
+                continue
+            }
+
+            totalOccurrences += count
+            filesChanged += 1
+
+            if let index = openTabs.firstIndex(where: { $0.fileURL == url }) {
+                openTabs[index].content = replaced
+                openTabs[index].isDirty = false
+                openTabs[index].externallyModified = false
+            }
+        }
+
+        statusMessage = filesChanged == 0
+            ? "No occurrences of \"\(query)\" found"
+            : "Replaced \(totalOccurrences) occurrence\(totalOccurrences == 1 ? "" : "s") across \(filesChanged) file\(filesChanged == 1 ? "" : "s")"
+
+        return (totalOccurrences, filesChanged)
+    }
+
     // MARK: - Claude sidebar
 
     /// Switches the active Claude account, aborting any in-flight request and
@@ -1263,6 +1337,8 @@ final class AppState {
         // owns the selection and undo stack.
         case .findInFile:
             postEditorCommand(.find)
+        case .findAndReplace:
+            postEditorCommand(.findAndReplace)
         case .goToLine:
             postEditorCommand(.goToLine)
         case .toggleComment:

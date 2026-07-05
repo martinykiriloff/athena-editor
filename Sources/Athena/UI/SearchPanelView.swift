@@ -16,12 +16,16 @@ struct SearchPanelView: View {
     @State private var includePattern: String = ""
     @State private var excludePattern: String = ""
     @State private var debounceTask:   Task<Void, Never>?
+    @State private var showReplace:    Bool   = false
+    @State private var replacement:    String = ""
+    @State private var isReplacing:    Bool   = false
 
     // MARK: - Body
 
     var body: some View {
         VStack(spacing: 0) {
             searchBar
+            replaceRow
             Divider()
             if showFilters { filterSection }
             statusLine
@@ -35,6 +39,16 @@ struct SearchPanelView: View {
 
     private var searchBar: some View {
         HStack(spacing: 4) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) { showReplace.toggle() }
+            } label: {
+                Image(systemName: showReplace ? "chevron.down" : "chevron.right")
+                    .font(.system(size: appState.sf(10), weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help(showReplace ? "Hide Replace" : "Show Replace")
+
             Image(systemName: "magnifyingglass")
                 .font(.system(size: appState.sf(12)))
                 .foregroundStyle(.secondary)
@@ -80,6 +94,76 @@ struct SearchPanelView: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .background(Color(nsColor: .controlBackgroundColor))
+    }
+
+    // MARK: - Replace Row
+
+    @ViewBuilder
+    private var replaceRow: some View {
+        if showReplace {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.turn.down.right")
+                    .font(.system(size: appState.sf(11)))
+                    .foregroundStyle(.secondary)
+
+                TextField("Replace", text: $replacement)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: appState.sf(13)))
+                    .onSubmit { performReplaceAll() }
+
+                Button {
+                    performReplaceAll()
+                } label: {
+                    if isReplacing {
+                        ProgressView()
+                            .scaleEffect(0.5)
+                            .frame(width: 14, height: 14)
+                    } else {
+                        Text("Replace All")
+                            .font(.system(size: appState.sf(11)))
+                    }
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(canReplaceAll ? Color.accentColor : Color.secondary)
+                .disabled(!canReplaceAll || isReplacing)
+                .help(replaceAllHelpText)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(Color(nsColor: .controlBackgroundColor))
+        }
+    }
+
+    private var canReplaceAll: Bool {
+        !appState.searchQuery.isEmpty && !appState.searchResults.isEmpty
+    }
+
+    private var replaceAllHelpText: String {
+        let files   = fileGroups.count
+        let matches = appState.searchResults.count
+        return "Replace \(matches) occurrence\(matches == 1 ? "" : "s") across \(files) file\(files == 1 ? "" : "s")"
+    }
+
+    /// Applies the current search query/options as a workspace-wide
+    /// replacement (see `AppState.replaceAllInWorkspace`), then re-runs the
+    /// search so the results list reflects the new file contents.
+    private func performReplaceAll() {
+        guard canReplaceAll, appState.workspace != nil else { return }
+        let query       = appState.searchQuery
+        let repl        = replacement
+        let regex       = useRegex
+        let cs          = caseSensitive
+        let filter      = SearchFilter(include: includePattern, exclude: excludePattern)
+
+        Task {
+            isReplacing = true
+            _ = await appState.replaceAllInWorkspace(
+                query: query, replacement: repl, regex: regex,
+                caseSensitive: cs, wholeWord: false, filter: filter
+            )
+            isReplacing = false
+            triggerSearch()
+        }
     }
 
     // MARK: - Filter Section

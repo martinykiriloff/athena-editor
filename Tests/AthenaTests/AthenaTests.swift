@@ -371,3 +371,88 @@ struct FileWatchServiceTests {
         #expect(sawChange)
     }
 }
+
+// MARK: - TextSearchMatcher
+
+@Suite("TextSearchMatcher")
+struct TextSearchMatcherTests {
+
+    @Test func literalMatchesAreCaseInsensitiveByDefault() {
+        let matcher = TextSearchMatcher(query: "foo", isRegex: false, caseSensitive: false, wholeWord: false)!
+        let ranges = matcher.matches(in: "Foo bar foo BAZ fOO")
+        #expect(ranges.count == 3)
+    }
+
+    @Test func caseSensitiveLiteralNarrowsMatches() {
+        let matcher = TextSearchMatcher(query: "foo", isRegex: false, caseSensitive: true, wholeWord: false)!
+        let ranges = matcher.matches(in: "Foo bar foo BAZ fOO")
+        #expect(ranges.count == 1)
+        #expect(ranges[0] == NSRange(location: 8, length: 3))
+    }
+
+    @Test func wholeWordExcludesSubstringMatches() {
+        let matcher = TextSearchMatcher(query: "cat", isRegex: false, caseSensitive: true, wholeWord: true)!
+        let ranges = matcher.matches(in: "cat concatenate cat")
+        #expect(ranges.count == 2)
+    }
+
+    @Test func regexSpecialCharsAreLiteralWhenNotRegex() {
+        let matcher = TextSearchMatcher(query: "a.b", isRegex: false, caseSensitive: true, wholeWord: false)!
+        let ranges = matcher.matches(in: "a.b axb a.b")
+        #expect(ranges.count == 2)
+    }
+
+    @Test func regexModeMatchesPattern() {
+        let matcher = TextSearchMatcher(query: "f[oi]o", isRegex: true, caseSensitive: true, wholeWord: false)!
+        let ranges = matcher.matches(in: "foo fio fao")
+        #expect(ranges.count == 2)
+    }
+
+    @Test func invalidRegexFailsToInitialize() {
+        let matcher = TextSearchMatcher(query: "(unclosed", isRegex: true, caseSensitive: true, wholeWord: false)
+        #expect(matcher == nil)
+    }
+
+    @Test func emptyQueryFailsToInitialize() {
+        let matcher = TextSearchMatcher(query: "", isRegex: false, caseSensitive: false, wholeWord: false)
+        #expect(matcher == nil)
+    }
+
+    @Test func replacingAllReplacesEveryLiteralMatch() {
+        let matcher = TextSearchMatcher(query: "cat", isRegex: false, caseSensitive: true, wholeWord: false)!
+        let (result, count) = matcher.replacingAll(in: "cat sat cat", with: "dog")
+        #expect(count == 2)
+        #expect(result == "dog sat dog")
+    }
+
+    @Test func replacingAllReturnsOriginalWhenNoMatches() {
+        let matcher = TextSearchMatcher(query: "zzz", isRegex: false, caseSensitive: true, wholeWord: false)!
+        let (result, count) = matcher.replacingAll(in: "cat sat cat", with: "dog")
+        #expect(count == 0)
+        #expect(result == "cat sat cat")
+    }
+
+    @Test func replacingAllHonorsCaptureGroupsInRegexMode() {
+        let matcher = TextSearchMatcher(query: "(\\w+)@(\\w+)", isRegex: true, caseSensitive: true, wholeWord: false)!
+        let (result, count) = matcher.replacingAll(in: "user@host", with: "$2:$1")
+        #expect(count == 1)
+        #expect(result == "host:user")
+    }
+
+    @Test func replacingAllTreatsReplacementLiterallyWhenNotRegex() {
+        // A literal-mode replacement containing "$1" must not be treated as a
+        // capture-group template even though the query itself has groups.
+        let matcher = TextSearchMatcher(query: "a.b", isRegex: false, caseSensitive: true, wholeWord: false)!
+        let (result, count) = matcher.replacingAll(in: "a.b", with: "$1 literally")
+        #expect(count == 1)
+        #expect(result == "$1 literally")
+    }
+
+    @Test func replacementTextForSingleMatchHonorsCaptureGroups() {
+        let matcher = TextSearchMatcher(query: "(\\w+)@(\\w+)", isRegex: true, caseSensitive: true, wholeWord: false)!
+        let text = "user@host"
+        let range = matcher.matches(in: text)[0]
+        let replaced = matcher.replacementText(forMatchIn: text, range: range, replacement: "$2:$1")
+        #expect(replaced == "host:user")
+    }
+}

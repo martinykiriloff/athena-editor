@@ -35,6 +35,9 @@ struct EditorView: NSViewRepresentable {
     var onImportClick: (String, URL?) -> Void = { _, _ in }
     /// Set by the representable so external callers can scroll the editor.
     var scrollProxy: Binding<EditorScrollProxy?>? = nil
+    /// Set by the representable so the SwiftUI find/replace bar can drive
+    /// (and observe match state from) this editor's text view.
+    var findReplaceProxy: Binding<FindReplaceController?>? = nil
     /// Breakpoints for the current file (1-based line numbers).
     var breakpoints: Set<Int> = []
     /// Current debug line to highlight (1-based, nil when not debugging).
@@ -121,6 +124,13 @@ struct EditorView: NSViewRepresentable {
 
         // Observe live scroll notifications to feed the minimap.
         context.coordinator.installScrollObserver(on: scrollView)
+
+        // Expose the find/replace controller via proxy so the SwiftUI find
+        // bar can drive this editor's text view, mirroring `scrollProxy` above.
+        let findController = FindReplaceController()
+        findController.textView = textView
+        findReplaceProxy?.wrappedValue = findController
+        context.coordinator.findReplaceController = findController
 
         // Let the keybinding system reach this editor (find, comment, indent…).
         context.coordinator.textView = textView
@@ -317,6 +327,7 @@ extension EditorView {
         var currentInsertSpaces:  Bool    = true
         var currentAutoIndent:    Bool    = true
         var scrollProxy: EditorScrollProxy?
+        var findReplaceController: FindReplaceController?
         weak var textView: NSTextView?
         nonisolated(unsafe) private var scrollObserver: NSObjectProtocol?
         nonisolated(unsafe) private var commandObserver: NSObjectProtocol?
@@ -468,26 +479,29 @@ extension EditorView {
         }
 
         private func handle(_ command: EditorCommand) {
-            // Only the focused editor should react, matching VS Code semantics.
-            guard let tv = textView, tv.window?.firstResponder === tv else { return }
+            guard let tv = textView else { return }
             switch command {
-            case .find:          showFindBar(tv)
-            case .goToLine:      promptGoToLine(tv)
-            case .toggleComment: toggleComment(tv)
-            case .indent:        shiftIndent(tv, indent: true)
-            case .outdent:       shiftIndent(tv, indent: false)
+            // Find/Replace can be summoned even when focus is elsewhere in the
+            // window (e.g. the search field of an already-open bar, or the
+            // terminal) — matching VS Code, where ⌘F/⌥⌘F always reach the
+            // active editor. Every other editor command still requires the
+            // text view itself to be focused, matching VS Code semantics.
+            case .find:           findReplaceController?.present(withReplace: false)
+            case .findAndReplace: findReplaceController?.present(withReplace: true)
+            case .goToLine, .toggleComment, .indent, .outdent:
+                guard tv.window?.firstResponder === tv else { return }
+                switch command {
+                case .goToLine:      promptGoToLine(tv)
+                case .toggleComment: toggleComment(tv)
+                case .indent:        shiftIndent(tv, indent: true)
+                case .outdent:       shiftIndent(tv, indent: false)
+                case .find, .findAndReplace: break // handled above
+                }
             }
         }
 
         private var indentUnit: String {
             currentInsertSpaces ? String(repeating: " ", count: max(1, currentTabSize)) : "\t"
-        }
-
-        private func showFindBar(_ tv: NSTextView) {
-            tv.usesFindBar = true
-            let sender = NSMenuItem()
-            sender.tag = Int(NSTextFinder.Action.showFindInterface.rawValue)
-            tv.performTextFinderAction(sender)
         }
 
         private func promptGoToLine(_ tv: NSTextView) {
@@ -850,9 +864,10 @@ extension EditorView {
                     return accepted
                 }
                 return false
-            case 53:  // Escape — dismiss popup or ghost text
+            case 53:  // Escape — dismiss popup, ghost text, or the find/replace bar
                 if completionController.isVisible  { completionController.dismiss(); return true }
-                if ghostController.hasSuggestion   { ghostController.dismiss();      return true }
+                if ghostController.hasSuggestion    { ghostController.dismiss();      return true }
+                if findReplaceController?.isVisible == true { findReplaceController?.dismiss(); return true }
                 return false
             case 125: // Down arrow — navigate popup
                 if completionController.isVisible  { completionController.moveDown(); return true }

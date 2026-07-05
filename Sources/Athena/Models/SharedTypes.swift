@@ -286,6 +286,7 @@ enum ChatRole: Sendable {
 /// text view (which can't be reached directly from AppState).
 enum EditorCommand: Sendable {
     case find
+    case findAndReplace
     case goToLine
     case toggleComment
     case indent
@@ -380,6 +381,78 @@ struct SearchResult: Identifiable, Sendable {
     var lineNumber: Int
     var lineContent: String
     var matchRange: NSRange
+}
+
+/// Shared literal/regex match-and-replace engine used by both the in-file
+/// find/replace bar (`FindReplaceController`) and workspace-wide "Replace
+/// All" (`AppState.replaceAllInWorkspace`), so both apply identical
+/// case-sensitivity, whole-word, and regex semantics.
+struct TextSearchMatcher: Sendable {
+    var query: String
+    var isRegex: Bool
+    var caseSensitive: Bool
+    var wholeWord: Bool
+
+    /// Fails when `query` is empty, or (in regex mode) doesn't compile.
+    init?(query: String, isRegex: Bool, caseSensitive: Bool, wholeWord: Bool) {
+        guard !query.isEmpty else { return nil }
+        self.query = query
+        self.isRegex = isRegex
+        self.caseSensitive = caseSensitive
+        self.wholeWord = wholeWord
+        guard Self.compile(query: query, isRegex: isRegex, caseSensitive: caseSensitive, wholeWord: wholeWord) != nil
+        else { return nil }
+    }
+
+    /// All non-overlapping match ranges in `text`, in order.
+    func matches(in text: String) -> [NSRange] {
+        guard let re = Self.compile(query: query, isRegex: isRegex, caseSensitive: caseSensitive, wholeWord: wholeWord)
+        else { return [] }
+        let full = NSRange(location: 0, length: (text as NSString).length)
+        return re.matches(in: text, range: full).map(\.range)
+    }
+
+    /// Replacement text for one already-located match — honors regex
+    /// capture-group references (`$1`) when `isRegex` is true; substitutes
+    /// `replacement` literally otherwise.
+    func replacementText(forMatchIn text: String, range: NSRange, replacement: String) -> String {
+        guard isRegex,
+              let re = Self.compile(query: query, isRegex: isRegex, caseSensitive: caseSensitive, wholeWord: wholeWord),
+              let match = re.firstMatch(in: text, range: range)
+        else { return replacement }
+        return re.replacementString(for: match, in: text, offset: 0, template: replacement)
+    }
+
+    /// Replaces every match in `text`. Returns the original text and a count
+    /// of 0 when there are no matches.
+    func replacingAll(in text: String, with replacement: String) -> (result: String, count: Int) {
+        guard let re = Self.compile(query: query, isRegex: isRegex, caseSensitive: caseSensitive, wholeWord: wholeWord)
+        else { return (text, 0) }
+        let full = NSRange(location: 0, length: (text as NSString).length)
+        let found = re.matches(in: text, range: full)
+        guard !found.isEmpty else { return (text, 0) }
+
+        // Regex mode honors `$1`-style templates; literal mode treats the
+        // replacement as plain text (escaped so it can't be misread as one).
+        let template = isRegex ? replacement : NSRegularExpression.escapedTemplate(for: replacement)
+        let mutable = NSMutableString(string: text)
+        // Apply back-to-front so earlier ranges stay valid as later ones shrink/grow.
+        for match in found.reversed() {
+            let piece = re.replacementString(for: match, in: text, offset: 0, template: template)
+            mutable.replaceCharacters(in: match.range, with: piece)
+        }
+        return (mutable as String, found.count)
+    }
+
+    private static func compile(
+        query: String, isRegex: Bool, caseSensitive: Bool, wholeWord: Bool
+    ) -> NSRegularExpression? {
+        var pattern = isRegex ? query : NSRegularExpression.escapedPattern(for: query)
+        if wholeWord { pattern = "\\b(?:\(pattern))\\b" }
+        var options: NSRegularExpression.Options = []
+        if !caseSensitive { options.insert(.caseInsensitive) }
+        return try? NSRegularExpression(pattern: pattern, options: options)
+    }
 }
 
 // MARK: - Diagnostics

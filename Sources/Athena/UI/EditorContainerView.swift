@@ -57,6 +57,7 @@ struct CodeEditorView: View {
     @State private var scrollFraction:  Double = 0
     @State private var visibleFraction: Double = 0.2
     @State private var scrollProxy:     EditorScrollProxy? = nil
+    @State private var findReplaceController: FindReplaceController? = nil
 
     private var blameInfo: [Int: BlameLine] {
         guard let url = tab.fileURL else { return [:] }
@@ -118,6 +119,7 @@ struct CodeEditorView: View {
                     Task { await appState.openImportedFile(importPath, from: fileURL) }
                 },
                 scrollProxy: $scrollProxy,
+                findReplaceProxy: $findReplaceController,
                 breakpoints: fileBreakpoints,
                 debugLine:   fileDebugLine,
                 onToggleBreakpoint: { line in
@@ -153,6 +155,13 @@ struct CodeEditorView: View {
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .task(id: tab.id) { await appState.loadBlame(for: tab) }
+            .overlay(alignment: .topTrailing) {
+                if let controller = findReplaceController, controller.isVisible {
+                    FindReplaceBarView(controller: controller)
+                        .padding(.top, 8)
+                        .padding(.trailing, 16)
+                }
+            }
 
             if appState.editorMinimapEnabled {
                 MinimapView(
