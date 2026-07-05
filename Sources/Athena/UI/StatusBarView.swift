@@ -3,6 +3,7 @@
 // Swift 6, strict concurrency.
 
 import SwiftUI
+import AppKit
 
 // MARK: - StatusBarView
 
@@ -30,10 +31,43 @@ struct StatusBarView: View {
         HStack(spacing: 0) {
             // ── Left cluster ──────────────────────────────────────────────
             HStack(spacing: 8) {
-                // Git branch
+                // Git branch — clickable, opens the branch-switcher menu
+                // (plan.md item 20 point 1).
                 if let branch = gitBranch {
                     StatusBarItem {
-                        Label(branch, systemImage: "arrow.triangle.branch")
+                        Menu {
+                            Button("Create New Branch…") { promptCreateBranch() }
+
+                            if !localBranches.isEmpty {
+                                Divider()
+                                ForEach(localBranches) { b in
+                                    Button {
+                                        Task { await appState.checkoutBranch(b.name) }
+                                    } label: {
+                                        if b.isCurrent {
+                                            Label(b.name, systemImage: "checkmark")
+                                        } else {
+                                            Text(b.name)
+                                        }
+                                    }
+                                    .disabled(b.isCurrent)
+                                }
+                            }
+
+                            if !remoteBranches.isEmpty {
+                                Divider()
+                                Menu("Remote Branches") {
+                                    ForEach(remoteBranches) { b in
+                                        Button(b.name) {
+                                            Task { await appState.checkoutBranch(b.name) }
+                                        }
+                                    }
+                                }
+                            }
+                        } label: {
+                            Label(branch, systemImage: "arrow.triangle.branch")
+                        }
+                        .menuStyle(.borderlessButton)
                     }
                 }
 
@@ -121,6 +155,34 @@ struct StatusBarView: View {
         guard appState.workspace != nil else { return nil }
         let branch = appState.gitStatus.branch
         return branch.isEmpty ? nil : branch
+    }
+
+    private var localBranches: [GitBranch] {
+        appState.branches.filter { !$0.isRemote }
+    }
+
+    private var remoteBranches: [GitBranch] {
+        appState.branches.filter { $0.isRemote }
+    }
+
+    /// NSAlert-with-accessory-`NSTextField` prompt, matching
+    /// `EditorView.Coordinator.promptGoToLine`/`promptRenameSymbol`'s pattern.
+    /// Confirming creates the branch off HEAD and checks it out in one step
+    /// (`GitService.createBranch` runs `git checkout -b`).
+    private func promptCreateBranch() {
+        let alert = NSAlert()
+        alert.messageText = "Create New Branch"
+        alert.informativeText = "Enter a name for the new branch:"
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Create")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        Task { await appState.createAndCheckoutBranch(named: name) }
     }
 }
 

@@ -58,7 +58,7 @@ struct WelcomeView: View {
                         systemImage: "arrow.triangle.branch",
                         shortcut: nil
                     ) {
-                        // Placeholder — git clone UI not yet implemented.
+                        cloneRepository()
                     }
                 }
 
@@ -92,6 +92,47 @@ struct WelcomeView: View {
 
     private func newFile() {
         appState.openNewTab()
+    }
+
+    /// Prompts for a repo URL, then a destination folder to clone into (an
+    /// `NSOpenPanel` folder-picker matching `openFolder()`'s pattern above),
+    /// then hands off to `AppState.cloneRepository(urlString:destinationParent:)`
+    /// (plan.md item 20 point 3). Progress and failures surface via
+    /// `appState.statusMessage` — the status bar is always visible, including
+    /// on this Welcome screen.
+    private func cloneRepository() {
+        guard let urlString = promptForRepositoryURL() else { return }
+
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Clone Here"
+        panel.message = "Choose a folder to clone \"\(urlString)\" into"
+
+        guard panel.runModal() == .OK, let destinationParent = panel.url else { return }
+
+        Task {
+            await appState.cloneRepository(urlString: urlString, destinationParent: destinationParent)
+        }
+    }
+
+    /// NSAlert-with-accessory-`NSTextField` prompt, matching
+    /// `EditorView.Coordinator.promptGoToLine`/`promptRenameSymbol`'s pattern.
+    private func promptForRepositoryURL() -> String? {
+        let alert = NSAlert()
+        alert.messageText = "Clone Repository"
+        alert.informativeText = "Enter the repository URL:"
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        field.placeholderString = "https://github.com/user/repo.git"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Clone")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+
+        let urlString = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return urlString.isEmpty ? nil : urlString
     }
 }
 

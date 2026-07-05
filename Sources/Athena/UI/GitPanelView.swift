@@ -9,6 +9,12 @@ import SwiftUI
 struct GitPanelView: View {
     @Environment(AppState.self) private var appState
 
+    /// Toggles the panel between the Changes view (default) and
+    /// `CommitHistoryView` — the smallest clean integration of the commit
+    /// history browser into the existing Source Control panel (plan.md item
+    /// 20 point 2) rather than a new top-level sidebar panel.
+    @State private var showHistory: Bool = false
+
     var body: some View {
         VStack(spacing: 0) {
             // 1. Header
@@ -16,26 +22,31 @@ struct GitPanelView: View {
 
             Divider()
 
-            // 2. Commit box
-            commitSection
+            if showHistory {
+                // History view
+                CommitHistoryView()
+            } else {
+                // 2. Commit box
+                commitSection
 
-            Divider()
-
-            // 3. Changes / empty state
-            ScrollView {
-                if appState.gitStatus.isClean {
-                    emptyState
-                } else {
-                    changeSections
-                }
-            }
-
-            // 4. Ahead / behind row
-            if let workspace = appState.workspace,
-               !appState.gitStatus.branch.isEmpty
-            {
                 Divider()
-                aheadBehindBar(workspace: workspace)
+
+                // 3. Changes / empty state
+                ScrollView {
+                    if appState.gitStatus.isClean {
+                        emptyState
+                    } else {
+                        changeSections
+                    }
+                }
+
+                // 4. Ahead / behind row
+                if let workspace = appState.workspace,
+                   !appState.gitStatus.branch.isEmpty
+                {
+                    Divider()
+                    aheadBehindBar(workspace: workspace)
+                }
             }
         }
         .onAppear {
@@ -47,15 +58,15 @@ struct GitPanelView: View {
 
     private var gitHeader: some View {
         HStack(spacing: 6) {
-            Text("SOURCE CONTROL")
+            Text(showHistory ? "HISTORY" : "SOURCE CONTROL")
                 .font(.system(size: appState.sf(11), weight: .semibold))
                 .foregroundStyle(.secondary)
                 .tracking(0.5)
 
             Spacer()
 
-            // Commit-all shortcut (only when staged changes exist)
-            if !appState.gitStatus.staged.isEmpty {
+            // Commit-all shortcut (only when staged changes exist, Changes view only)
+            if !showHistory, !appState.gitStatus.staged.isEmpty {
                 Button {
                     guard let workspace = appState.workspace else { return }
                     Task {
@@ -76,9 +87,29 @@ struct GitPanelView: View {
                 .disabled(appState.commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
 
+            // History / Changes toggle
+            Button {
+                showHistory.toggle()
+                if showHistory {
+                    Task { await appState.refreshCommitHistory() }
+                }
+            } label: {
+                Image(systemName: showHistory ? "arrow.uturn.left" : "clock.arrow.circlepath")
+                    .font(.system(size: appState.sf(12)))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help(showHistory ? "Back to Changes" : "Commit History")
+
             // Refresh
             Button {
-                Task { await appState.refreshGitStatus() }
+                Task {
+                    if showHistory {
+                        await appState.refreshCommitHistory()
+                    } else {
+                        await appState.refreshGitStatus()
+                    }
+                }
             } label: {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: appState.sf(12)))

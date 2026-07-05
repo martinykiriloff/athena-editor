@@ -180,24 +180,80 @@ actor GitService {
         }
     }
 
+    /// Unified diff for a single commit (`git show <hash>`), reused by
+    /// `AppState.openDiffViewer(forCommit:)` to feed the same
+    /// `UnifiedDiffParser`/`DiffViewerView` rendering path as the working-tree
+    /// diff above (plan.md item 20 point 2 — no second diff renderer). `git
+    /// show`'s leading commit-message header (before the first `@@` hunk
+    /// line) is left in the returned text: `UnifiedDiffParser.parse` already
+    /// ignores every line until it sees a hunk header, so it's harmless.
+    func diff(commit: String, at url: URL) async throws -> String {
+        try await run(args: ["show", commit], at: url)
+    }
+
     // MARK: - Branches
 
-    func branches(at url: URL) async throws -> [String] {
+    func branches(at url: URL) async throws -> [GitBranch] {
         let output = try await run(args: ["branch", "-a"], at: url)
-        return output
-            .components(separatedBy: "\n")
-            .compactMap { line -> String? in
-                var name = line
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                if name.hasPrefix("* ") {
-                    name = String(name.dropFirst(2))
-                }
-                if name.hasPrefix("remotes/") {
-                    name = String(name.dropFirst("remotes/".count))
-                }
-                name = name.trimmingCharacters(in: .whitespacesAndNewlines)
-                return name.isEmpty ? nil : name
+        return Self.parseBranches(output)
+    }
+
+    /// Pure parser for `git branch -a`'s raw text output, separated out from
+    /// `branches(at:)` so it's directly unit-testable without a live git
+    /// process (see `GitBranchParsingTests`). A `static` member of an actor
+    /// type isn't actor-isolated, so this can be called from anywhere,
+    /// synchronously.
+    ///
+    /// Sample input this parses:
+    /// ```
+    /// * main
+    ///   develop
+    ///   remotes/origin/HEAD -> origin/main
+    ///   remotes/origin/main
+    ///   remotes/origin/develop
+    /// ```
+    /// Handles:
+    /// - the `"* "` current-branch marker,
+    /// - `remotes/<remote>/<branch>` entries, surfaced with `isRemote = true`
+    ///   and `name` kept as `"<remote>/<branch>"` (e.g. `"origin/main"`) —
+    ///   that's what `git checkout <name>` expects in order to create a local
+    ///   tracking branch from it,
+    /// - a detached-HEAD marker line (`"* (HEAD detached at ...)"`), dropped
+    ///   entirely — not a real, checkable-out branch,
+    /// - the remote's symbolic HEAD pointer
+    ///   (`"remotes/origin/HEAD -> origin/main"`), also dropped — an alias,
+    ///   not itself a real branch.
+    static func parseBranches(_ output: String) -> [GitBranch] {
+        var result: [GitBranch] = []
+
+        for rawLine in output.components(separatedBy: "\n") {
+            var line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty else { continue }
+
+            var isCurrent = false
+            if line.hasPrefix("* ") {
+                isCurrent = true
+                line = String(line.dropFirst(2)).trimmingCharacters(in: .whitespaces)
             }
+
+            // Detached HEAD, e.g. "(HEAD detached at abc1234)" — not a branch.
+            if line.hasPrefix("(") { continue }
+
+            var isRemote = false
+            if line.hasPrefix("remotes/") {
+                isRemote = true
+                line = String(line.dropFirst("remotes/".count))
+            }
+
+            // The remote's symbolic HEAD pointer, e.g.
+            // "origin/HEAD -> origin/main" — an alias, not a real branch.
+            if line.contains(" -> ") { continue }
+
+            guard !line.isEmpty else { continue }
+            result.append(GitBranch(name: line, isCurrent: isCurrent, isRemote: isRemote))
+        }
+
+        return result
     }
 
     func createBranch(_ name: String, at url: URL) async throws {
@@ -213,5 +269,45 @@ actor GitService {
     func currentBranch(at url: URL) async throws -> String {
         let result = try await run(args: ["branch", "--show-current"], at: url)
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // MARK: - Clone
+
+    /// Clones `url` into `destination` by running `git clone <url> <folder>`
+    /// with the working directory set to `destination`'s *parent* —
+    /// `destination` itself must not already exist (git creates it), unlike
+    /// every other method in this actor, which runs `at:` an existing repo
+    /// directory. See `AppState.cloneRepository(urlString:destinationParent:)`
+    /// for the Welcome screen's "Clone Repository" flow (plan.md item 20,
+    /// "D6") that computes `destination` before calling this.
+    func clone(url: String, into destination: URL) async throws {
+        let parent = destination.deletingLastPathComponent()
+        let folderName = destination.lastPathComponent
+        _ = try await run(args: ["clone", url, folderName], at: parent)
+    }
+
+    /// Derives the folder name `git clone <url>` itself would choose when
+    /// given no explicit target directory — e.g.
+    /// `"https://github.com/user/repo.git"` → `"repo"` — so a caller can turn
+    /// a user-picked parent folder into a full destination path before
+    /// calling `clone(url:into:)`. Pure/static so it's unit-testable without
+    /// a live git process (see `RepoFolderNameTests`).
+    static func repoFolderName(from urlString: String) -> String {
+        var name = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        if name.hasSuffix("/") { name.removeLast() }
+
+        if let lastSlash = name.lastIndex(of: "/") {
+            name = String(name[name.index(after: lastSlash)...])
+        } else if let lastColon = name.lastIndex(of: ":") {
+            // scp-style SSH URLs with no slash, e.g. "git@host:repo.git".
+            name = String(name[name.index(after: lastColon)...])
+        }
+
+        if name.hasSuffix(".git") {
+            name = String(name.dropLast(".git".count))
+        }
+
+        name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? "repository" : name
     }
 }

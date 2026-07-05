@@ -1072,3 +1072,84 @@ struct GitLineChangeClassificationTests {
         #expect(changes == [1: .added, 2: .added, 3: .added])
     }
 }
+
+// MARK: - GitService.parseBranches
+
+@Suite("GitService.parseBranches")
+struct GitBranchParsingTests {
+    @Test func parsesCurrentLocalBranch() {
+        let branches = GitService.parseBranches("* main\n")
+        #expect(branches == [GitBranch(name: "main", isCurrent: true, isRemote: false)])
+    }
+
+    @Test func parsesNonCurrentLocalBranch() {
+        let branches = GitService.parseBranches("  develop\n")
+        #expect(branches == [GitBranch(name: "develop", isCurrent: false, isRemote: false)])
+    }
+
+    @Test func parsesRemoteBranchStrippingRemotesPrefixButKeepingRemoteName() {
+        let branches = GitService.parseBranches("  remotes/origin/main\n")
+        #expect(branches == [GitBranch(name: "origin/main", isCurrent: false, isRemote: true)])
+    }
+
+    @Test func dropsRemoteSymbolicHeadPointer() {
+        let branches = GitService.parseBranches("  remotes/origin/HEAD -> origin/main\n")
+        #expect(branches.isEmpty)
+    }
+
+    @Test func dropsDetachedHeadMarker() {
+        let branches = GitService.parseBranches("* (HEAD detached at abc1234)\n")
+        #expect(branches.isEmpty)
+    }
+
+    @Test func ignoresBlankLines() {
+        let branches = GitService.parseBranches("* main\n\n  develop\n")
+        #expect(branches.count == 2)
+    }
+
+    @Test func parsesFullGitBranchAOutput() {
+        let output = """
+        * main
+          develop
+          remotes/origin/HEAD -> origin/main
+          remotes/origin/main
+          remotes/origin/develop
+        """
+        let branches = GitService.parseBranches(output)
+        #expect(branches == [
+            GitBranch(name: "main", isCurrent: true, isRemote: false),
+            GitBranch(name: "develop", isCurrent: false, isRemote: false),
+            GitBranch(name: "origin/main", isCurrent: false, isRemote: true),
+            GitBranch(name: "origin/develop", isCurrent: false, isRemote: true),
+        ])
+    }
+}
+
+// MARK: - GitService.repoFolderName
+
+@Suite("GitService.repoFolderName")
+struct RepoFolderNameTests {
+    @Test func stripsDotGitSuffixFromHTTPSURL() {
+        #expect(GitService.repoFolderName(from: "https://github.com/user/repo.git") == "repo")
+    }
+
+    @Test func handlesURLWithNoDotGitSuffix() {
+        #expect(GitService.repoFolderName(from: "https://github.com/user/repo") == "repo")
+    }
+
+    @Test func handlesTrailingSlash() {
+        #expect(GitService.repoFolderName(from: "https://github.com/user/repo/") == "repo")
+    }
+
+    @Test func handlesScpStyleSSHURL() {
+        #expect(GitService.repoFolderName(from: "git@github.com:user/repo.git") == "repo")
+    }
+
+    @Test func handlesScpStyleSSHURLWithNoPathSeparator() {
+        #expect(GitService.repoFolderName(from: "git@host:repo.git") == "repo")
+    }
+
+    @Test func fallsBackToRepositoryForEmptyInput() {
+        #expect(GitService.repoFolderName(from: "   ") == "repository")
+    }
+}

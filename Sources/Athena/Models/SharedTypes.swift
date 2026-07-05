@@ -390,6 +390,20 @@ struct GitCommit: Identifiable, Sendable {
     var date: Date
 }
 
+/// One entry from `git branch -a`, parsed by `GitService.parseBranches(_:)`.
+/// Powers the branch-switcher menu in `StatusBarView` (plan.md item 20, "D3").
+struct GitBranch: Identifiable, Sendable, Equatable {
+    var name: String
+    var isCurrent: Bool
+    var isRemote: Bool
+
+    /// `name` alone isn't a stable `ForEach` identity across the local and
+    /// remote lists (a remote-tracking branch's name already includes its
+    /// remote, e.g. `"origin/main"`, but nothing rules out a local branch
+    /// sharing that same string), so identity also folds in `isRemote`.
+    var id: String { (isRemote ? "remote:" : "local:") + name }
+}
+
 // MARK: - Git Blame
 
 struct BlameLine: Sendable, Equatable {

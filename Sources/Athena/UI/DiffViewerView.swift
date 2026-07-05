@@ -43,25 +43,27 @@ struct DiffViewerView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Image(systemName: "doc.text.magnifyingglass")
+            Image(systemName: appState.diffViewerCommit != nil ? "clock.arrow.circlepath" : "doc.text.magnifyingglass")
                 .foregroundStyle(.secondary)
                 .font(.system(size: appState.sf(13)))
 
             VStack(alignment: .leading, spacing: 0) {
-                Text(fileName)
+                Text(primaryTitle)
                     .font(.system(size: appState.sf(13), weight: .semibold))
-                if !parentPath.isEmpty {
-                    Text(parentPath)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                if !secondaryTitle.isEmpty {
+                    Text(secondaryTitle)
                         .font(.system(size: appState.sf(11)))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
-                        .truncationMode(.head)
+                        .truncationMode(appState.diffViewerCommit != nil ? .tail : .head)
                 }
             }
 
             Spacer()
 
-            if appState.diffViewerStaged {
+            if appState.diffViewerCommit == nil, appState.diffViewerStaged {
                 Text("Staged")
                     .font(.system(size: appState.sf(10), weight: .semibold))
                     .foregroundStyle(.secondary)
@@ -86,6 +88,22 @@ struct DiffViewerView: View {
         .frame(height: 40)
     }
 
+    /// The commit's message when opened from `CommitHistoryView`, otherwise
+    /// the file change's name.
+    private var primaryTitle: String {
+        if let commit = appState.diffViewerCommit { return commit.message }
+        return fileName
+    }
+
+    /// The commit's short hash + author when opened from `CommitHistoryView`,
+    /// otherwise the file change's parent directory path.
+    private var secondaryTitle: String {
+        if let commit = appState.diffViewerCommit {
+            return "\(commit.shortHash) · \(commit.author)"
+        }
+        return parentPath
+    }
+
     private var fileName: String {
         guard let path = appState.diffViewerChange?.path else { return "" }
         return URL(fileURLWithPath: path).lastPathComponent
@@ -97,8 +115,13 @@ struct DiffViewerView: View {
         return parent == "." ? "" : parent
     }
 
+    /// A commit's diff can span multiple files with different languages, and
+    /// `ParsedDiff` doesn't track a file path per hunk, so commit mode falls
+    /// back to `.plaintext` rather than guessing from one file.
     private var language: Language {
-        guard let path = appState.diffViewerChange?.path else { return .plaintext }
+        guard appState.diffViewerCommit == nil,
+              let path = appState.diffViewerChange?.path
+        else { return .plaintext }
         return Language.detect(from: URL(fileURLWithPath: path))
     }
 

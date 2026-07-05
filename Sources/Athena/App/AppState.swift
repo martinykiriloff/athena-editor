@@ -34,6 +34,10 @@ final class AppState {
     var activeTabId: UUID?
     var fileTree: [FileNode] = []
     var gitStatus: GitStatus = GitStatus()
+    /// All local + remote-tracking branches for the current workspace, kept
+    /// fresh opportunistically by `refreshGitStatus()`. Powers the
+    /// branch-switcher menu in `StatusBarView` (plan.md item 20 point 1).
+    var branches: [GitBranch] = []
     var searchResults: [SearchResult] = []
     var diagnostics: [URL: [Diagnostic]] = [:]
     var chatMessages: [ChatMessage] = []
@@ -119,14 +123,21 @@ final class AppState {
     /// section — determines whether `openDiffViewer` runs `git diff` or
     /// `git diff --cached`.
     var diffViewerStaged: Bool = false
+    /// The commit currently shown in `DiffViewerView`'s overlay when it was
+    /// opened from `CommitHistoryView` instead of a working-tree file change
+    /// (plan.md item 20 point 2). Mutually exclusive with `diffViewerChange`
+    /// — whichever `openDiffViewer` variant runs most recently clears the
+    /// other.
+    var diffViewerCommit: GitCommit?
     var diffViewerParsedDiff: ParsedDiff = .empty
     var diffViewerIsLoading: Bool = false
     var diffViewerErrorMessage: String?
 
     /// `DiffViewerView`'s presentation flag — mirrors `showQuickOpen`'s
     /// "state drives visibility" pattern via a computed property instead of a
-    /// second bool that could drift out of sync with `diffViewerChange`.
-    var showDiffViewer: Bool { diffViewerChange != nil }
+    /// second bool that could drift out of sync with `diffViewerChange`/
+    /// `diffViewerCommit`.
+    var showDiffViewer: Bool { diffViewerChange != nil || diffViewerCommit != nil }
 
     // MARK: - Find All References / Rename Symbol
 
@@ -1237,7 +1248,10 @@ final class AppState {
         } catch { }   // swallow poll errors silently
     }
 
-    /// Refreshes the Git status for the current workspace.
+    /// Refreshes the Git status for the current workspace. Also keeps
+    /// `branches` (the `StatusBarView` branch-switcher's data source) fresh
+    /// opportunistically — best-effort, so a branch-listing failure doesn't
+    /// clobber a successful status refresh's `statusMessage`.
     func refreshGitStatus() async {
         guard let workspace else { return }
 
@@ -1246,6 +1260,90 @@ final class AppState {
         } catch {
             statusMessage = "Git error: \(error.localizedDescription)"
         }
+
+        branches = (try? await gitService.branches(at: workspace.rootURL)) ?? branches
+    }
+
+    // MARK: - Branches
+
+    /// Checks out `name` and refreshes Git status (which also refreshes
+    /// `branches`) — the `StatusBarView` branch-switcher's selection action
+    /// (plan.md item 20 point 1).
+    func checkoutBranch(_ name: String) async {
+        guard let workspace else { return }
+        do {
+            try await gitService.checkout(name, at: workspace.rootURL)
+        } catch {
+            statusMessage = "Checkout failed: \(error.localizedDescription)"
+            return
+        }
+        await refreshGitStatus()
+    }
+
+    /// Creates `name` off HEAD and checks it out in one step
+    /// (`git checkout -b`, see `GitService.createBranch`), then refreshes —
+    /// the branch-switcher's "Create New Branch…" entry.
+    func createAndCheckoutBranch(named name: String) async {
+        guard let workspace else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        do {
+            try await gitService.createBranch(trimmed, at: workspace.rootURL)
+        } catch {
+            statusMessage = "Create branch failed: \(error.localizedDescription)"
+            return
+        }
+        await refreshGitStatus()
+    }
+
+    // MARK: - Commit History
+
+    /// Results of the most recent `git log`, shown in `CommitHistoryView`
+    /// (plan.md item 20 point 2). Populated by `refreshCommitHistory()`.
+    var commitHistory: [GitCommit] = []
+    var isLoadingCommitHistory: Bool = false
+    var commitHistoryErrorMessage: String?
+
+    func refreshCommitHistory(limit: Int = 50) async {
+        guard let workspace else { return }
+        isLoadingCommitHistory = true
+        commitHistoryErrorMessage = nil
+        defer { isLoadingCommitHistory = false }
+
+        do {
+            commitHistory = try await gitService.log(at: workspace.rootURL, limit: limit)
+        } catch {
+            commitHistoryErrorMessage = "Git error: \(error.localizedDescription)"
+        }
+    }
+
+    // MARK: - Clone Repository
+
+    /// Clones `urlString` into a new folder under `destinationParent` (named
+    /// after the repo, via `GitService.repoFolderName(from:)`) and, on
+    /// success, opens the cloned folder as the workspace — the Welcome
+    /// screen's "Clone Repository" flow (plan.md item 20 point 3). A live
+    /// progress bar is out of scope for this pass; progress/failure surface
+    /// through `statusMessage` instead, matching every other long-running Git
+    /// operation in this class.
+    func cloneRepository(urlString: String, destinationParent: URL) async {
+        let trimmedURL = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedURL.isEmpty else { return }
+
+        let folderName = GitService.repoFolderName(from: trimmedURL)
+        let destination = destinationParent.appendingPathComponent(folderName)
+        statusMessage = "Cloning \(trimmedURL)…"
+
+        do {
+            try await gitService.clone(url: trimmedURL, into: destination)
+        } catch {
+            statusMessage = "Clone failed: \(error.localizedDescription)"
+            return
+        }
+
+        statusMessage = "Cloned \(folderName)"
+        await openWorkspace(destination)
     }
 
     /// Discards unstaged working-tree changes to `path` (relative to the
@@ -1289,6 +1387,7 @@ final class AppState {
     /// `discardChanges`/file-watch reloads read a file directly off disk.
     func openDiffViewer(for change: GitFileChange, staged: Bool) async {
         diffViewerChange       = change
+        diffViewerCommit       = nil
         diffViewerStaged       = staged
         diffViewerParsedDiff   = .empty
         diffViewerErrorMessage = nil
@@ -1316,9 +1415,36 @@ final class AppState {
         }
     }
 
+    /// Opens `DiffViewerView` for `commit`'s full changes (`git show <hash>`),
+    /// entered from `CommitHistoryView`'s row click (plan.md item 20 point 2).
+    /// Reuses the same `ParsedDiff`/`UnifiedDiffParser`/`DiffViewerView`
+    /// rendering path as `openDiffViewer(for:staged:)` above rather than a
+    /// second diff renderer. A commit can touch multiple files and
+    /// `ParsedDiff` doesn't track a file path per hunk, so `DiffViewerView`
+    /// renders every hunk without per-file syntax highlighting in this mode.
+    func openDiffViewer(forCommit commit: GitCommit) async {
+        diffViewerChange       = nil
+        diffViewerCommit       = commit
+        diffViewerStaged       = false
+        diffViewerParsedDiff   = .empty
+        diffViewerErrorMessage = nil
+        diffViewerIsLoading    = true
+        defer { diffViewerIsLoading = false }
+
+        guard let workspace else { return }
+
+        do {
+            let text = try await gitService.diff(commit: commit.hash, at: workspace.rootURL)
+            diffViewerParsedDiff = UnifiedDiffParser.parse(text)
+        } catch {
+            diffViewerErrorMessage = "Git error: \(error.localizedDescription)"
+        }
+    }
+
     /// Dismisses the diff viewer overlay.
     func closeDiffViewer() {
         diffViewerChange = nil
+        diffViewerCommit = nil
     }
 
     /// Updates the text content of a tab and marks it as dirty.
