@@ -1781,6 +1781,16 @@ final class AppState {
             postEditorCommand(.findReferences)
         case .renameSymbol:
             postEditorCommand(.renameSymbol)
+        case .moveLineUp:
+            postEditorCommand(.moveLineUp)
+        case .moveLineDown:
+            postEditorCommand(.moveLineDown)
+        case .copyLineUp:
+            postEditorCommand(.copyLineUp)
+        case .copyLineDown:
+            postEditorCommand(.copyLineDown)
+        case .deleteLine:
+            postEditorCommand(.deleteLine)
         case .zoomIn:
             adjustFontSize(by: 2)
         case .zoomOut:

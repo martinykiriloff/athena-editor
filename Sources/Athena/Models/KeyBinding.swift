@@ -33,6 +33,11 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
     case selectNextOccurrence = "editor.action.addSelectionToNextFindMatch"
     case findReferences      = "editor.action.referenceSearch.trigger"
     case renameSymbol        = "editor.action.rename"
+    case moveLineUp          = "editor.action.moveLinesUpAction"
+    case moveLineDown        = "editor.action.moveLinesDownAction"
+    case copyLineUp          = "editor.action.copyLinesUpAction"
+    case copyLineDown        = "editor.action.copyLinesDownAction"
+    case deleteLine          = "editor.action.deleteLines"
     // Zoom
     case zoomIn             = "workbench.action.zoomIn"
     case zoomOut            = "workbench.action.zoomOut"
@@ -64,6 +69,11 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
         case .selectNextOccurrence: return "Select Next Occurrence"
         case .findReferences:    return "Find All References"
         case .renameSymbol:      return "Rename Symbol"
+        case .moveLineUp:        return "Move Line Up"
+        case .moveLineDown:      return "Move Line Down"
+        case .copyLineUp:        return "Copy Line Up"
+        case .copyLineDown:      return "Copy Line Down"
+        case .deleteLine:        return "Delete Line"
         case .zoomIn:            return "Zoom In"
         case .zoomOut:           return "Zoom Out"
         case .resetZoom:         return "Reset Zoom"
@@ -81,7 +91,8 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
         case .quickOpen, .commandPalette, .nextTab, .previousTab, .goToLine, .goToSymbol:
             return "Navigation"
         case .findInFile, .findAndReplace, .toggleComment, .indentLine, .outdentLine,
-             .selectNextOccurrence, .findReferences, .renameSymbol:
+             .selectNextOccurrence, .findReferences, .renameSymbol,
+             .moveLineUp, .moveLineDown, .copyLineUp, .copyLineDown, .deleteLine:
             return "Editor"
         }
     }
@@ -236,6 +247,12 @@ struct KeyBinding: Identifiable, Codable, Sendable {
         // plain ⇧F12 would silently never fire for most users. ⌥⇧F12 avoids
         // that collision — see plan.md item 13's implementation notes.
         KeyBinding(action: .findReferences,     combo: KeyCombo(key: "f12", shift: true, option: true)),
+        // Line operations (plan.md item 17, "B7") — exact VS Code macOS defaults.
+        KeyBinding(action: .moveLineUp,         combo: KeyCombo(key: "up",   option: true)),
+        KeyBinding(action: .moveLineDown,       combo: KeyCombo(key: "down", option: true)),
+        KeyBinding(action: .copyLineUp,         combo: KeyCombo(key: "up",   shift: true, option: true)),
+        KeyBinding(action: .copyLineDown,       combo: KeyCombo(key: "down", shift: true, option: true)),
+        KeyBinding(action: .deleteLine,         combo: KeyCombo(key: "k",    command: true, shift: true)),
         // Zoom — default binding is Cmd+= (no shift); Cmd++ also triggers it (see dispatchKeyInfo)
         KeyBinding(action: .zoomIn,            combo: KeyCombo(key: "=",   command: true)),
         KeyBinding(action: .zoomOut,           combo: KeyCombo(key: "-",   command: true)),

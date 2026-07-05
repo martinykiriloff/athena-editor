@@ -670,3 +670,162 @@ struct SnippetEngineTests {
         #expect(expanded.tabStops.map(\.index) == [2, 10, 0])
     }
 }
+
+// MARK: - Line Operations (plan.md item 17, "B7")
+
+/// Applies a `LineOperations.Edit` to `text` the same way
+/// `EditorView.Coordinator.replace(_:with:in:selecting:)` applies it to a
+/// real `NSTextView`, so tests can assert on the resulting whole-document
+/// text rather than just the raw edit description.
+private func apply(_ edit: LineOperations.Edit, to text: String) -> String {
+    (text as NSString).replacingCharacters(in: edit.range, with: edit.replacement)
+}
+
+@Suite("LineOperations — Move Line Up/Down")
+struct LineOperationsMoveTests {
+
+    @Test func moveMiddleLineUpSwapsWithPrevious() {
+        let text = "AAA\nBBB\nCCC"
+        let caret = NSRange(location: 9, length: 0) // inside "CCC"
+        let edit = LineOperations.moveUp(text: text, selection: caret)
+        #expect(edit != nil)
+        #expect(apply(edit!, to: text) == "AAA\nCCC\nBBB")
+        #expect(edit!.newSelection == NSRange(location: 5, length: 0))
+    }
+
+    @Test func moveMiddleLineDownSwapsWithNext() {
+        let text = "AAA\nBBB\nCCC"
+        let caret = NSRange(location: 5, length: 0) // inside "BBB"
+        let edit = LineOperations.moveDown(text: text, selection: caret)
+        #expect(edit != nil)
+        #expect(apply(edit!, to: text) == "AAA\nCCC\nBBB")
+    }
+
+    @Test func moveUpAtTopOfFileIsNoOp() {
+        let text = "AAA\nBBB"
+        let caret = NSRange(location: 1, length: 0) // inside "AAA", the first line
+        #expect(LineOperations.moveUp(text: text, selection: caret) == nil)
+    }
+
+    @Test func moveDownAtBottomOfFileWithNoTrailingNewlineIsNoOp() {
+        let text = "AAA\nBBB"
+        let caret = NSRange(location: 5, length: 0) // inside "BBB", the last line, no trailing \n
+        #expect(LineOperations.moveDown(text: text, selection: caret) == nil)
+    }
+
+    @Test func moveLastLineWithNoTrailingNewlineUpGainsATerminator() {
+        // The moved line is no longer last, so it must gain a "\n"; the line
+        // it swapped with becomes last and correctly ends up without one.
+        let text = "AAA\nBBB\nCCC"
+        let caret = NSRange(location: 8, length: 0) // start of "CCC", the last line
+        let edit = LineOperations.moveUp(text: text, selection: caret)
+        #expect(edit != nil)
+        #expect(apply(edit!, to: text) == "AAA\nCCC\nBBB")
+    }
+
+    @Test func moveMultiLineSelectionMovesTheWholeBlock() {
+        let text = "AAA\nBBB\nCCC\nDDD"
+        // Selection spans "BBB\nCCC" (touches two lines, not just the caret's line).
+        let selection = NSRange(location: 5, length: 5)
+        let edit = LineOperations.moveDown(text: text, selection: selection)
+        #expect(edit != nil)
+        #expect(apply(edit!, to: text) == "AAA\nDDD\nBBB\nCCC")
+    }
+
+    @Test func moveEmptyFileIsNoOp() {
+        #expect(LineOperations.moveUp(text: "", selection: NSRange(location: 0, length: 0)) == nil)
+        #expect(LineOperations.moveDown(text: "", selection: NSRange(location: 0, length: 0)) == nil)
+    }
+}
+
+@Suite("LineOperations — Copy Line Up/Down")
+struct LineOperationsCopyTests {
+
+    @Test func copyUpInsertsAboveAndSelectionStaysOnOriginal() {
+        // VS Code: Copy Line Up leaves the cursor on the ORIGINAL content,
+        // which is now pushed down below the new copy.
+        let text = "AAA\nBBB\nCCC"
+        let caret = NSRange(location: 5, length: 0) // inside "BBB"
+        let edit = LineOperations.copyUp(text: text, selection: caret)
+        #expect(apply(edit, to: text) == "AAA\nBBB\nBBB\nCCC")
+        #expect(edit.newSelection == NSRange(location: 5 + 4, length: 0)) // shifted down by "BBB\n"
+    }
+
+    @Test func copyDownInsertsBelowAndSelectionMovesToTheCopy() {
+        // VS Code: Copy Line Down moves the cursor to the NEW copy below.
+        let text = "AAA\nBBB\nCCC"
+        let caret = NSRange(location: 5, length: 0) // inside "BBB"
+        let edit = LineOperations.copyDown(text: text, selection: caret)
+        #expect(apply(edit, to: text) == "AAA\nBBB\nBBB\nCCC")
+        #expect(edit.newSelection == NSRange(location: 5 + 4, length: 0)) // moved into the copy
+    }
+
+    @Test func copyUpOnLastLineWithNoTrailingNewlineAddsASeparator() {
+        let text = "AAA\nBBB"
+        let caret = NSRange(location: 5, length: 0) // inside "BBB", last line, no trailing \n
+        let edit = LineOperations.copyUp(text: text, selection: caret)
+        #expect(apply(edit, to: text) == "AAA\nBBB\nBBB")
+    }
+
+    @Test func copyDownOnLastLineWithNoTrailingNewlinePreservesNoTrailingNewline() {
+        let text = "AAA\nBBB"
+        let caret = NSRange(location: 5, length: 0) // inside "BBB", last line, no trailing \n
+        let edit = LineOperations.copyDown(text: text, selection: caret)
+        #expect(apply(edit, to: text) == "AAA\nBBB\nBBB")
+    }
+
+    @Test func copyMultiLineSelectionDuplicatesTheWholeBlock() {
+        let text = "AAA\nBBB\nCCC"
+        let selection = NSRange(location: 4, length: 4) // "BBB\n"
+        let edit = LineOperations.copyDown(text: text, selection: selection)
+        #expect(apply(edit, to: text) == "AAA\nBBB\nBBB\nCCC")
+    }
+
+    @Test func copySingleLineFileWithNoTrailingNewline() {
+        let text = "AAA"
+        let caret = NSRange(location: 1, length: 0)
+        let edit = LineOperations.copyDown(text: text, selection: caret)
+        #expect(apply(edit, to: text) == "AAA\nAAA")
+    }
+}
+
+@Suite("LineOperations — Delete Line")
+struct LineOperationsDeleteTests {
+
+    @Test func deleteMiddleLineLandsCaretAtStartOfFollowingLine() {
+        let text = "AAA\nBBB\nCCC"
+        let caret = NSRange(location: 5, length: 0) // inside "BBB"
+        let edit = LineOperations.deleteLines(text: text, selection: caret)
+        #expect(apply(edit, to: text) == "AAA\nCCC")
+        #expect(edit.newSelection == NSRange(location: 4, length: 0)) // start of "CCC"
+    }
+
+    @Test func deleteLastLineWithNoTrailingNewlineLandsCaretAtEndOfFile() {
+        let text = "AAA\nBBB"
+        let caret = NSRange(location: 5, length: 0) // inside "BBB", the last line
+        let edit = LineOperations.deleteLines(text: text, selection: caret)
+        #expect(apply(edit, to: text) == "AAA\n")
+        #expect(edit.newSelection == NSRange(location: 4, length: 0))
+    }
+
+    @Test func deleteOnlyLineOfSingleLineFileYieldsEmptyText() {
+        let text = "AAA"
+        let caret = NSRange(location: 1, length: 0)
+        let edit = LineOperations.deleteLines(text: text, selection: caret)
+        #expect(apply(edit, to: text) == "")
+        #expect(edit.newSelection == NSRange(location: 0, length: 0))
+    }
+
+    @Test func deleteOnEmptyFileIsHarmlessNoOp() {
+        let edit = LineOperations.deleteLines(text: "", selection: NSRange(location: 0, length: 0))
+        #expect(apply(edit, to: "") == "")
+        #expect(edit.newSelection == NSRange(location: 0, length: 0))
+    }
+
+    @Test func deleteMultiLineSelectionRemovesEveryTouchedLine() {
+        let text = "AAA\nBBB\nCCC\nDDD"
+        let selection = NSRange(location: 5, length: 5) // touches "BBB" and "CCC"
+        let edit = LineOperations.deleteLines(text: text, selection: selection)
+        #expect(apply(edit, to: text) == "AAA\nDDD")
+    }
+}

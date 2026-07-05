@@ -766,7 +766,8 @@ extension EditorView {
             case .find:           findReplaceController?.present(withReplace: false)
             case .findAndReplace: findReplaceController?.present(withReplace: true)
             case .goToLine, .toggleComment, .indent, .outdent, .selectNextOccurrence,
-                 .findReferences, .renameSymbol:
+                 .findReferences, .renameSymbol,
+                 .moveLineUp, .moveLineDown, .copyLineUp, .copyLineDown, .deleteLine:
                 guard tv.window?.firstResponder === tv else { return }
                 switch command {
                 case .goToLine:      promptGoToLine(tv)
@@ -776,6 +777,11 @@ extension EditorView {
                 case .selectNextOccurrence: selectNextOccurrence(tv)
                 case .findReferences: requestFindReferences(tv)
                 case .renameSymbol:   promptRenameSymbol(tv)
+                case .moveLineUp:    applyLineEdit(LineOperations.moveUp(text: tv.string, selection: tv.selectedRange()), in: tv)
+                case .moveLineDown:  applyLineEdit(LineOperations.moveDown(text: tv.string, selection: tv.selectedRange()), in: tv)
+                case .copyLineUp:    applyLineEdit(LineOperations.copyUp(text: tv.string, selection: tv.selectedRange()), in: tv)
+                case .copyLineDown:  applyLineEdit(LineOperations.copyDown(text: tv.string, selection: tv.selectedRange()), in: tv)
+                case .deleteLine:    applyLineEdit(LineOperations.deleteLines(text: tv.string, selection: tv.selectedRange()), in: tv)
                 case .find, .findAndReplace: break // handled above
                 }
             }
@@ -945,6 +951,17 @@ extension EditorView {
             replace(lineRange, with: newBlock, in: tv, selectWhole: true)
         }
 
+        // MARK: - Line operations (move/copy/delete) — plan.md item 17 ("B7")
+
+        /// Applies a `LineOperations.Edit` — computed as a pure function
+        /// from the current text + selection — through the same undo-aware
+        /// `replace` path as every other editor command. `nil` (Move Line
+        /// Up/Down at a document boundary) is silently a no-op.
+        private func applyLineEdit(_ edit: LineOperations.Edit?, in tv: NSTextView) {
+            guard let edit else { return }
+            replace(edit.range, with: edit.replacement, in: tv, selecting: edit.newSelection)
+        }
+
         // MARK: - Option+Click add cursor
 
         /// Adds an empty range (a bare caret, no selection) at `charIndex` to
@@ -1082,6 +1099,18 @@ extension EditorView {
             if selectWhole {
                 tv.setSelectedRange(NSRange(location: range.location, length: (text as NSString).length))
             }
+        }
+
+        /// Same undo-aware replace path, for callers (line move/copy/delete)
+        /// that already computed an exact post-edit selection rather than
+        /// "select the whole replacement" — e.g. Move Line Up's selection
+        /// tracks the moved content at its new offset, not the combined
+        /// swapped range.
+        private func replace(_ range: NSRange, with text: String, in tv: NSTextView, selecting newSelection: NSRange) {
+            guard tv.shouldChangeText(in: range, replacementString: text) else { return }
+            tv.replaceCharacters(in: range, with: text)
+            tv.didChangeText()
+            tv.setSelectedRange(newSelection)
         }
 
         // MARK: Bracket/quote auto-close, type-through, wrap-selection

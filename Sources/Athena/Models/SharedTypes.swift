@@ -294,6 +294,11 @@ enum EditorCommand: Sendable {
     case selectNextOccurrence
     case findReferences
     case renameSymbol
+    case moveLineUp
+    case moveLineDown
+    case copyLineUp
+    case copyLineDown
+    case deleteLine
 }
 
 // MARK: - Workspace & Files
