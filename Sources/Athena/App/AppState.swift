@@ -199,6 +199,7 @@ final class AppState {
         // If the file is already open, just activate it.
         if let existing = openTabs.first(where: { $0.fileURL == url }) {
             activeTabId = existing.id
+            await persistSession()
             return
         }
 
@@ -214,6 +215,7 @@ final class AppState {
             statusMessage = "Opened \(url.lastPathComponent)"
             AppState.registerRecentPath(url)
             await fileWatchService.watchFile(url)
+            await persistSession()
 
             // Bring up the language server (no-op if none is installed) and tell
             // it about the newly opened document. Fired unstructured so file
@@ -267,6 +269,16 @@ final class AppState {
                 activeTabId = openTabs[newIndex].id
             }
         }
+
+        // Persist the updated tab layout so a relaunch reopens what's still open.
+        Task { await self.persistSession() }
+    }
+
+    /// Activates the tab with the given ID (e.g. a tab-bar click) and persists
+    /// the new selection so a relaunch restores the same active tab.
+    func activateTab(_ id: UUID) {
+        activeTabId = id
+        Task { await self.persistSession() }
     }
 
     /// Opens a workspace directory, builds the file tree, and refreshes Git status.
@@ -299,6 +311,7 @@ final class AppState {
         AppState.registerRecentPath(url)
 
         await discoverNPMPackages()
+        await restoreSession(for: url)
     }
 
     // MARK: - Git Blame
@@ -525,6 +538,8 @@ final class AppState {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    // MARK: - Session Restore
+
     /// Reopens the last workspace if one was saved; called on app launch.
     func restoreLastWorkspace() async {
         let path = await settingsService.value(for: "lastWorkspacePath", default: "")
@@ -533,6 +548,55 @@ final class AppState {
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue else { return }
         await openWorkspace(url)
+    }
+
+    /// Reopens every tab persisted for `workspaceURL`'s previous session (in
+    /// order, skipping any file that no longer exists on disk so a routine
+    /// deleted/moved file doesn't crash or surface a confusing error),
+    /// restores the previously-active tab, and restores each tab's last
+    /// cursor line/column. Called from `openWorkspace(_:)` right after the
+    /// file tree is built, so both explicit "Open Folder" and the launch-time
+    /// `restoreLastWorkspace()` path get their tabs back.
+    private func restoreSession(for workspaceURL: URL) async {
+        let sessions: [String: WorkspaceSession] = await settingsService.value(for: "workspaceSessions", default: [:])
+        guard let session = sessions[workspaceURL.path], !session.tabs.isEmpty else { return }
+
+        for persisted in session.tabs {
+            guard FileManager.default.fileExists(atPath: persisted.path) else { continue }
+            let fileURL = URL(fileURLWithPath: persisted.path)
+            await openFile(fileURL)
+            if let idx = openTabs.firstIndex(where: { $0.fileURL == fileURL }) {
+                openTabs[idx].cursorLine   = persisted.cursorLine
+                openTabs[idx].cursorColumn = persisted.cursorColumn
+            }
+        }
+
+        if let activePath = session.activePath,
+           let tab = openTabs.first(where: { $0.fileURL?.path == activePath }) {
+            activeTabId = tab.id
+        }
+
+        // Re-save immediately so a since-deleted file silently drops out of
+        // the session instead of being retried (and skipped) on every future
+        // launch or reopen of this same folder.
+        await persistSession()
+    }
+
+    /// Persists the current tab layout (open files + active tab + per-tab
+    /// cursor position) for the current workspace, keyed by its root path in
+    /// the `"workspaceSessions"` settings entry, so `restoreSession(for:)` can
+    /// rebuild it next time this folder is opened. Untitled (unsaved) tabs
+    /// have no `fileURL` and are intentionally not persisted.
+    private func persistSession() async {
+        guard let ws = workspace else { return }
+        var sessions: [String: WorkspaceSession] = await settingsService.value(for: "workspaceSessions", default: [:])
+        let tabs = openTabs.compactMap { tab -> SessionTab? in
+            guard let url = tab.fileURL else { return nil }
+            return SessionTab(path: url.path, cursorLine: tab.cursorLine, cursorColumn: tab.cursorColumn)
+        }
+        let activePath = openTabs.first(where: { $0.id == activeTabId })?.fileURL?.path
+        sessions[ws.rootURL.path] = WorkspaceSession(tabs: tabs, activePath: activePath)
+        try? await settingsService.setValue(sessions, for: "workspaceSessions")
     }
 
     /// Saves the content of the currently active tab to disk.
@@ -1399,6 +1463,7 @@ final class AppState {
         let tab = TabModel.untitled()
         openTabs.append(tab)
         activeTabId = tab.id
+        Task { await self.persistSession() }
     }
 
     /// Toggles the integrated terminal panel — shows it (and selects the
@@ -1433,6 +1498,7 @@ final class AppState {
             ? (current + 1) % openTabs.count
             : (current - 1 + openTabs.count) % openTabs.count
         activeTabId = openTabs[next].id
+        Task { await self.persistSession() }
     }
 
     /// Builds a prompt that includes recent conversation history as context.

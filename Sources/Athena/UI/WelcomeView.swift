@@ -91,10 +91,7 @@ struct WelcomeView: View {
     }
 
     private func newFile() {
-        var tab = TabModel.untitled()
-        tab.language = .plaintext
-        appState.openTabs.append(tab)
-        appState.activeTabId = tab.id
+        appState.openNewTab()
     }
 }
 

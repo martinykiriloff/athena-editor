@@ -28,9 +28,7 @@ struct TabBarView: View {
 
             // Add-tab button
             Button {
-                let newTab = TabModel.untitled()
-                appState.openTabs.append(newTab)
-                appState.activeTabId = newTab.id
+                appState.openNewTab()
             } label: {
                 Image(systemName: "plus")
                     .font(.system(size: appState.sf(12), weight: .medium))
@@ -113,7 +111,7 @@ private struct TabItemView: View {
         }
         .contentShape(Rectangle())
         .onHover { isHovering = $0 }
-        .onTapGesture { appState.activeTabId = tab.id }
+        .onTapGesture { appState.activateTab(tab.id) }
         .overlay { MiddleClickDetector { appState.closeTab(tab.id) } }
         .contextMenu {
             Button("Close") { appState.closeTab(tab.id) }

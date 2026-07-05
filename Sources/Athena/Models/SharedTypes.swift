@@ -334,6 +334,24 @@ struct TabModel: Identifiable, Sendable {
     }
 }
 
+// MARK: - Session Restore
+
+/// A single persisted tab within a workspace session — enough to reopen the
+/// file via `AppState.openFile(_:)` and restore its last cursor position.
+struct SessionTab: Codable, Sendable {
+    var path: String
+    var cursorLine: Int
+    var cursorColumn: Int
+}
+
+/// The persisted tab layout for one workspace root. Stored keyed by the
+/// workspace's absolute path inside the `"workspaceSessions"` settings entry,
+/// so each project folder remembers its own tabs independently of any other.
+struct WorkspaceSession: Codable, Sendable {
+    var tabs: [SessionTab] = []
+    var activePath: String?
+}
+
 // MARK: - Git
 
 struct GitStatus: Sendable {
