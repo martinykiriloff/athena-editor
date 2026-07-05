@@ -321,16 +321,19 @@ actor LSPManager {
     /// running server pushes a `textDocument/publishDiagnostics` notification.
     /// Only one subscriber is supported at a time (the latest one wins), which
     /// matches how `AppState` consumes it — a single long-lived Task at launch.
+    ///
+    /// Builds the stream via `AsyncStream.makeStream()` rather than the
+    /// `AsyncStream { continuation in ... }` initializer so the continuation
+    /// is stored as a plain, synchronous actor-isolated assignment. The
+    /// closure-based initializer requires hopping through a nested `Task` to
+    /// touch actor state, which races the server's own notification handler:
+    /// a `publishDiagnostics` notification arriving before that nested Task
+    /// is scheduled would find `diagnosticsContinuation` still `nil` and be
+    /// silently dropped.
     func diagnosticsStream() -> AsyncStream<(URL, [Diagnostic])> {
-        AsyncStream { continuation in
-            Task { self.storeDiagnosticsContinuation(continuation) }
-        }
-    }
-
-    private func storeDiagnosticsContinuation(
-        _ continuation: AsyncStream<(URL, [Diagnostic])>.Continuation
-    ) {
+        let (stream, continuation) = AsyncStream<(URL, [Diagnostic])>.makeStream()
         diagnosticsContinuation = continuation
+        return stream
     }
 
     // MARK: - Executable discovery

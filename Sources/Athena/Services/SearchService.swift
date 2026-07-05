@@ -28,6 +28,12 @@ actor SearchService {
 
     // MARK: - Public API
 
+    /// Builds the stream via `AsyncStream.makeStream()` rather than the
+    /// `AsyncStream { continuation in ... }` initializer so `currentTask` is
+    /// stored as a plain, synchronous actor-isolated assignment instead of
+    /// through a nested `Task` — that nested-Task hop raced `cancel()`: a
+    /// call landing before the nested Task ran would find `currentTask` still
+    /// nil and silently fail to cancel the in-flight search.
     func search(
         query: String,
         in url: URL,
@@ -35,26 +41,26 @@ actor SearchService {
         caseSensitive: Bool,
         filter: SearchFilter = SearchFilter()
     ) -> AsyncStream<SearchResult> {
-        AsyncStream { continuation in
-            let task = Task {
-                if let rg = rgExecutable() {
-                    await self.runRipgrep(
-                        rg, query: query, url: url,
-                        regex: regex, caseSensitive: caseSensitive,
-                        filter: filter, continuation: continuation
-                    )
-                } else {
-                    await self.runGrep(
-                        query: query, url: url,
-                        regex: regex, caseSensitive: caseSensitive,
-                        filter: filter, continuation: continuation
-                    )
-                }
-                continuation.finish()
+        let (stream, continuation) = AsyncStream<SearchResult>.makeStream()
+        let task = Task {
+            if let rg = rgExecutable() {
+                await self.runRipgrep(
+                    rg, query: query, url: url,
+                    regex: regex, caseSensitive: caseSensitive,
+                    filter: filter, continuation: continuation
+                )
+            } else {
+                await self.runGrep(
+                    query: query, url: url,
+                    regex: regex, caseSensitive: caseSensitive,
+                    filter: filter, continuation: continuation
+                )
             }
-            continuation.onTermination = { _ in task.cancel() }
-            Task { self.storeCurrentTask(task) }
+            continuation.finish()
         }
+        continuation.onTermination = { _ in task.cancel() }
+        currentTask = task
+        return stream
     }
 
     func cancel() {
@@ -201,9 +207,5 @@ actor SearchService {
             "\(NSHomeDirectory())/.cargo/bin/rg",
         ]
         return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
-    }
-
-    private func storeCurrentTask(_ task: Task<Void, Never>) {
-        currentTask = task
     }
 }

@@ -36,14 +36,19 @@ actor FileWatchService {
 
     /// Returns a stream of file-system events for every currently- and
     /// future-watched file/directory.
+    ///
+    /// Builds the stream via `AsyncStream.makeStream()` rather than the
+    /// `AsyncStream { continuation in ... }` initializer so the continuation
+    /// is stored as a plain, synchronous actor-isolated assignment. The
+    /// closure-based initializer requires hopping through a nested `Task` to
+    /// touch actor state, which races a `DispatchSource`'s own event handler:
+    /// a file event firing before that nested Task is scheduled would find
+    /// `eventContinuation` still `nil` and be silently dropped forever — this
+    /// was the root cause of this suite's intermittent flakiness.
     func eventStream() -> AsyncStream<FileWatchEvent> {
-        AsyncStream { continuation in
-            Task { self.storeEventContinuation(continuation) }
-        }
-    }
-
-    private func storeEventContinuation(_ continuation: AsyncStream<FileWatchEvent>.Continuation) {
+        let (stream, continuation) = AsyncStream<FileWatchEvent>.makeStream()
         eventContinuation = continuation
+        return stream
     }
 
     /// Begins watching `url` (a regular file) for writes/deletes/renames.
@@ -100,10 +105,17 @@ actor FileWatchService {
         let descriptor = open(url.path, O_EVTONLY)
         guard descriptor >= 0 else { return nil }
 
+        // `.userInitiated`, not `.utility`: the entire point of this watch is
+        // timely detection of external changes (avoiding a stale buffer
+        // silently overwriting one on save), so its callback must not be the
+        // thing macOS deprioritizes first when the machine is busy — `.utility`
+        // is explicitly scheduled behind user-facing work and was observed to
+        // starve for multiple seconds under concurrent load (e.g. the test
+        // suite's ~75 other concurrently-scheduled tasks).
         let source = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: descriptor,
             eventMask: mask,
-            queue: DispatchQueue.global(qos: .utility)
+            queue: DispatchQueue.global(qos: .userInitiated)
         )
         source.setCancelHandler { close(descriptor) }
         return Watch(source: source, descriptor: descriptor)

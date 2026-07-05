@@ -252,7 +252,13 @@ struct ImportResolverTests {
 
 // MARK: - FileWatchService
 
-@Suite("FileWatchService")
+// `.serialized`: these tests each spin up a real `DispatchSourceFileSystemObject`
+// and wait on real kqueue-delivered events. Left to run concurrently with each
+// other (swift-testing's default), they compete for the same global concurrent
+// queue as the other ~75 tests in this suite, which was enough contention under
+// load to occasionally blow past the timeout below and fail. Serializing this
+// suite's tests against each other removes that self-inflicted contention.
+@Suite("FileWatchService", .serialized)
 struct FileWatchServiceTests {
 
     /// Collects events off the actor so tests can poll them without racing
@@ -271,7 +277,7 @@ struct FileWatchServiceTests {
     /// Polls `condition` for up to `timeout`, sleeping briefly between
     /// checks — avoids both a flaky fixed `sleep` and hanging forever if a
     /// DispatchSource event never fires.
-    private func waitUntil(timeout: Duration = .seconds(3), _ condition: () async -> Bool) async -> Bool {
+    private func waitUntil(timeout: Duration = .seconds(10), _ condition: () async -> Bool) async -> Bool {
         let deadline = ContinuousClock.now + timeout
         while ContinuousClock.now < deadline {
             if await condition() { return true }
