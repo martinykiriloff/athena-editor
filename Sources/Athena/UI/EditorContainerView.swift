@@ -118,6 +118,21 @@ struct CodeEditorView: View {
                     guard let fileURL else { return }
                     Task { await appState.openImportedFile(importPath, from: fileURL) }
                 },
+                onRequestDefinition: { line, col in
+                    guard let fileURL = tab.fileURL else { return nil }
+                    return try? await appState.lspManager.definition(
+                        fileURL: fileURL, line: line - 1, character: col - 1
+                    )
+                },
+                onOpenDefinitionFile: { url in
+                    await appState.openFile(url)
+                },
+                onRequestHover: { line, col in
+                    guard let fileURL = tab.fileURL else { return nil }
+                    return try? await appState.lspManager.hover(
+                        fileURL: fileURL, line: line - 1, character: col - 1
+                    )
+                },
                 scrollProxy: $scrollProxy,
                 findReplaceProxy: $findReplaceController,
                 breakpoints: fileBreakpoints,

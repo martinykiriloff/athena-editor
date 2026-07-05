@@ -123,6 +123,29 @@ actor LSPManager {
         return parseHover(from: data)
     }
 
+    /// Requests the definition location for the symbol at the given position.
+    /// Returns `nil` when no server is running, the server has no definition
+    /// for this position, or the response cannot be parsed. Handles a
+    /// response `result` that is a single `Location`, an array of `Location`,
+    /// or an array of `LocationLink` (whose target is nested under
+    /// `targetUri`/`targetRange`) — taking the first entry when several come
+    /// back.
+    func definition(fileURL: URL, line: Int, character: Int) async throws -> DefinitionLocation? {
+        let language = Language.detect(from: fileURL)
+        guard servers[language] != nil else { return nil }
+
+        let params: [String: Any] = [
+            "textDocument": ["uri": fileURL.absoluteString],
+            "position": ["line": line, "character": character],
+        ]
+
+        guard let data = try? await sendRequest(method: "textDocument/definition", params: params, language: language) else {
+            return nil
+        }
+
+        return parseDefinition(from: data)
+    }
+
     /// Notifies the language server that a file's content has changed.
     func didChange(fileURL: URL, content: String) async {
         let language = Language.detect(from: fileURL)
@@ -481,6 +504,40 @@ actor LSPManager {
             return arr.compactMap { $0["value"] as? String }.joined(separator: "\n\n")
         }
         return nil
+    }
+
+    /// Parses a `textDocument/definition` response's `result`, which per the
+    /// LSP spec may be a single `Location`, an array of `Location`, or (for
+    /// servers that support it) an array of `LocationLink`.
+    private func parseDefinition(from data: Data) -> DefinitionLocation? {
+        guard
+            let json   = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let result = json["result"]
+        else { return nil }
+
+        if let single = result as? [String: Any] {
+            return location(from: single)
+        }
+        if let array = result as? [[String: Any]] {
+            return array.compactMap { location(from: $0) }.first
+        }
+        return nil
+    }
+
+    /// Parses one `Location` (`{ uri, range }`) or `LocationLink`
+    /// (`{ targetUri, targetRange, ... }`) object into a `DefinitionLocation`,
+    /// converting 0-based LSP positions to this app's 1-based convention.
+    private func location(from entry: [String: Any]) -> DefinitionLocation? {
+        guard
+            let uriString = (entry["uri"] as? String) ?? (entry["targetUri"] as? String),
+            let url       = URL(string: uriString),
+            let range     = (entry["range"] as? [String: Any]) ?? (entry["targetRange"] as? [String: Any]),
+            let start     = range["start"] as? [String: Any],
+            let line      = start["line"] as? Int,
+            let character = start["character"] as? Int
+        else { return nil }
+
+        return DefinitionLocation(fileURL: url, line: line + 1, character: character + 1)
     }
 }
 

@@ -33,6 +33,16 @@ struct EditorView: NSViewRepresentable {
     /// Called when the user clicks on a quoted import path string.
     /// First argument is the raw path (e.g. `"./configs"`), second is the current file URL.
     var onImportClick: (String, URL?) -> Void = { _, _ in }
+    /// Requests `textDocument/definition` for the given 1-based line/column —
+    /// the Cmd+Click fallback used when the click isn't on a recognized
+    /// import path. Returns `nil` when there's no server running or result.
+    var onRequestDefinition: (Int, Int) async -> DefinitionLocation? = { _, _ in nil }
+    /// Opens `url` in the editor (e.g. the target of a cross-file "Go to
+    /// Definition" jump) so this view's `fileURL`/`content` bindings update.
+    var onOpenDefinitionFile: (URL) async -> Void = { _ in }
+    /// Requests LSP hover text (markdown/plaintext, already flattened to a
+    /// plain string) for the given 1-based line/column.
+    var onRequestHover: (Int, Int) async -> String? = { _, _ in nil }
     /// Set by the representable so external callers can scroll the editor.
     var scrollProxy: Binding<EditorScrollProxy?>? = nil
     /// Set by the representable so the SwiftUI find/replace bar can drive
@@ -136,18 +146,31 @@ struct EditorView: NSViewRepresentable {
         context.coordinator.textView = textView
         context.coordinator.installCommandObserver()
 
-        // Wire Cmd+Click: the subclass calls back with the char index.
+        // Wire Cmd+Click: import paths resolve locally (fast, no round-trip);
+        // anything else falls through to an LSP "Go to Definition" lookup.
         let coord = context.coordinator
         textView.onCmdClick = { [weak coord, weak textView] (charIdx: Int) in
             guard let coord, let tv = textView else { return }
-            guard let path = coord.importPath(from: tv.string, at: charIdx) else { return }
-            coord.parent.onImportClick(path, coord.parent.fileURL)
+            if let path = coord.importPath(from: tv.string, at: charIdx) {
+                coord.parent.onImportClick(path, coord.parent.fileURL)
+                return
+            }
+            coord.requestDefinition(at: charIdx)
         }
 
         // Switch to the pointing-hand cursor while Cmd-hovering a clickable target.
         textView.isClickableTarget = { [weak coord, weak textView] (charIdx: Int) in
             guard let coord, let tv = textView else { return false }
             return coord.isCmdClickable(in: tv.string, at: charIdx)
+        }
+
+        // Hover tooltip: after a dwell (and only when Cmd isn't held), show
+        // LSP hover info near the mouse; cancel/dismiss on move-away.
+        textView.onHoverMove = { [weak coord] charIdx in
+            coord?.scheduleHover(at: charIdx)
+        }
+        textView.onHoverExit = { [weak coord] in
+            coord?.cancelHover()
         }
 
         // Wire key interception for completion popup and ghost text accept.
@@ -160,10 +183,12 @@ struct EditorView: NSViewRepresentable {
             coord?.handleInsertText(str) ?? false
         }
 
-        // Dismiss popup and ghost text on any click so they don't block Cmd+Click.
+        // Dismiss popup, ghost text, and hover tooltip on any click so they
+        // don't block Cmd+Click.
         textView.onMouseDown = { [weak coord] in
             coord?.completionController.dismiss()
             coord?.ghostController.dismiss()
+            coord?.cancelHover()
         }
 
         return scrollView
@@ -224,6 +249,7 @@ struct EditorView: NSViewRepresentable {
         if textView.string != content {
             textView.string = content
             coord.applyHighlighting(to: textView)
+            coord.consumePendingDefinitionScroll(in: textView)
         } else if themeChanged || fontChanged {
             coord.applyHighlighting(to: textView)
         }
@@ -356,6 +382,18 @@ extension EditorView {
         @ObservationIgnored private var completionDebounce: Task<Void, Never>?
         @ObservationIgnored private var ghostDebounce:      Task<Void, Never>?
 
+        // Hover tooltip
+        let hoverController = HoverWindowController()
+        @ObservationIgnored private var hoverDebounce: Task<Void, Never>?
+        private var hoverPendingCharIndex: Int?
+
+        // A cross-file "Go to Definition" jump in flight: the target this
+        // view's `fileURL` must match before `updateNSView` can safely
+        // scroll to it — the previous tab's content is still loaded into
+        // this same, reused text view until `AppState.openFile` switches the
+        // active tab and SwiftUI re-renders with the new file's content.
+        private var pendingDefinitionScroll: DefinitionLocation?
+
         init(_ parent: EditorView) {
             self.parent              = parent
             self.currentLanguage     = parent.language
@@ -486,6 +524,108 @@ extension EditorView {
             (c >= 97 && c <= 122) ||   // a–z
             (c >= 48 && c <= 57)  ||   // 0–9
             c == 95 || c == 36         // _ $
+        }
+
+        // MARK: - Go to Definition — LSP fallback when Cmd+Click isn't on an import path
+
+        /// Looks up `textDocument/definition` at `charIndex` and navigates to
+        /// the result. Called from `AthenaTextView.onCmdClick` (wired in
+        /// `makeNSView`) only after `importPath(from:at:)` finds nothing —
+        /// import-path resolution stays the fast, no-round-trip first check.
+        func requestDefinition(at charIndex: Int) {
+            guard let tv = textView else { return }
+            let (line, col) = position(in: tv.string, at: charIndex)
+            Task { [weak self] in
+                guard let self, let target = await self.parent.onRequestDefinition(line, col) else { return }
+                self.navigate(to: target)
+            }
+        }
+
+        /// Same-file targets scroll immediately; cross-file targets ask
+        /// `AppState` (via `onOpenDefinitionFile`) to open the file first —
+        /// `consumePendingDefinitionScroll` finishes the jump once that
+        /// file's content lands in this same, reused text view.
+        private func navigate(to target: DefinitionLocation) {
+            if let tv = textView, target.fileURL.path == parent.fileURL?.path {
+                scrollToPosition(line: target.line, column: target.character, in: tv)
+                return
+            }
+            pendingDefinitionScroll = target
+            Task { [weak self] in
+                await self?.parent.onOpenDefinitionFile(target.fileURL)
+            }
+        }
+
+        /// Called by `updateNSView` right after it loads a newly-activated
+        /// tab's content into the text view — completes a cross-file
+        /// "Go to Definition" jump if the loaded file is the one it was
+        /// waiting on.
+        func consumePendingDefinitionScroll(in textView: NSTextView) {
+            guard let target = pendingDefinitionScroll, target.fileURL.path == parent.fileURL?.path else { return }
+            pendingDefinitionScroll = nil
+            scrollToPosition(line: target.line, column: target.character, in: textView)
+        }
+
+        /// Moves the caret to 1-based `line`/`column` and scrolls it into
+        /// view. Mirrors `promptGoToLine`'s line-walking, extended to also
+        /// land on a column instead of just the line start.
+        private func scrollToPosition(line: Int, column: Int, in tv: NSTextView) {
+            let ns = tv.string as NSString
+            var idx = 0
+            var current = 1
+            while current < line && idx < ns.length {
+                let r = ns.range(of: "\n", options: [], range: NSRange(location: idx, length: ns.length - idx))
+                if r.location == NSNotFound { break }
+                idx = r.location + 1
+                current += 1
+            }
+            let lineRange   = ns.lineRange(for: NSRange(location: min(idx, ns.length), length: 0))
+            let targetIndex = min(idx + max(1, column) - 1, NSMaxRange(lineRange))
+            let range       = NSRange(location: min(targetIndex, ns.length), length: 0)
+            tv.setSelectedRange(range)
+            tv.scrollRangeToVisible(range)
+        }
+
+        // MARK: - Hover tooltip
+
+        /// Schedules a hover lookup after a short dwell (matching the
+        /// debounce style already used for ghost text / completion). Ignores
+        /// repeat calls for the same character, and cancels/hides an
+        /// in-flight or visible tooltip when the hovered character changes
+        /// so the tooltip tracks the token under the mouse.
+        func scheduleHover(at charIndex: Int) {
+            guard hoverPendingCharIndex != charIndex else { return }
+            hoverDebounce?.cancel()
+            hoverController.dismiss()
+            hoverPendingCharIndex = charIndex
+            hoverDebounce = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 500_000_000)  // 500 ms
+                guard !Task.isCancelled, let self else { return }
+                await self.triggerHover(at: charIndex)
+            }
+        }
+
+        /// Cancels any pending hover lookup and hides the tooltip — called
+        /// on mouse-move-away, Cmd being held (navigate mode), any click, or
+        /// any keystroke (see `handleKeyDown`/`textDidChange` below).
+        func cancelHover() {
+            hoverDebounce?.cancel()
+            hoverDebounce = nil
+            hoverPendingCharIndex = nil
+            hoverController.dismiss()
+        }
+
+        private func triggerHover(at charIndex: Int) async {
+            guard let tv = textView else { return }
+            let ns = tv.string as NSString
+            guard charIndex >= 0, charIndex < ns.length else { return }
+
+            let (line, col) = position(in: tv.string, at: charIndex)
+            guard let text = await parent.onRequestHover(line, col), !text.isEmpty else { return }
+
+            var actual = NSRange()
+            let rect = tv.firstRect(forCharacterRange: NSRange(location: charIndex, length: 1), actualRange: &actual)
+            hoverController.show(text: text, near: rect)
         }
 
         private func handle(_ command: EditorCommand) {
@@ -854,10 +994,11 @@ extension EditorView {
             parent.onContentChange(textView.string)
             applyHighlighting(to: textView)
 
-            // Dismiss ghost text on every keystroke; reschedule both triggers.
+            // Dismiss ghost text and hover tooltip on every keystroke; reschedule both triggers.
             completionDebounce?.cancel()
             ghostDebounce?.cancel()
             ghostController.dismiss()
+            cancelHover()
 
             completionDebounce = Task { [weak self] in
                 try? await Task.sleep(nanoseconds: 150_000_000)  // 150 ms
@@ -1037,6 +1178,11 @@ extension EditorView {
         /// Called by `AthenaTextView.keyDown` before AppKit processes the event.
         /// Returns `true` to consume the event.
         func handleKeyDown(_ event: NSEvent) -> Bool {
+            // Any keystroke dismisses a pending/visible hover tooltip —
+            // including Escape (case 53 below also dismisses the popup,
+            // ghost text, and find bar).
+            cancelHover()
+
             switch event.keyCode {
             case 36:  // Return — accept completion, or auto-indent the new line
                 if completionController.isVisible {
@@ -1184,9 +1330,16 @@ extension EditorView {
 
         /// Computes 1-based line and column numbers for the current cursor offset.
         private func cursorPosition(in textView: NSTextView) -> (line: Int, column: Int) {
-            let cursorOffset = textView.selectedRange().location
-            let nsString = textView.string as NSString
-            let safeOffset = min(cursorOffset, nsString.length)
+            position(in: textView.string, at: textView.selectedRange().location)
+        }
+
+        /// Computes 1-based line/column for an arbitrary character offset —
+        /// not necessarily the current selection. Shared by `cursorPosition`
+        /// above and by Cmd+Click "Go to Definition" / hover-dwell lookups,
+        /// which both need the position of the *clicked/hovered* index.
+        private func position(in text: String, at charIndex: Int) -> (line: Int, column: Int) {
+            let nsString = text as NSString
+            let safeOffset = min(max(charIndex, 0), nsString.length)
 
             var line = 1
             var lineStartOffset = 0

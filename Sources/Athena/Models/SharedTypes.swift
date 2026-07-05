@@ -502,6 +502,17 @@ struct CompletionItem: Identifiable, Sendable {
     var insertText: String
 }
 
+// MARK: - Go to Definition
+
+/// A single `textDocument/definition` result. `line`/`character` are
+/// 1-based, matching this app's convention (LSP positions are 0-based over
+/// the wire — see `LSPManager.parseDiagnostics` for the same conversion).
+struct DefinitionLocation: Sendable, Equatable {
+    var fileURL: URL
+    var line: Int
+    var character: Int
+}
+
 // MARK: - Ghost Text Provider
 
 enum GhostTextProvider: String, CaseIterable, Codable, Sendable {

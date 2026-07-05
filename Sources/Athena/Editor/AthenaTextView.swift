@@ -27,6 +27,14 @@ final class AthenaTextView: NSTextView {
     /// cursor shown while Cmd is held, mirroring VS Code.
     var isClickableTarget: ((Int) -> Bool)?
 
+    /// Called with the character index under the mouse while hover-dwell
+    /// tracking is active (mouse moved, Cmd *not* held — see `onHoverExit`
+    /// for the Cmd-held case, which means "navigate", not "show docs").
+    var onHoverMove: ((Int) -> Void)?
+    /// Called when the mouse leaves the view, or Cmd becomes held, so any
+    /// pending/visible hover tooltip should be cancelled/dismissed.
+    var onHoverExit: (() -> Void)?
+
     // MARK: - Mouse handling
 
     override func mouseDown(with event: NSEvent) {
@@ -85,17 +93,20 @@ final class AthenaTextView: NSTextView {
         super.mouseMoved(with: event)
         lastMouseLocation = convert(event.locationInWindow, from: nil)
         updateHoverCursor(modifierFlags: event.modifierFlags)
+        updateHoverTooltipTracking(modifierFlags: event.modifierFlags)
     }
 
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
         lastMouseLocation = nil
+        onHoverExit?()
     }
 
     override func flagsChanged(with event: NSEvent) {
         super.flagsChanged(with: event)
         // Cmd pressed/released without moving the mouse: refresh the cursor in place.
         updateHoverCursor(modifierFlags: event.modifierFlags)
+        updateHoverTooltipTracking(modifierFlags: event.modifierFlags)
     }
 
     /// Shows the pointing-hand cursor when Cmd is held over a clickable target,
@@ -111,5 +122,21 @@ final class AthenaTextView: NSTextView {
             }
         }
         NSCursor.iBeam.set()
+    }
+
+    /// Feeds `onHoverMove`/`onHoverExit` for the hover-tooltip dwell timer.
+    /// Suppressed while Cmd is held (that's "navigate" mode, not "show docs")
+    /// and whenever the mouse isn't over the view at all.
+    private func updateHoverTooltipTracking(modifierFlags: NSEvent.ModifierFlags) {
+        guard let location = lastMouseLocation, !modifierFlags.contains(.command) else {
+            onHoverExit?()
+            return
+        }
+        let charIdx = characterIndex(for: location)
+        if charIdx != NSNotFound {
+            onHoverMove?(charIdx)
+        } else {
+            onHoverExit?()
+        }
     }
 }
