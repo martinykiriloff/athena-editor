@@ -280,6 +280,7 @@ struct EditorView: NSViewRepresentable {
             textView.string = content
             coord.applyHighlighting(to: textView)
             coord.consumePendingDefinitionScroll()
+            coord.cancelActiveSnippet()
         } else if themeChanged || fontChanged {
             coord.applyHighlighting(to: textView)
         }
@@ -411,6 +412,20 @@ struct EditorView: NSViewRepresentable {
 
 extension EditorView {
 
+    /// Live state for a snippet that's "active" after a snippet-shaped
+    /// completion was accepted: its ordered tab stops (absolute document
+    /// `NSRange`s, kept in sync with edits by
+    /// `Coordinator.textView(_:shouldChangeTextIn:replacementString:)`) plus
+    /// which one the caret is currently sitting in. Tab advances
+    /// `currentIndex`; landing on the last stop (`$0`) ends tracking.
+    private struct ActiveSnippet {
+        var stops: [SnippetTabStop]
+        var currentIndex: Int
+
+        var currentRange: NSRange { stops[currentIndex].range }
+        var isOnFinalStop: Bool { currentIndex == stops.count - 1 }
+    }
+
     @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
 
@@ -465,6 +480,13 @@ extension EditorView {
         let ghostController      = GhostTextController()
         @ObservationIgnored private var completionDebounce: Task<Void, Never>?
         @ObservationIgnored private var ghostDebounce:      Task<Void, Never>?
+
+        // Snippet tab-stop tracking (plan.md item 16, "B5") — set when a
+        // snippet-shaped completion (`$1`/`${1:placeholder}`/`$0`) is
+        // accepted in `insertCompletion`; cleared on Escape, on landing on
+        // the final stop, or when the selection moves outside the current
+        // stop's range by any means other than our own `advanceSnippet`.
+        private var activeSnippet: ActiveSnippet?
 
         // Hover tooltip
         let hoverController = HoverWindowController()
@@ -1295,6 +1317,37 @@ extension EditorView {
             )
             updateBracketMatchHighlight(in: textView)
             updateDiagnosticHighlights(in: textView)
+            updateActiveSnippetTracking(for: textView)
+        }
+
+        /// Keeps the active snippet's tab-stop ranges correct as edits land
+        /// in the buffer: shrinks/grows the current stop in place when the
+        /// edit falls inside it, and shifts every later stop by the same
+        /// length delta — the same offset bookkeeping `applyLSPTextEdits`
+        /// does for a batch of edits, applied here to one live edit at a
+        /// time. Always returns `true`; this hook only tracks state; it
+        /// never blocks an edit. Runs for every text change (typed, pasted,
+        /// or programmatic via `shouldChangeText(in:replacementString:)` —
+        /// e.g. bracket auto-close), which is harmless since it's a no-op
+        /// whenever no snippet is active.
+        func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
+            guard var snippet = activeSnippet else { return true }
+            let delta = (replacementString?.utf16.count ?? 0) - affectedCharRange.length
+            guard delta != 0 else { return true }
+
+            for i in snippet.stops.indices {
+                var range = snippet.stops[i].range
+                if i == snippet.currentIndex,
+                   affectedCharRange.location >= range.location,
+                   NSMaxRange(affectedCharRange) <= NSMaxRange(range) {
+                    range.length += delta
+                } else if range.location >= NSMaxRange(affectedCharRange) {
+                    range.location += delta
+                }
+                snippet.stops[i].range = range
+            }
+            activeSnippet = snippet
+            return true
         }
 
         // MARK: Blame annotation
@@ -1579,7 +1632,7 @@ extension EditorView {
                     return handleAutoIndentReturn(in: tv)
                 }
                 return false
-            case 48:  // Tab — accept completion or ghost text
+            case 48:  // Tab — accept completion, accept ghost text, or advance snippet tab stop
                 if completionController.isVisible {
                     return completionController.confirmSelection()
                 }
@@ -1591,16 +1644,23 @@ extension EditorView {
                     }
                     return accepted
                 }
+                if let tv = textView, advanceSnippet(in: tv) {
+                    return true
+                }
                 return false
             case 51:  // Backspace — delete an auto-inserted empty pair as a unit
                 if let tv = textView, deleteEmptyPairIfPresent(in: tv) { return true }
                 return false
-            case 53:  // Escape — dismiss popup, ghost text, the find/replace bar, or multi-cursor
+            case 53:  // Escape — dismiss popup, ghost text, the find/replace bar, multi-cursor, or a snippet
                 if completionController.isVisible  { completionController.dismiss(); return true }
                 if ghostController.hasSuggestion    { ghostController.dismiss();      return true }
                 if findReplaceController?.isVisible == true { findReplaceController?.dismiss(); return true }
                 if let tv = textView, tv.selectedRanges.count > 1 {
                     collapseToSingleCursor(tv)
+                    return true
+                }
+                if activeSnippet != nil {
+                    activeSnippet = nil
                     return true
                 }
                 return false
@@ -1705,16 +1765,96 @@ extension EditorView {
             return NSRange(location: start, length: idx - start)
         }
 
+        /// Inserts the completion's text, expanding it as a snippet
+        /// (`$1`/`${1:placeholder}`/`$0`) via `SnippetEngine` when it's
+        /// shaped like one. A snippet with two or more tab stops becomes
+        /// "active" — its first stop's range is selected (placeholder text
+        /// selected so typing overwrites it, mirroring `wrapSelection`'s
+        /// post-insertion selection above) and Tab (see `handleKeyDown`)
+        /// cycles through the rest. Plain text (no `$`-markers, the common
+        /// case) or a snippet with only an implicit/explicit `$0` behaves
+        /// exactly as before: caret placed at the single relevant point, no
+        /// tracking set up.
         private func insertCompletion(_ item: CompletionItem, wordRange: NSRange, in textView: NSTextView) {
             guard let ts = textView.textStorage else { return }
-            let text = item.insertText.isEmpty ? item.label : item.insertText
+            let raw      = item.insertText.isEmpty ? item.label : item.insertText
+            let expanded = SnippetEngine.expand(raw)
             ts.beginEditing()
-            ts.replaceCharacters(in: wordRange, with: text)
+            ts.replaceCharacters(in: wordRange, with: expanded.text)
             ts.endEditing()
-            textView.setSelectedRange(NSRange(location: wordRange.location + text.count, length: 0))
+
+            switch expanded.tabStops.count {
+            case 0:
+                textView.setSelectedRange(NSRange(location: wordRange.location + (expanded.text as NSString).length, length: 0))
+                activeSnippet = nil
+            case 1:
+                // Only the (implicit or explicit) final stop — nothing to
+                // Tab-cycle; just land the caret there.
+                let stop = expanded.tabStops[0]
+                textView.setSelectedRange(NSRange(location: stop.range.location + wordRange.location, length: stop.range.length))
+                activeSnippet = nil
+            default:
+                let stops = expanded.tabStops.map {
+                    SnippetTabStop(index: $0.index, range: NSRange(location: $0.range.location + wordRange.location, length: $0.range.length))
+                }
+                activeSnippet = ActiveSnippet(stops: stops, currentIndex: 0)
+                textView.setSelectedRange(stops[0].range)
+            }
+
             parent.onContentChange(textView.string)
             applyHighlighting(to: textView)
             completionController.dismiss()
+        }
+
+        /// Advances the active snippet to its next tab stop, selecting that
+        /// stop's range. Returns `false` when no snippet is active (so the
+        /// caller — Tab's priority chain in `handleKeyDown` — falls through
+        /// to normal Tab handling); otherwise returns `true`, consuming the
+        /// keystroke even when this was the final stop (landing on `$0`
+        /// ends tracking, but the Tab that got you there is still handled,
+        /// not passed through as a literal tab character).
+        private func advanceSnippet(in tv: NSTextView) -> Bool {
+            guard var snippet = activeSnippet else { return false }
+            let nextIndex = snippet.currentIndex + 1
+            guard nextIndex < snippet.stops.count else { return true }
+
+            snippet.currentIndex = nextIndex
+            activeSnippet = snippet
+            tv.setSelectedRange(snippet.stops[nextIndex].range)
+            if snippet.isOnFinalStop {
+                activeSnippet = nil
+            }
+            return true
+        }
+
+        /// Cancels the active snippet's tracking when the selection moves
+        /// outside the current stop's range — a mouse click elsewhere, or
+        /// an arrow-key move out of the placeholder. Typing inside the
+        /// current stop keeps it alive: `shouldChangeTextIn` below grows/
+        /// shrinks that stop's tracked range in lockstep with the edit
+        /// before this runs, so the resulting caret position still falls
+        /// within it.
+        private func updateActiveSnippetTracking(for textView: NSTextView) {
+            guard let snippet = activeSnippet else { return }
+            let current   = snippet.currentRange
+            let selection = textView.selectedRange()
+            let withinCurrentStop = selection.location >= current.location
+                && NSMaxRange(selection) <= NSMaxRange(current)
+            if !withinCurrentStop {
+                activeSnippet = nil
+            }
+        }
+
+        /// Cancels any active snippet's tab-stop tracking. Called by
+        /// `EditorView.updateNSView` whenever the reused text view's content
+        /// is swapped for a different tab/file (`textView.string != content`)
+        /// — a snippet's ranges are only meaningful against the document
+        /// they were created in, and that swap happens via a direct
+        /// `textView.string =` assignment that (deliberately, like
+        /// `textDidChange`) never reaches `shouldChangeTextIn`/
+        /// `textViewDidChangeSelection`, so nothing else would clear it.
+        func cancelActiveSnippet() {
+            activeSnippet = nil
         }
 
         // MARK: Private

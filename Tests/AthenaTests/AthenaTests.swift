@@ -591,3 +591,82 @@ struct BreadcrumbSymbolPathTests {
         #expect(path.map(\.name) == ["Second"])
     }
 }
+
+// MARK: - Snippet Engine (plan.md item 16, "B5")
+
+@Suite("SnippetEngine")
+struct SnippetEngineTests {
+
+    @Test func plainTextWithNoMarkersYieldsNoTabStops() {
+        let expanded = SnippetEngine.expand("select()")
+        #expect(expanded.text == "select()")
+        #expect(expanded.tabStops.isEmpty)
+    }
+
+    @Test func placeholderAndPlainStopOrderedWithImplicitFinalStopLast() {
+        // From the task brief: parse `"foo(${1:a}, $2)$0"` into plain text
+        // plus ordered tab-stop ranges.
+        let expanded = SnippetEngine.expand("foo(${1:a}, $2)$0")
+        #expect(expanded.text == "foo(a, )")
+        #expect(expanded.tabStops.map(\.index) == [1, 2, 0])
+        #expect(expanded.tabStops[0].range == NSRange(location: 4, length: 1)) // "a"
+        #expect(expanded.tabStops[1].range == NSRange(location: 7, length: 0)) // between ", " and ")"
+        #expect(expanded.tabStops[2].range == NSRange(location: 8, length: 0)) // end of "foo(a, )"
+    }
+
+    @Test func stopsAreOrderedNumericallyRegardlessOfSourceOrder() {
+        let expanded = SnippetEngine.expand("$2 then $1")
+        #expect(expanded.tabStops.map(\.index) == [1, 2, 0])
+    }
+
+    @Test func placeholderTextIsCapturedAsTheStopsRange() {
+        let expanded = SnippetEngine.expand("${1:hello}")
+        #expect(expanded.text == "hello")
+        #expect(expanded.tabStops.map(\.index) == [1, 0])
+        #expect(expanded.tabStops[0].range == NSRange(location: 0, length: 5))
+        #expect(expanded.tabStops[1].range == NSRange(location: 5, length: 0)) // implicit $0 at end
+    }
+
+    @Test func bracedStopWithoutColonHasEmptyPlaceholder() {
+        let expanded = SnippetEngine.expand("(${1})")
+        #expect(expanded.text == "()")
+        #expect(expanded.tabStops.map(\.index) == [1, 0])
+        #expect(expanded.tabStops[0].range == NSRange(location: 1, length: 0))
+    }
+
+    @Test func explicitFinalStopIsNotDuplicated() {
+        // "$0" appears once in the source; there should be exactly one
+        // final-stop entry, not an extra implicit one appended after it.
+        let expanded = SnippetEngine.expand("a$0b")
+        #expect(expanded.text == "ab")
+        #expect(expanded.tabStops.count == 1)
+        #expect(expanded.tabStops[0].index == 0)
+        #expect(expanded.tabStops[0].range == NSRange(location: 1, length: 0))
+    }
+
+    @Test func implicitFinalStopDefaultsToEndOfExpandedText() {
+        let expanded = SnippetEngine.expand("$1")
+        #expect(expanded.text.isEmpty)
+        #expect(expanded.tabStops.map(\.index) == [1, 0])
+        #expect(expanded.tabStops[1].range == NSRange(location: 0, length: 0))
+    }
+
+    @Test func trailingDollarWithNoDigitsIsLiteral() {
+        let expanded = SnippetEngine.expand("cost: $")
+        #expect(expanded.text == "cost: $")
+        #expect(expanded.tabStops.isEmpty)
+    }
+
+    @Test func malformedBraceFallsBackToLiteralTextWithoutCrashing() {
+        // Unterminated `${1:abc` (no closing `}`) — not well-formed, so the
+        // whole thing is emitted verbatim rather than partially consumed.
+        let expanded = SnippetEngine.expand("${1:abc")
+        #expect(expanded.text == "${1:abc")
+        #expect(expanded.tabStops.isEmpty)
+    }
+
+    @Test func multipleNumberedStopsWithSharedPrefixDigitsParseIndependently() {
+        let expanded = SnippetEngine.expand("${10:ten} $2")
+        #expect(expanded.tabStops.map(\.index) == [2, 10, 0])
+    }
+}

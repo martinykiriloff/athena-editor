@@ -60,7 +60,12 @@ actor LSPManager {
             "rootUri": workspaceURL.absoluteString,
             "capabilities": [
                 "textDocument": [
-                    "completion": ["dynamicRegistration": false],
+                    // `snippetSupport: true` tells the server it's safe to send
+                    // `$1`/`${1:placeholder}`/`$0`-style `insertText` (LSP's
+                    // `insertTextFormat: Snippet`) — `EditorView.Coordinator.insertCompletion`
+                    // expands that via `SnippetEngine` the same way it does for
+                    // Drizzle's own authored snippets (plan.md item 16, "B5").
+                    "completion": ["dynamicRegistration": false, "completionItem": ["snippetSupport": true]],
                     "hover":      ["dynamicRegistration": false],
                 ],
             ],
