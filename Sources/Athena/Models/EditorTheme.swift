@@ -26,12 +26,15 @@ struct EditorTheme: Sendable, Equatable, Hashable {
     private let diagErrHex:  UInt32  // diagnostic squiggle — error
     private let diagWarnHex: UInt32  // diagnostic squiggle — warning
     private let diagInfoHex: UInt32  // diagnostic squiggle — information/hint (drawn subtly)
+    private let diffAddHex:  UInt32  // diff viewer — added-line gutter/background tint
+    private let diffRemHex:  UInt32  // diff viewer — removed-line gutter/background tint
 
     init(id: String, name: String,
          bg: UInt32, fg: UInt32, cursor: UInt32, selection: UInt32, line: UInt32,
          keyword: UInt32, string: UInt32, number: UInt32, comment: UInt32,
          type: UInt32, function: UInt32, annotation: UInt32, whitespace: UInt32,
-         diagnosticError: UInt32, diagnosticWarning: UInt32, diagnosticInfo: UInt32) {
+         diagnosticError: UInt32, diagnosticWarning: UInt32, diagnosticInfo: UInt32,
+         diffAdded: UInt32, diffRemoved: UInt32) {
         self.id      = id
         self.name    = name
         self.bgHex   = bg
@@ -50,6 +53,8 @@ struct EditorTheme: Sendable, Equatable, Hashable {
         self.diagErrHex  = diagnosticError
         self.diagWarnHex = diagnosticWarning
         self.diagInfoHex = diagnosticInfo
+        self.diffAddHex  = diffAdded
+        self.diffRemHex  = diffRemoved
     }
 
     static func == (lhs: EditorTheme, rhs: EditorTheme) -> Bool { lhs.id == rhs.id }
@@ -72,6 +77,8 @@ struct EditorTheme: Sendable, Equatable, Hashable {
     var diagnosticError:   NSColor { rgb(diagErrHex) }
     var diagnosticWarning: NSColor { rgb(diagWarnHex) }
     var diagnosticInfo:    NSColor { rgb(diagInfoHex) }
+    var diffAdded:         NSColor { rgb(diffAddHex) }
+    var diffRemoved:       NSColor { rgb(diffRemHex) }
 
     private func rgb(_ v: UInt32) -> NSColor {
         let r = CGFloat((v >> 16) & 0xFF) / 255.0
@@ -92,7 +99,8 @@ extension EditorTheme {
         keyword: 0xCC7832, string: 0x6A8759, number: 0x6897BB,
         comment: 0x808080, type: 0xA9B7C6, function: 0xFFC66D, annotation: 0xBBB529,
         whitespace: 0x4B5263,  // dim blue-grey — halfway between bg and comment
-        diagnosticError: 0xE05252, diagnosticWarning: 0xCC9C4B, diagnosticInfo: 0x5C8BB0
+        diagnosticError: 0xE05252, diagnosticWarning: 0xCC9C4B, diagnosticInfo: 0x5C8BB0,
+        diffAdded: 0x6A8759, diffRemoved: 0xE05252
     )
 
     // One Dark — Atom-inspired dark theme.
@@ -102,7 +110,8 @@ extension EditorTheme {
         keyword: 0xC678DD, string: 0x98C379, number: 0xD19A66,
         comment: 0x5C6370, type: 0xE5C07B, function: 0x61AFEF, annotation: 0xE06C75,
         whitespace: 0x3E4451,
-        diagnosticError: 0xE06C75, diagnosticWarning: 0xD19A66, diagnosticInfo: 0x61AFEF
+        diagnosticError: 0xE06C75, diagnosticWarning: 0xD19A66, diagnosticInfo: 0x61AFEF,
+        diffAdded: 0x98C379, diffRemoved: 0xE06C75
     )
 
     // GitHub Light — clean light theme.
@@ -112,7 +121,8 @@ extension EditorTheme {
         keyword: 0xD73A49, string: 0x032F62, number: 0x005CC5,
         comment: 0x6A737D, type: 0x6F42C1, function: 0x6F42C1, annotation: 0x005CC5,
         whitespace: 0xD0D7DE,
-        diagnosticError: 0xD73A49, diagnosticWarning: 0xB08800, diagnosticInfo: 0x005CC5
+        diagnosticError: 0xD73A49, diagnosticWarning: 0xB08800, diagnosticInfo: 0x005CC5,
+        diffAdded: 0x28A745, diffRemoved: 0xD73A49
     )
 
     static let all: [EditorTheme] = [.darcula, .oneDark, .githubLight]

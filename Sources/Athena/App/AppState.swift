@@ -109,6 +109,25 @@ final class AppState {
     /// Symbol (⇧⌘O).
     var quickOpenPrefill: String = ""
 
+    // MARK: - Diff Viewer
+
+    /// The Git file change currently shown in `DiffViewerView`'s overlay —
+    /// `nil` when the viewer isn't presented. Set by `GitPanelView`'s row
+    /// click (`openDiffViewer(for:staged:)`), cleared by `closeDiffViewer()`.
+    var diffViewerChange: GitFileChange?
+    /// Whether `diffViewerChange` was opened from the "Staged Changes"
+    /// section — determines whether `openDiffViewer` runs `git diff` or
+    /// `git diff --cached`.
+    var diffViewerStaged: Bool = false
+    var diffViewerParsedDiff: ParsedDiff = .empty
+    var diffViewerIsLoading: Bool = false
+    var diffViewerErrorMessage: String?
+
+    /// `DiffViewerView`'s presentation flag — mirrors `showQuickOpen`'s
+    /// "state drives visibility" pattern via a computed property instead of a
+    /// second bool that could drift out of sync with `diffViewerChange`.
+    var showDiffViewer: Bool { diffViewerChange != nil }
+
     // MARK: - Find All References / Rename Symbol
 
     /// Results of the most recent "Find All References" (⌥⇧F12), shown in
@@ -845,6 +864,7 @@ final class AppState {
         openTabs     = []
         activeTabId  = nil
         statusMessage = ""
+        diffViewerChange = nil
     }
 
     /// Registers `url` at the top of the recent-paths list (max 15 entries).
@@ -1177,6 +1197,49 @@ final class AppState {
             openTabs[index].isDirty = false
             openTabs[index].externallyModified = false
         }
+    }
+
+    // MARK: - Diff Viewer
+
+    /// Opens `DiffViewerView` for `change` and loads/parses its diff text.
+    ///
+    /// Untracked files (`status == "??"`, see `GitService.status`) have no
+    /// meaningful `git diff` against `HEAD` — git prints nothing — so those
+    /// are rendered as a synthetic all-green "added" hunk of the whole file's
+    /// current contents instead (plan.md item 18 point 4), read the same way
+    /// `discardChanges`/file-watch reloads read a file directly off disk.
+    func openDiffViewer(for change: GitFileChange, staged: Bool) async {
+        diffViewerChange       = change
+        diffViewerStaged       = staged
+        diffViewerParsedDiff   = .empty
+        diffViewerErrorMessage = nil
+        diffViewerIsLoading    = true
+        defer { diffViewerIsLoading = false }
+
+        guard let workspace else { return }
+        let url = workspace.rootURL.appendingPathComponent(change.path)
+
+        if change.status == "??" {
+            do {
+                let content = try await fileService.readFile(url)
+                diffViewerParsedDiff = .wholeFileAsAdded(content)
+            } catch {
+                diffViewerErrorMessage = "Unable to read file — it may be binary."
+            }
+            return
+        }
+
+        do {
+            let text = try await gitService.diff(path: change.path, staged: staged, at: workspace.rootURL)
+            diffViewerParsedDiff = UnifiedDiffParser.parse(text)
+        } catch {
+            diffViewerErrorMessage = "Git error: \(error.localizedDescription)"
+        }
+    }
+
+    /// Dismisses the diff viewer overlay.
+    func closeDiffViewer() {
+        diffViewerChange = nil
     }
 
     /// Updates the text content of a tab and marks it as dirty.

@@ -835,3 +835,143 @@ struct LineOperationsDeleteTests {
         #expect(apply(edit, to: text) == "AAA\nDDD")
     }
 }
+
+// MARK: - Unified Diff Parser (plan.md item 18, "D2")
+
+@Suite("UnifiedDiffParser")
+struct UnifiedDiffParserTests {
+
+    @Test func singleHunkWithContextAddedAndRemovedLinesClassifiedWithCorrectLineNumbers() {
+        let diff = """
+        diff --git a/foo.txt b/foo.txt
+        index 1111111..2222222 100644
+        --- a/foo.txt
+        +++ b/foo.txt
+        @@ -1,3 +1,4 @@
+         line1
+        -line2
+        +line2 modified
+        +line3 added
+         line3
+        """
+        let parsed = UnifiedDiffParser.parse(diff)
+        #expect(parsed.isBinary == false)
+        #expect(parsed.hunks.count == 1)
+
+        let hunk = parsed.hunks[0]
+        #expect(hunk.oldStart == 1 && hunk.oldCount == 3)
+        #expect(hunk.newStart == 1 && hunk.newCount == 4)
+        #expect(hunk.lines.count == 5)
+
+        #expect(hunk.lines[0] == DiffLine(kind: .context, oldLineNumber: 1, newLineNumber: 1, text: "line1"))
+        #expect(hunk.lines[1] == DiffLine(kind: .removed, oldLineNumber: 2, newLineNumber: nil, text: "line2"))
+        #expect(hunk.lines[2] == DiffLine(kind: .added, oldLineNumber: nil, newLineNumber: 2, text: "line2 modified"))
+        #expect(hunk.lines[3] == DiffLine(kind: .added, oldLineNumber: nil, newLineNumber: 3, text: "line3 added"))
+        #expect(hunk.lines[4] == DiffLine(kind: .context, oldLineNumber: 3, newLineNumber: 4, text: "line3"))
+    }
+
+    @Test func multipleHunksInOneFileAreParsedSeparately() {
+        let diff = """
+        @@ -1,2 +1,2 @@
+        -a
+        +A
+        @@ -10,2 +10,3 @@
+         x
+        +y
+         z
+        """
+        let parsed = UnifiedDiffParser.parse(diff)
+        #expect(parsed.hunks.count == 2)
+        #expect(parsed.hunks[0].oldStart == 1 && parsed.hunks[0].newStart == 1)
+        #expect(parsed.hunks[0].lines.count == 2)
+        #expect(parsed.hunks[1].oldStart == 10 && parsed.hunks[1].newStart == 10)
+        #expect(parsed.hunks[1].lines.count == 3)
+    }
+
+    @Test func additionsOnlyHunkForANewFileHasNoOldLineNumbers() {
+        let diff = """
+        diff --git a/new.txt b/new.txt
+        new file mode 100644
+        index 0000000..abc1234
+        --- /dev/null
+        +++ b/new.txt
+        @@ -0,0 +1,2 @@
+        +hello
+        +world
+        """
+        let parsed = UnifiedDiffParser.parse(diff)
+        #expect(parsed.hunks.count == 1)
+        let lines = parsed.hunks[0].lines
+        #expect(lines.count == 2)
+        #expect(lines.allSatisfy { $0.kind == .added && $0.oldLineNumber == nil })
+        #expect(lines.map(\.newLineNumber) == [1, 2])
+        #expect(lines.map(\.text) == ["hello", "world"])
+    }
+
+    @Test func deletionsOnlyHunkForARemovedFileHasNoNewLineNumbers() {
+        let diff = """
+        diff --git a/gone.txt b/gone.txt
+        deleted file mode 100644
+        index abc1234..0000000
+        --- a/gone.txt
+        +++ /dev/null
+        @@ -1,2 +0,0 @@
+        -bye
+        -cruel world
+        """
+        let parsed = UnifiedDiffParser.parse(diff)
+        #expect(parsed.hunks.count == 1)
+        let lines = parsed.hunks[0].lines
+        #expect(lines.count == 2)
+        #expect(lines.allSatisfy { $0.kind == .removed && $0.newLineNumber == nil })
+        #expect(lines.map(\.oldLineNumber) == [1, 2])
+    }
+
+    @Test func binaryFileDiffIsDetectedAndNotParsedAsHunks() {
+        let diff = """
+        diff --git a/image.png b/image.png
+        index 1111111..2222222 100644
+        Binary files a/image.png and b/image.png differ
+        """
+        let parsed = UnifiedDiffParser.parse(diff)
+        #expect(parsed.isBinary == true)
+        #expect(parsed.hunks.isEmpty)
+    }
+
+    @Test func noNewlineAtEndOfFileMarkerLinesAreNotTreatedAsContent() {
+        let diff = """
+        @@ -1,1 +1,1 @@
+        -old
+        \\ No newline at end of file
+        +new
+        \\ No newline at end of file
+        """
+        let parsed = UnifiedDiffParser.parse(diff)
+        #expect(parsed.hunks.count == 1)
+        #expect(parsed.hunks[0].lines.count == 2)
+        #expect(parsed.hunks[0].lines[0].kind == .removed)
+        #expect(parsed.hunks[0].lines[1].kind == .added)
+    }
+
+    @Test func wholeFileAsAddedProducesOneHunkWithSequentialNewLineNumbers() {
+        let parsed = ParsedDiff.wholeFileAsAdded("one\ntwo\nthree")
+        #expect(parsed.isBinary == false)
+        #expect(parsed.hunks.count == 1)
+        let lines = parsed.hunks[0].lines
+        #expect(lines.map(\.text) == ["one", "two", "three"])
+        #expect(lines.map(\.newLineNumber) == [1, 2, 3])
+        #expect(lines.allSatisfy { $0.kind == .added && $0.oldLineNumber == nil })
+    }
+
+    @Test func wholeFileAsAddedDropsOnlyTheTrailingNewlineArtifact() {
+        let parsed = ParsedDiff.wholeFileAsAdded("one\ntwo\n")
+        #expect(parsed.hunks.count == 1)
+        #expect(parsed.hunks[0].lines.map(\.text) == ["one", "two"])
+    }
+
+    @Test func wholeFileAsAddedOnEmptyContentYieldsNoHunks() {
+        let parsed = ParsedDiff.wholeFileAsAdded("")
+        #expect(parsed.hunks.isEmpty)
+        #expect(parsed.isBinary == false)
+    }
+}

@@ -330,6 +330,9 @@ private struct GitFileRow: View {
         .background(isHovering ? Color.primary.opacity(0.07) : Color.clear)
         .contentShape(Rectangle())
         .onHover { isHovering = $0 }
+        .onTapGesture {
+            Task { await appState.openDiffViewer(for: change, staged: isStaged) }
+        }
         .contextMenu { contextMenuItems }
         .alert("Discard changes to \"\(fileName)\"?", isPresented: $showDiscardConfirmation) {
             Button("Discard Changes", role: .destructive) {
@@ -368,6 +371,10 @@ private struct GitFileRow: View {
     @ViewBuilder
     private var contextMenuItems: some View {
         if let ws = appState.workspace {
+            Button("View Diff") {
+                Task { await appState.openDiffViewer(for: change, staged: isStaged) }
+            }
+
             Button("Open File") {
                 let url = ws.rootURL.appendingPathComponent(change.path)
                 Task { await appState.openFile(url) }
