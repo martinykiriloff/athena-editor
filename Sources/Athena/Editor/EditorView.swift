@@ -158,6 +158,15 @@ struct EditorView: NSViewRepresentable {
             coord.requestDefinition(at: charIdx)
         }
 
+        // Option+Click adds an empty caret at the click point (multi-cursor).
+        // Cmd+Click is already Go to Definition/import-nav (above), so this
+        // deviates from VS Code's own Cmd+Click-for-multi-cursor convention
+        // to avoid colliding with it — see plan.md item 11.
+        textView.onOptionClick = { [weak coord, weak textView] (charIdx: Int) in
+            guard let coord, let tv = textView else { return }
+            coord.addCursor(at: charIdx, in: tv)
+        }
+
         // Switch to the pointing-hand cursor while Cmd-hovering a clickable target.
         textView.isClickableTarget = { [weak coord, weak textView] (charIdx: Int) in
             guard let coord, let tv = textView else { return false }
@@ -638,13 +647,14 @@ extension EditorView {
             // text view itself to be focused, matching VS Code semantics.
             case .find:           findReplaceController?.present(withReplace: false)
             case .findAndReplace: findReplaceController?.present(withReplace: true)
-            case .goToLine, .toggleComment, .indent, .outdent:
+            case .goToLine, .toggleComment, .indent, .outdent, .selectNextOccurrence:
                 guard tv.window?.firstResponder === tv else { return }
                 switch command {
                 case .goToLine:      promptGoToLine(tv)
                 case .toggleComment: toggleComment(tv)
                 case .indent:        shiftIndent(tv, indent: true)
                 case .outdent:       shiftIndent(tv, indent: false)
+                case .selectNextOccurrence: selectNextOccurrence(tv)
                 case .find, .findAndReplace: break // handled above
                 }
             }
@@ -764,6 +774,112 @@ extension EditorView {
             replace(lineRange, with: newBlock, in: tv, selectWhole: true)
         }
 
+        // MARK: - Option+Click add cursor
+
+        /// Adds an empty range (a bare caret, no selection) at `charIndex` to
+        /// the existing `selectedRanges` — wired from `AthenaTextView.onOptionClick`.
+        /// A no-op if a caret already sits there. Typing afterward replaces
+        /// at every caret at once via the same native AppKit multi-range
+        /// editing that powers ⌘D (see `selectNextOccurrence` above).
+        func addCursor(at charIndex: Int, in tv: NSTextView) {
+            let maxLocation = (tv.string as NSString).length
+            guard charIndex >= 0, charIndex <= maxLocation else { return }
+
+            var ranges = tv.selectedRanges.map(\.rangeValue)
+            let newRange = NSRange(location: charIndex, length: 0)
+            guard !ranges.contains(where: { NSEqualRanges($0, newRange) }) else { return }
+
+            ranges.append(newRange)
+            ranges.sort { $0.location < $1.location }
+            tv.setSelectedRanges(ranges.map { NSValue(range: $0) }, affinity: .downstream, stillSelecting: false)
+        }
+
+        // MARK: - Select Next Occurrence (⌘D)
+
+        /// `KeyAction.selectNextOccurrence` (⌘D). With a single empty caret,
+        /// selects the word touching it. With any active selection(s) —
+        /// typically already grown by a previous ⌘D — finds the next
+        /// occurrence (case-sensitive, wrapping around the document) of the
+        /// last range's exact text and adds it as another discontiguous
+        /// range in `selectedRanges`. AppKit's native multi-range editing
+        /// then replaces every selected range at once on the next keystroke;
+        /// no hand-rolled multi-caret typing is needed (see `applyHighlighting`
+        /// and `handleInsertText` for the places that had to be made
+        /// multi-range-safe so they don't clobber this). No-op when there's
+        /// no word under the caret, or no further occurrence exists.
+        private func selectNextOccurrence(_ tv: NSTextView) {
+            let ns = tv.string as NSString
+            guard ns.length > 0 else { return }
+
+            let ranges = tv.selectedRanges.map(\.rangeValue).sorted { $0.location < $1.location }
+            guard !ranges.isEmpty else { return }
+
+            // No selection yet: select the word under/touching the caret.
+            if ranges.count == 1, ranges[0].length == 0 {
+                guard let word = wordRange(in: ns, around: ranges[0].location) else { return }
+                tv.setSelectedRange(word)
+                tv.scrollRangeToVisible(word)
+                return
+            }
+
+            // Grow the chain: search for the next occurrence of the
+            // last (highest-location) range's text, forward from its end,
+            // wrapping around but stopping before the first occurrence in
+            // the chain so a full circle with nothing new reports `nil`.
+            guard let anchor = ranges.last, anchor.length > 0 else { return }
+            let target = ns.substring(with: anchor)
+            guard !target.isEmpty else { return }
+
+            guard let found = nextOccurrence(
+                of: target, in: ns,
+                searchFrom: NSMaxRange(anchor),
+                wrapLimit: ranges.first!.location
+            ) else { return }
+
+            var newRanges = ranges
+            newRanges.append(found)
+            newRanges.sort { $0.location < $1.location }
+            tv.setSelectedRanges(newRanges.map { NSValue(range: $0) }, affinity: .downstream, stillSelecting: false)
+            tv.scrollRangeToVisible(found)
+        }
+
+        /// The identifier word containing `location`, or the word touching it
+        /// from the left when `location` sits at/after a non-word boundary —
+        /// e.g. the caret placed immediately after a word, or at end-of-document.
+        /// Reuses `isIdentifierChar` (shared with Cmd+Click's clickable-target check).
+        private func wordRange(in ns: NSString, around location: Int) -> NSRange? {
+            guard ns.length > 0 else { return nil }
+            var idx = location
+            if idx >= ns.length || !Self.isIdentifierChar(ns.character(at: idx)) {
+                idx -= 1
+            }
+            guard idx >= 0, idx < ns.length, Self.isIdentifierChar(ns.character(at: idx)) else { return nil }
+
+            var start = idx
+            while start > 0, Self.isIdentifierChar(ns.character(at: start - 1)) { start -= 1 }
+            var end = idx + 1
+            while end < ns.length, Self.isIdentifierChar(ns.character(at: end)) { end += 1 }
+            return NSRange(location: start, length: end - start)
+        }
+
+        /// Case-sensitive, literal search for `target` starting at `location`
+        /// and running to the document end, then wrapping around to the
+        /// document start — but only up to (excluding) `wrapLimit`, the
+        /// chain's first occurrence, so wrapping all the way around without a
+        /// *new* match correctly reports `nil` instead of re-finding a range
+        /// that's already selected.
+        private func nextOccurrence(of target: String, in ns: NSString, searchFrom location: Int, wrapLimit: Int) -> NSRange? {
+            if location < ns.length {
+                let tail = NSRange(location: location, length: ns.length - location)
+                let r = ns.range(of: target, options: [.literal], range: tail)
+                if r.location != NSNotFound { return r }
+            }
+            guard wrapLimit > 0 else { return nil }
+            let head = NSRange(location: 0, length: min(wrapLimit, ns.length))
+            let r = ns.range(of: target, options: [.literal], range: head)
+            return r.location == NSNotFound ? nil : r
+        }
+
         /// Inserts a newline followed by the same leading indentation as the
         /// current line, bumped one level deeper when the character just
         /// before the cursor opens a block (`{`, `(`, `[`, `:`). Returns `true`
@@ -846,6 +962,13 @@ extension EditorView {
         func handleInsertText(_ string: String) -> Bool {
             guard let tv = textView, string.utf16.count == 1, let ch = string.utf16.first else { return false }
 
+            // Multi-range selections (a ⌘D chain, or ⌥Click carets) must fall
+            // through to AppKit's native multi-range `insertText` — every
+            // check below only reasons about `tv.selectedRange()` (the
+            // primary range), so handling it here would apply the pairing
+            // logic to just one range and silently drop the others.
+            guard tv.selectedRanges.count <= 1 else { return false }
+
             let selection = tv.selectedRange()
 
             // Wrap a non-empty selection in the pair rather than replacing it.
@@ -911,6 +1034,10 @@ extension EditorView {
         /// Backspace doesn't leave a dangling closer behind. Called from
         /// `handleKeyDown` on the Backspace key. Returns `true` if handled.
         private func deleteEmptyPairIfPresent(in tv: NSTextView) -> Bool {
+            // As in `handleInsertText`: bail out to native multi-range
+            // Backspace when more than one range/caret is selected, rather
+            // than acting only on the primary one and swallowing the event.
+            guard tv.selectedRanges.count <= 1 else { return false }
             let selection = tv.selectedRange()
             guard selection.length == 0, selection.location > 0 else { return false }
             let ns = tv.string as NSString
@@ -934,12 +1061,18 @@ extension EditorView {
         func applyHighlighting(to textView: NSTextView) {
             let attributed = highlighter.highlight(textView.string)
 
-            // Preserve the current selection so the cursor doesn't jump.
-            let selectedRange = textView.selectedRange()
+            // Preserve every selected range — not just the primary one — so a
+            // multi-range selection (a ⌘D chain, or ⌥Click carets) survives
+            // this re-highlight, which runs after *every* keystroke via
+            // `textDidChange`. Using the singular `selectedRange`/`setSelectedRange`
+            // here would silently collapse a multi-range selection back down
+            // to one range right after the first character typed into it.
+            let selectedRanges = textView.selectedRanges
             textView.textStorage?.setAttributedString(attributed)
             let maxLocation = (textView.string as NSString).length
-            if selectedRange.location <= maxLocation {
-                textView.setSelectedRange(selectedRange)
+            let validRanges = selectedRanges.filter { NSMaxRange($0.rangeValue) <= maxLocation }
+            if !validRanges.isEmpty {
+                textView.setSelectedRanges(validRanges, affinity: .downstream, stillSelecting: false)
             }
 
             // After overwriting all attributes, re-stamp import paths with
@@ -1173,6 +1306,14 @@ extension EditorView {
             return nil
         }
 
+        /// Escape with multiple ranges/carets selected: drop back to a single
+        /// cursor at the last (highest-location) range, mirroring VS Code's
+        /// "remove secondary cursors" behavior.
+        private func collapseToSingleCursor(_ tv: NSTextView) {
+            guard let last = tv.selectedRanges.map(\.rangeValue).max(by: { $0.location < $1.location }) else { return }
+            tv.setSelectedRange(last)
+        }
+
         // MARK: - Key interception (completion popup + ghost text)
 
         /// Called by `AthenaTextView.keyDown` before AppKit processes the event.
@@ -1188,7 +1329,10 @@ extension EditorView {
                 if completionController.isVisible {
                     return completionController.confirmSelection()
                 }
-                if currentAutoIndent, let tv = textView {
+                // Multi-range selections fall through to native multi-range
+                // Return handling (a plain "\n" at every range) rather than
+                // this single-range indent computation.
+                if currentAutoIndent, let tv = textView, tv.selectedRanges.count <= 1 {
                     return handleAutoIndentReturn(in: tv)
                 }
                 return false
@@ -1208,10 +1352,14 @@ extension EditorView {
             case 51:  // Backspace — delete an auto-inserted empty pair as a unit
                 if let tv = textView, deleteEmptyPairIfPresent(in: tv) { return true }
                 return false
-            case 53:  // Escape — dismiss popup, ghost text, or the find/replace bar
+            case 53:  // Escape — dismiss popup, ghost text, the find/replace bar, or multi-cursor
                 if completionController.isVisible  { completionController.dismiss(); return true }
                 if ghostController.hasSuggestion    { ghostController.dismiss();      return true }
                 if findReplaceController?.isVisible == true { findReplaceController?.dismiss(); return true }
+                if let tv = textView, tv.selectedRanges.count > 1 {
+                    collapseToSingleCursor(tv)
+                    return true
+                }
                 return false
             case 125: // Down arrow — navigate popup
                 if completionController.isVisible  { completionController.moveDown(); return true }

@@ -291,6 +291,7 @@ enum EditorCommand: Sendable {
     case toggleComment
     case indent
     case outdent
+    case selectNextOccurrence
 }
 
 // MARK: - Workspace & Files

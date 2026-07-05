@@ -11,6 +11,11 @@ final class AthenaTextView: NSTextView {
     /// Called with the character index when the user Cmd+Clicks anywhere in the view.
     var onCmdClick: ((Int) -> Void)?
 
+    /// Called with the character index when the user Option+Clicks anywhere
+    /// in the view — adds an empty caret there (multi-cursor). Option, not
+    /// Cmd, because Cmd+Click is already Go to Definition/import navigation.
+    var onOptionClick: ((Int) -> Void)?
+
     /// Return `true` to consume the key event (completion popup, ghost text accept, etc.).
     var onKeyDown: ((NSEvent) -> Bool)?
     /// Called on every mouseDown so the coordinator can dismiss popups before the click lands.
@@ -44,6 +49,15 @@ final class AthenaTextView: NSTextView {
             let charIdx = characterIndex(for: point)
             if charIdx != NSNotFound { onCmdClick?(charIdx) }
             super.mouseDown(with: event)
+            return
+        }
+        if event.modifierFlags.contains(.option) {
+            let point   = convert(event.locationInWindow, from: nil)
+            let charIdx = characterIndex(for: point)
+            if charIdx != NSNotFound { onOptionClick?(charIdx) }
+            // Don't fall through to `super` — a plain click's default
+            // behavior replaces `selectedRanges` with a single new caret,
+            // which would discard the ranges we're adding this one to.
             return
         }
         super.mouseDown(with: event)

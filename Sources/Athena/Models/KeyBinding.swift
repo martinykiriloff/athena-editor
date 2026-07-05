@@ -29,6 +29,7 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
     case toggleComment      = "editor.action.commentLine"
     case indentLine         = "editor.action.indentLines"
     case outdentLine        = "editor.action.outdentLines"
+    case selectNextOccurrence = "editor.action.addSelectionToNextFindMatch"
     // Zoom
     case zoomIn             = "workbench.action.zoomIn"
     case zoomOut            = "workbench.action.zoomOut"
@@ -56,6 +57,7 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
         case .toggleComment:     return "Toggle Line Comment"
         case .indentLine:        return "Indent Line"
         case .outdentLine:       return "Outdent Line"
+        case .selectNextOccurrence: return "Select Next Occurrence"
         case .zoomIn:            return "Zoom In"
         case .zoomOut:           return "Zoom Out"
         case .resetZoom:         return "Reset Zoom"
@@ -72,7 +74,8 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
             return "View"
         case .quickOpen, .commandPalette, .nextTab, .previousTab, .goToLine:
             return "Navigation"
-        case .findInFile, .findAndReplace, .toggleComment, .indentLine, .outdentLine:
+        case .findInFile, .findAndReplace, .toggleComment, .indentLine, .outdentLine,
+             .selectNextOccurrence:
             return "Editor"
         }
     }
@@ -216,6 +219,7 @@ struct KeyBinding: Identifiable, Codable, Sendable {
         KeyBinding(action: .toggleComment,     combo: KeyCombo(key: "/",   command: true)),
         KeyBinding(action: .indentLine,        combo: KeyCombo(key: "]",   command: true)),
         KeyBinding(action: .outdentLine,       combo: KeyCombo(key: "[",   command: true)),
+        KeyBinding(action: .selectNextOccurrence, combo: KeyCombo(key: "d", command: true)),
         // Zoom — default binding is Cmd+= (no shift); Cmd++ also triggers it (see dispatchKeyInfo)
         KeyBinding(action: .zoomIn,            combo: KeyCombo(key: "=",   command: true)),
         KeyBinding(action: .zoomOut,           combo: KeyCombo(key: "-",   command: true)),

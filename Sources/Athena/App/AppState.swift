@@ -1411,6 +1411,8 @@ final class AppState {
             postEditorCommand(.indent)
         case .outdentLine:
             postEditorCommand(.outdent)
+        case .selectNextOccurrence:
+            postEditorCommand(.selectNextOccurrence)
         case .zoomIn:
             adjustFontSize(by: 2)
         case .zoomOut:
