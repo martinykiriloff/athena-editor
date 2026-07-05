@@ -28,6 +28,10 @@ struct EditorView: NSViewRepresentable {
     /// used to paint squiggle underlines and feed the gutter's error/warning
     /// dots and the hover tooltip's "show the diagnostic message" priority path.
     var diagnostics: [Diagnostic] = []
+    /// Per-line git change classification for the file being edited
+    /// (`AppState.gitLineChanges[fileURL]`), feeding the gutter's colored
+    /// change bar (plan.md item 19, "D4").
+    var gitLineChanges: [Int: GitLineChangeType] = [:]
     /// The URL of the file being edited — used for import path resolution.
     var fileURL: URL? = nil
     var onCursorMove: (Int, Int) -> Void = { _, _ in }
@@ -110,6 +114,8 @@ struct EditorView: NSViewRepresentable {
         gutter.breakpoints = breakpoints
         gutter.debugLine   = debugLine
         gutter.diagnostics = Self.gutterDiagnosticSeverities(from: diagnostics)
+        gutter.gitLineChanges = gitLineChanges
+        gutter.theme = theme
         scrollView.verticalRulerView = gutter
         scrollView.hasVerticalRuler  = true
         scrollView.rulersVisible     = true
@@ -126,6 +132,7 @@ struct EditorView: NSViewRepresentable {
         context.coordinator.applyHighlighting(to: textView)
         context.coordinator.currentDiagnostics = diagnostics
         context.coordinator.updateDiagnosticHighlights(in: textView)
+        context.coordinator.currentGitLineChanges = gitLineChanges
 
         // Inline blame annotation label.
         let blameLabel = NSTextField(labelWithString: "")
@@ -244,6 +251,10 @@ struct EditorView: NSViewRepresentable {
         if themeChanged {
             coord.currentTheme = theme
             applyTheme(theme, to: textView)
+            if let gutter = coord.gutterView {
+                gutter.theme = theme
+                gutter.needsDisplay = true
+            }
         }
 
         if fontChanged {
@@ -314,6 +325,17 @@ struct EditorView: NSViewRepresentable {
             coord.updateDiagnosticHighlights(in: textView)
             if let gutter = coord.gutterView {
                 gutter.diagnostics = Self.gutterDiagnosticSeverities(from: diagnostics)
+                gutter.needsDisplay = true
+            }
+        }
+
+        // Fresh git-change classification (a new `git diff` result from
+        // `AppState.refreshGitLineChanges`/`scheduleGitLineChangesRefresh`)
+        // — recompute the gutter's change bar.
+        if coord.currentGitLineChanges != gitLineChanges {
+            coord.currentGitLineChanges = gitLineChanges
+            if let gutter = coord.gutterView {
+                gutter.gitLineChanges = gitLineChanges
                 gutter.needsDisplay = true
             }
         }
@@ -474,6 +496,11 @@ extension EditorView {
         // tooltip to prioritize a diagnostic's message over an LSP hover call.
         var currentDiagnostics: [Diagnostic] = []
         private var highlightedDiagnosticRanges: [NSRange] = []
+
+        // Git gutter change indicators — mirrors `currentDiagnostics` above,
+        // gating `GutterView.gitLineChanges` re-sync to only fire when
+        // `AppState.gitLineChanges[fileURL]` actually changed.
+        var currentGitLineChanges: [Int: GitLineChangeType] = [:]
 
         // Completion popup and ghost text
         let completionController = CompletionWindowController()

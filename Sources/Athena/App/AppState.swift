@@ -173,6 +173,16 @@ final class AppState {
     // Blame data keyed by file path.
     var blameCache: [String: [Int: BlameLine]] = [:]
 
+    // MARK: - Git Gutter Change Indicators
+
+    /// Per-open-file, per-line git change classification relative to
+    /// `HEAD` — the source `GutterView`'s change bar reads from (via
+    /// `EditorContainerView`/`EditorView`, the same way `diagnostics` is
+    /// sourced). Populated by `refreshGitLineChanges(for:)` and
+    /// `scheduleGitLineChangesRefresh`.
+    var gitLineChanges: [URL: [Int: GitLineChangeType]] = [:]
+    @ObservationIgnored private var gitLineChangesRefreshTask: Task<Void, Never>?
+
     // MARK: - Editor settings (mirrored from SettingsService on launch)
     var editorFontSize:          CGFloat = 14
 
@@ -320,6 +330,7 @@ final class AppState {
                 await self.fileWatchService.stopWatchingFile(url)
             }
             diagnostics.removeValue(forKey: url)
+            gitLineChanges.removeValue(forKey: url)
         }
 
         openTabs.remove(at: index)
@@ -442,6 +453,64 @@ final class AppState {
             self.documentSymbolsCache[fileURL.path] = symbols
             self.documentSymbols = symbols
         }
+    }
+
+    // MARK: - Git Gutter Change Indicators
+
+    /// Recomputes the per-line git change classification for the file in
+    /// `tab` and stores it in `gitLineChanges`. Called from
+    /// `CodeEditorView`'s `.task(id: tab.id)` (mirroring `loadBlame(for:)`
+    /// and `loadDocumentSymbols(for:)`, so it refreshes on every tab
+    /// switch), and again after a successful save.
+    func refreshGitLineChanges(for tab: TabModel) async {
+        guard let fileURL = tab.fileURL else { return }
+        guard let changes = await computeGitLineChanges(for: fileURL) else { return }
+        gitLineChanges[fileURL] = changes
+    }
+
+    /// Debounces a `git diff` refetch 800 ms after the last keystroke in the
+    /// active tab's file (called from `updateTabContent`) — mirrors
+    /// `scheduleDocumentSymbolsRefresh`'s debounce style exactly: the change
+    /// bar only needs to be eventually consistent, not track every
+    /// keystroke (a real `git diff` subprocess call per keystroke would be
+    /// wasteful).
+    private func scheduleGitLineChangesRefresh(tabId: UUID, fileURL: URL) {
+        gitLineChangesRefreshTask?.cancel()
+        gitLineChangesRefreshTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            guard !Task.isCancelled, let self else { return }
+            guard let changes = await self.computeGitLineChanges(for: fileURL) else { return }
+            guard !Task.isCancelled, self.activeTabId == tabId else { return }
+            self.gitLineChanges[fileURL] = changes
+        }
+    }
+
+    /// Runs `git diff` for `fileURL` (or, for an untracked file, synthesizes
+    /// a whole-file "added" diff via `ParsedDiff.wholeFileAsAdded`, the same
+    /// helper the diff viewer uses for the identical situation) and reduces
+    /// it through `UnifiedDiffParser.classifyLineChanges`. Returns `nil`
+    /// when there's no open workspace, no `.git` directory (mirroring
+    /// `loadBlame(for:)`'s own guard), or the git/file read fails — callers
+    /// treat `nil` as "leave the existing state alone" rather than clearing it.
+    private func computeGitLineChanges(for fileURL: URL) async -> [Int: GitLineChangeType]? {
+        guard let ws = workspace else { return nil }
+        let gitDir = ws.rootURL.appendingPathComponent(".git")
+        guard FileManager.default.fileExists(atPath: gitDir.path) else { return nil }
+
+        let isUntracked = gitStatus.untracked.contains {
+            ws.rootURL.appendingPathComponent($0.path).standardizedFileURL == fileURL.standardizedFileURL
+        }
+
+        let parsed: ParsedDiff
+        if isUntracked {
+            guard let content = try? await fileService.readFile(fileURL) else { return nil }
+            parsed = .wholeFileAsAdded(content)
+        } else {
+            guard let diffText = try? await gitService.diff(path: fileURL.path, staged: false, at: ws.rootURL)
+            else { return nil }
+            parsed = UnifiedDiffParser.parse(diffText)
+        }
+        return UnifiedDiffParser.classifyLineChanges(in: parsed)
     }
 
     // MARK: - Settings persistence
@@ -779,6 +848,11 @@ final class AppState {
             return
         }
 
+        // A save changes the file-vs-HEAD relationship — recompute the
+        // gutter's change bar for it now rather than waiting for the next
+        // debounced edit or tab switch.
+        await refreshGitLineChanges(for: tab)
+
         // Upload to active SFCC sandbox if one is configured.
         if let conn = sfccConnections.first(where: { $0.isActive }),
            let ws = workspace {
@@ -828,8 +902,12 @@ final class AppState {
             AppState.registerRecentPath(newURL)
             if let previousURL = tab.fileURL {
                 await fileWatchService.stopWatchingFile(previousURL)
+                gitLineChanges.removeValue(forKey: previousURL)
             }
             await fileWatchService.watchFile(newURL)
+            if let index = openTabs.firstIndex(where: { $0.id == tab.id }) {
+                await refreshGitLineChanges(for: openTabs[index])
+            }
         } catch {
             statusMessage = "Save failed: \(error.localizedDescription)"
         }
@@ -857,6 +935,7 @@ final class AppState {
         await lspManager.stopAllServers()
         await fileWatchService.stopAll()
         diagnostics  = [:]
+        gitLineChanges = [:]
 
         workspace    = nil
         fileTree     = []
@@ -1252,6 +1331,7 @@ final class AppState {
             Task { await self.lspManager.didChange(fileURL: url, content: content) }
             if id == activeTabId {
                 scheduleDocumentSymbolsRefresh(tabId: id, fileURL: url)
+                scheduleGitLineChangesRefresh(tabId: id, fileURL: url)
             }
         }
 
@@ -1893,6 +1973,7 @@ final class AppState {
                 if let i = openTabs.firstIndex(where: { $0.id == tab.id }) {
                     openTabs[i].isDirty = false
                     openTabs[i].externallyModified = false
+                    await refreshGitLineChanges(for: openTabs[i])
                 }
             } catch {
                 statusMessage = "Error saving \(url.lastPathComponent): \(error.localizedDescription)"

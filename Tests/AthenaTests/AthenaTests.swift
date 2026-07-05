@@ -975,3 +975,100 @@ struct UnifiedDiffParserTests {
         #expect(parsed.isBinary == false)
     }
 }
+
+@Suite("UnifiedDiffParser.classifyLineChanges")
+struct GitLineChangeClassificationTests {
+
+    @Test func pureAdditionLinesAreClassifiedAdded() {
+        let diff = """
+        @@ -1,1 +1,3 @@
+         line1
+        +line2
+        +line3
+        """
+        let changes = UnifiedDiffParser.classifyLineChanges(in: UnifiedDiffParser.parse(diff))
+        #expect(changes == [2: .added, 3: .added])
+    }
+
+    @Test func onePairedRemovedAndAddedLineIsClassifiedModified() {
+        let diff = """
+        @@ -1,3 +1,3 @@
+         line1
+        -old
+        +new
+         line3
+        """
+        let changes = UnifiedDiffParser.classifyLineChanges(in: UnifiedDiffParser.parse(diff))
+        #expect(changes == [2: .modified])
+    }
+
+    @Test func excessAddedLinesBeyondThePairedCountAreClassifiedAdded() {
+        let diff = """
+        @@ -1,3 +1,5 @@
+         line1
+        -old
+        +new1
+        +new2
+        +new3
+         line5
+        """
+        let changes = UnifiedDiffParser.classifyLineChanges(in: UnifiedDiffParser.parse(diff))
+        #expect(changes == [2: .modified, 3: .added, 4: .added])
+    }
+
+    @Test func excessRemovedLinesInAMixedBlockAreNotSeparatelyMarkedDeleted() {
+        let diff = """
+        @@ -1,5 +1,3 @@
+         line1
+        -old1
+        -old2
+        -old3
+        +new
+         line5
+        """
+        let changes = UnifiedDiffParser.classifyLineChanges(in: UnifiedDiffParser.parse(diff))
+        #expect(changes == [2: .modified])
+    }
+
+    @Test func pureRemovalBetweenTwoKeptLinesMarksTheFollowingLineDeleted() {
+        let diff = """
+        @@ -1,3 +1,2 @@
+         line1
+        -removed
+         line3
+        """
+        let changes = UnifiedDiffParser.classifyLineChanges(in: UnifiedDiffParser.parse(diff))
+        // "line3" is now new-file line 2 (line1=1, the removed line has no
+        // new-file counterpart) — the marker anchors on the next kept line.
+        #expect(changes == [2: .deleted])
+    }
+
+    @Test func pureRemovalAtTheEndOfAHunkAnchorsOnePastTheLastKeptLine() {
+        let diff = """
+        @@ -1,2 +1,1 @@
+         line1
+        -removed
+        """
+        let changes = UnifiedDiffParser.classifyLineChanges(in: UnifiedDiffParser.parse(diff))
+        #expect(changes == [2: .deleted])
+    }
+
+    @Test func multipleHunksContributeToOneCombinedResult() {
+        let diff = """
+        @@ -1,1 +1,2 @@
+         line1
+        +line2
+        @@ -10,1 +11,1 @@
+        -old
+        +new
+        """
+        let changes = UnifiedDiffParser.classifyLineChanges(in: UnifiedDiffParser.parse(diff))
+        #expect(changes == [2: .added, 11: .modified])
+    }
+
+    @Test func wholeFileAsAddedClassifiesEveryLineAdded() {
+        let parsed = ParsedDiff.wholeFileAsAdded("one\ntwo\nthree")
+        let changes = UnifiedDiffParser.classifyLineChanges(in: parsed)
+        #expect(changes == [1: .added, 2: .added, 3: .added])
+    }
+}

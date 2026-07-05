@@ -75,6 +75,11 @@ struct CodeEditorView: View {
         return appState.diagnostics[url] ?? []
     }
 
+    private var fileGitLineChanges: [Int: GitLineChangeType] {
+        guard let url = tab.fileURL else { return [:] }
+        return appState.gitLineChanges[url] ?? [:]
+    }
+
     private var fileDebugLine: Int? {
         guard let path = tab.fileURL?.path,
               appState.debugCurrentFile?.path == path else { return nil }
@@ -108,6 +113,7 @@ struct CodeEditorView: View {
                 autoIndent:       appState.editorAutoIndent,
                 blameInfo:        blameInfo,
                 diagnostics:      fileDiagnostics,
+                gitLineChanges:   fileGitLineChanges,
                 fileURL:          tab.fileURL,
                 onCursorMove: { line, col in
                     guard let idx = appState.openTabs.firstIndex(where: { $0.id == tab.id }) else { return }
@@ -190,6 +196,7 @@ struct CodeEditorView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .task(id: tab.id) { await appState.loadBlame(for: tab) }
             .task(id: tab.id) { await appState.loadDocumentSymbols(for: tab) }
+            .task(id: tab.id) { await appState.refreshGitLineChanges(for: tab) }
             .overlay(alignment: .topTrailing) {
                 if let controller = findReplaceController, controller.isVisible {
                     FindReplaceBarView(controller: controller)

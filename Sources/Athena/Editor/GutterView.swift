@@ -18,12 +18,22 @@ final class GutterView: NSRulerView {
     /// `EditorView.gutterDiagnosticSeverities`), matching the editor's own
     /// "no underline, or a very subtle one" treatment for those severities.
     var diagnostics: [Int: DiagnosticSeverity] = [:]
+    /// 1-based line numbers with a git working-tree change relative to
+    /// `HEAD`, mapped to its classification — drives the colored change
+    /// bar along the gutter's absolute left edge (plan.md item 19, "D4").
+    /// Populated from `AppState.gitLineChanges` via `EditorView`, the same
+    /// way `diagnostics` above is.
+    var gitLineChanges: [Int: GitLineChangeType] = [:]
+    /// Used to color the change bar (`diffAdded`/`diffModified`/`diffRemoved`)
+    /// — kept in sync with the editor's theme by `EditorView`.
+    var theme: EditorTheme = .darcula
     var onToggleBreakpoint: ((Int) -> Void)?
 
     // Visual constants
     private let gutterWidth:    CGFloat = 52
     private let dotRadius:      CGFloat = 5
-    private let diagDotRadius:  CGFloat = 2.5  // small, left-edge — clear of the breakpoint dot on the right
+    private let changeBarWidth: CGFloat = 3    // git change bar — absolute left edge
+    private let diagDotRadius:  CGFloat = 2.5  // small, left-edge — clear of the change bar
     private let numberRightPad: CGFloat = 22  // space for the dot column
 
     private let numberAttrs: [NSAttributedString.Key: Any] = [
@@ -110,12 +120,38 @@ final class GutterView: NSRulerView {
             NSRect(x: 0, y: rulerY, width: bounds.width, height: height).fill()
         }
 
-        // Diagnostic marker — small dot at the gutter's left edge, independent
-        // of the breakpoint dot/debug arrow (drawn on the right, below), so
-        // a line can show both at once without collision.
+        // Git change bar — thin colored strip along the gutter's absolute
+        // left edge for added/modified lines, matching VS Code's gutter
+        // change indicator. A pure deletion (no added counterpart) instead
+        // draws a small triangular notch at the row's top edge, marking the
+        // boundary rather than claiming the whole line's height.
+        switch gitLineChanges[lineNum] {
+        case .added:
+            theme.diffAdded.setFill()
+            NSRect(x: 0, y: rulerY, width: changeBarWidth, height: height).fill()
+        case .modified:
+            theme.diffModified.setFill()
+            NSRect(x: 0, y: rulerY, width: changeBarWidth, height: height).fill()
+        case .deleted:
+            let notchSize: CGFloat = 4
+            let path = NSBezierPath()
+            path.move(to: NSPoint(x: 0, y: rulerY))
+            path.line(to: NSPoint(x: changeBarWidth + notchSize, y: rulerY))
+            path.line(to: NSPoint(x: 0, y: rulerY + notchSize))
+            path.close()
+            theme.diffRemoved.setFill()
+            path.fill()
+        case nil:
+            break
+        }
+
+        // Diagnostic marker — small dot at the gutter's left edge, clear of
+        // the change bar above and independent of the breakpoint dot/debug
+        // arrow (drawn on the right, below), so a line can show all three
+        // at once without collision.
         if let severity = diagnostics[lineNum] {
             let color: NSColor = severity == .error ? .systemRed : .systemOrange
-            let cx = diagDotRadius + 2
+            let cx = changeBarWidth + diagDotRadius + 1
             let cy = rulerY + height / 2
             let path = NSBezierPath(ovalIn: NSRect(
                 x: cx - diagDotRadius, y: cy - diagDotRadius,

@@ -190,3 +190,94 @@ enum UnifiedDiffParser {
         )
     }
 }
+
+// MARK: - GitLineChangeType
+
+/// Per-line classification of a working-tree change relative to `HEAD`,
+/// derived from a `ParsedDiff` by `UnifiedDiffParser.classifyLineChanges(in:)`
+/// — feeds `GutterView`'s colored change bar (plan.md item 19, "D4"). Keyed
+/// by 1-based *new* (working-tree) line number.
+enum GitLineChangeType: Sendable, Equatable {
+    /// A line added by this change, with no old-file counterpart.
+    case added
+    /// A line that replaces an old line 1:1 — a removed and an added line
+    /// paired within the same contiguous change block.
+    case modified
+    /// Lines were removed here with nothing added in their place. Rendered
+    /// as a single boundary marker on the next kept new-file line (or, at
+    /// the end of a hunk, the last known new-file line) rather than
+    /// needing a line of its own — matching how VS Code and other editors
+    /// draw a "lines deleted here" notch rather than a full-height bar.
+    case deleted
+}
+
+extension UnifiedDiffParser {
+
+    /// Reduces a `ParsedDiff` to one `GitLineChangeType` per changed
+    /// new-file line — the pure classification step `GutterView`'s change
+    /// bar is driven from (see `AppState.refreshGitLineChanges(for:)`).
+    ///
+    /// Each hunk is walked in contiguous "changed" runs — consecutive
+    /// non-context lines between two kept (context) lines:
+    /// - A run with only added lines → every added line is `.added`.
+    /// - A run mixing removed and added lines → the first
+    ///   `min(removed.count, added.count)` added lines pair 1:1 with a
+    ///   removed line and are `.modified`; any unpaired excess addition
+    ///   (when there are more added than removed lines) is `.added`. Any
+    ///   unpaired excess *removal* in a mixed run is not separately
+    ///   marked — the `.modified`/`.added` bar already conveys "this hunk
+    ///   changed here", which is enough fidelity without risking a
+    ///   `.deleted` marker landing on (and being overwritten by) a line
+    ///   this same run already classified.
+    /// - A run with only removed lines → pure deletion, `.deleted`.
+    static func classifyLineChanges(in diff: ParsedDiff) -> [Int: GitLineChangeType] {
+        var result: [Int: GitLineChangeType] = [:]
+
+        for hunk in diff.hunks {
+            let lines = hunk.lines
+            var index = 0
+            var lastNewLine = hunk.newStart - 1
+
+            while index < lines.count {
+                let line = lines[index]
+                if line.kind == .context {
+                    lastNewLine = line.newLineNumber ?? lastNewLine
+                    index += 1
+                    continue
+                }
+
+                // Collect the full contiguous run of non-context lines
+                // starting here — by construction this can't straddle a
+                // context line, so a "pure removal" run and a "has
+                // additions" run never abut without a kept line between
+                // them (see the doc comment above).
+                var j = index
+                var removed: [DiffLine] = []
+                var added:   [DiffLine] = []
+                while j < lines.count, lines[j].kind != .context {
+                    if lines[j].kind == .removed { removed.append(lines[j]) }
+                    else                          { added.append(lines[j]) }
+                    j += 1
+                }
+
+                if added.isEmpty {
+                    let anchor = (j < lines.count ? lines[j].newLineNumber : nil) ?? (lastNewLine + 1)
+                    if result[anchor] == nil { result[anchor] = .deleted }
+                } else {
+                    let pairedCount = min(removed.count, added.count)
+                    for k in 0..<pairedCount {
+                        if let n = added[k].newLineNumber { result[n] = .modified }
+                    }
+                    for k in pairedCount..<added.count {
+                        if let n = added[k].newLineNumber { result[n] = .added }
+                    }
+                    lastNewLine = added.last?.newLineNumber ?? lastNewLine
+                }
+
+                index = j
+            }
+        }
+
+        return result
+    }
+}

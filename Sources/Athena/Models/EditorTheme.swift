@@ -26,15 +26,16 @@ struct EditorTheme: Sendable, Equatable, Hashable {
     private let diagErrHex:  UInt32  // diagnostic squiggle — error
     private let diagWarnHex: UInt32  // diagnostic squiggle — warning
     private let diagInfoHex: UInt32  // diagnostic squiggle — information/hint (drawn subtly)
-    private let diffAddHex:  UInt32  // diff viewer — added-line gutter/background tint
-    private let diffRemHex:  UInt32  // diff viewer — removed-line gutter/background tint
+    private let diffAddHex:  UInt32  // diff viewer / gutter change bar — added-line tint
+    private let diffRemHex:  UInt32  // diff viewer — removed-line tint
+    private let diffModHex:  UInt32  // gutter change bar — modified-line tint
 
     init(id: String, name: String,
          bg: UInt32, fg: UInt32, cursor: UInt32, selection: UInt32, line: UInt32,
          keyword: UInt32, string: UInt32, number: UInt32, comment: UInt32,
          type: UInt32, function: UInt32, annotation: UInt32, whitespace: UInt32,
          diagnosticError: UInt32, diagnosticWarning: UInt32, diagnosticInfo: UInt32,
-         diffAdded: UInt32, diffRemoved: UInt32) {
+         diffAdded: UInt32, diffRemoved: UInt32, diffModified: UInt32) {
         self.id      = id
         self.name    = name
         self.bgHex   = bg
@@ -55,6 +56,7 @@ struct EditorTheme: Sendable, Equatable, Hashable {
         self.diagInfoHex = diagnosticInfo
         self.diffAddHex  = diffAdded
         self.diffRemHex  = diffRemoved
+        self.diffModHex  = diffModified
     }
 
     static func == (lhs: EditorTheme, rhs: EditorTheme) -> Bool { lhs.id == rhs.id }
@@ -79,6 +81,11 @@ struct EditorTheme: Sendable, Equatable, Hashable {
     var diagnosticInfo:    NSColor { rgb(diagInfoHex) }
     var diffAdded:         NSColor { rgb(diffAddHex) }
     var diffRemoved:       NSColor { rgb(diffRemHex) }
+    /// Gutter change-bar color for a modified line (paired removed+added
+    /// within the same diff block) — distinct from `diffAdded` so a pure
+    /// addition and a same-count replacement read differently in the
+    /// gutter, matching VS Code's green-vs-blue gutter convention.
+    var diffModified:      NSColor { rgb(diffModHex) }
 
     private func rgb(_ v: UInt32) -> NSColor {
         let r = CGFloat((v >> 16) & 0xFF) / 255.0
@@ -100,7 +107,7 @@ extension EditorTheme {
         comment: 0x808080, type: 0xA9B7C6, function: 0xFFC66D, annotation: 0xBBB529,
         whitespace: 0x4B5263,  // dim blue-grey — halfway between bg and comment
         diagnosticError: 0xE05252, diagnosticWarning: 0xCC9C4B, diagnosticInfo: 0x5C8BB0,
-        diffAdded: 0x6A8759, diffRemoved: 0xE05252
+        diffAdded: 0x6A8759, diffRemoved: 0xE05252, diffModified: 0x3592C4
     )
 
     // One Dark — Atom-inspired dark theme.
@@ -111,7 +118,7 @@ extension EditorTheme {
         comment: 0x5C6370, type: 0xE5C07B, function: 0x61AFEF, annotation: 0xE06C75,
         whitespace: 0x3E4451,
         diagnosticError: 0xE06C75, diagnosticWarning: 0xD19A66, diagnosticInfo: 0x61AFEF,
-        diffAdded: 0x98C379, diffRemoved: 0xE06C75
+        diffAdded: 0x98C379, diffRemoved: 0xE06C75, diffModified: 0x528BFF
     )
 
     // GitHub Light — clean light theme.
@@ -122,7 +129,7 @@ extension EditorTheme {
         comment: 0x6A737D, type: 0x6F42C1, function: 0x6F42C1, annotation: 0x005CC5,
         whitespace: 0xD0D7DE,
         diagnosticError: 0xD73A49, diagnosticWarning: 0xB08800, diagnosticInfo: 0x005CC5,
-        diffAdded: 0x28A745, diffRemoved: 0xD73A49
+        diffAdded: 0x28A745, diffRemoved: 0xD73A49, diffModified: 0x0366D6
     )
 
     static let all: [EditorTheme] = [.darcula, .oneDark, .githubLight]
