@@ -60,6 +60,18 @@ final class AppState {
     var sfccLogOffset: Int = 0
     @ObservationIgnored private var sfccLogTask: Task<Void, Never>?
 
+    // MARK: - Terminal Sessions
+
+    /// Every open terminal tab (plan.md item 21). Defaults to a single
+    /// session at launch so a user who never touches this feature sees the
+    /// same single-terminal behavior as before — see `init`.
+    var terminalSessions: [TerminalSession] = []
+    var activeTerminalSessionId: UUID?
+    /// Monotonically increasing per launch (never reused, unlike
+    /// `terminalSessions.count`) so two sessions never collide on the same
+    /// default title after one is closed and a new one is opened in between.
+    @ObservationIgnored private var terminalSessionSequence: Int = 0
+
     // MARK: - Drizzle + AI Completion
     let drizzleService: DrizzleCompletionService = DrizzleCompletionService()
     var claudeAPIKey: String = ""
@@ -276,6 +288,12 @@ final class AppState {
         self.sfccService = sfccService
         self.fileWatchService = fileWatchService
         self.prettierService = prettierService
+
+        // Default to one terminal session at launch — matches the
+        // pre-multi-terminal behavior (plan.md item 21 point 4): a user who
+        // never touches this feature shouldn't see an empty terminal panel
+        // or be forced to click "+" first.
+        newTerminalSession()
     }
 
     // MARK: - Methods
@@ -2125,6 +2143,46 @@ final class AppState {
         openTabs.append(tab)
         activeTabId = tab.id
         Task { await self.persistSession() }
+    }
+
+    // MARK: - Terminal Sessions
+
+    /// Opens a new terminal tab (the "+" button in `TerminalTabStripView`)
+    /// and makes it active. Titled after the detected `$SHELL` — just the
+    /// shell name ("zsh") for the first session created this launch, numbered
+    /// ("zsh 2", "zsh 3", …) after that.
+    func newTerminalSession() {
+        terminalSessionSequence += 1
+        let shellPath = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        let shellName = URL(fileURLWithPath: shellPath).lastPathComponent
+        let title = terminalSessionSequence == 1 ? shellName : "\(shellName) \(terminalSessionSequence)"
+        let session = TerminalSession(title: title, shell: shellPath)
+        terminalSessions.append(session)
+        activeTerminalSessionId = session.id
+    }
+
+    /// Closes the terminal session with the given ID, activating an adjacent
+    /// session if it was the active one — mirrors `closeTab`'s
+    /// adjacent-selection logic via the pure `TerminalSession.nextActiveId`.
+    /// Closing the last remaining session leaves `terminalSessions` empty and
+    /// `activeTerminalSessionId` nil; `TerminalPanelView` shows a "New
+    /// Terminal" empty state in that case, the same way the editor shows the
+    /// Welcome screen with zero open tabs.
+    func closeTerminalSession(_ id: UUID) {
+        guard let index = terminalSessions.firstIndex(where: { $0.id == id }) else { return }
+        let newActiveId = TerminalSession.nextActiveId(
+            afterClosing: id,
+            in: terminalSessions,
+            previousActiveId: activeTerminalSessionId
+        )
+        terminalSessions.remove(at: index)
+        activeTerminalSessionId = newActiveId
+    }
+
+    /// Activates the terminal session with the given ID (a tab-strip click).
+    func activateTerminalSession(_ id: UUID) {
+        guard terminalSessions.contains(where: { $0.id == id }) else { return }
+        activeTerminalSessionId = id
     }
 
     /// Toggles the integrated terminal panel — shows it (and selects the

@@ -342,6 +342,43 @@ struct TabModel: Identifiable, Sendable {
     }
 }
 
+// MARK: - Terminal Sessions
+
+/// One tab in the integrated terminal panel (plan.md item 21). SwiftTerm's
+/// `LocalProcessTerminalView` has no notion of running more than one shell
+/// per instance, so each session needs its own view instance — this model
+/// just carries the identity/title/shell that view is bound to, letting
+/// SwiftUI diff a list of sessions the same way `openTabs`/`TabModel`
+/// already works for editor tabs.
+struct TerminalSession: Identifiable, Sendable {
+    let id: UUID = UUID()
+    var title: String
+    let shell: String
+}
+
+extension TerminalSession {
+    /// Computes the session that should become active after closing
+    /// `closedId`, mirroring `AppState.closeTab`'s adjacent-selection rule:
+    /// prefer the session now at the same index, falling back to the last
+    /// remaining one; `nil` once none remain. Returns `previousActiveId`
+    /// unchanged when the closed session wasn't the active one.
+    static func nextActiveId(
+        afterClosing closedId: UUID,
+        in sessions: [TerminalSession],
+        previousActiveId: UUID?
+    ) -> UUID? {
+        guard previousActiveId == closedId else { return previousActiveId }
+        guard let index = sessions.firstIndex(where: { $0.id == closedId }) else {
+            return previousActiveId
+        }
+        var remaining = sessions
+        remaining.remove(at: index)
+        guard !remaining.isEmpty else { return nil }
+        let newIndex = min(index, remaining.count - 1)
+        return remaining[newIndex].id
+    }
+}
+
 // MARK: - Session Restore
 
 /// A single persisted tab within a workspace session — enough to reopen the

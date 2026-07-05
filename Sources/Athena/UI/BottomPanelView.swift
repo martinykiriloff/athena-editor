@@ -84,7 +84,7 @@ struct BottomPanelView: View {
     @ViewBuilder
     private var panelContent: some View {
         switch appState.activeBottomPanel {
-        case .terminal:  TerminalView()
+        case .terminal:  TerminalPanelView()
         case .scripts:   ScriptsPanelView()
         case .output:    OutputView()
         case .problems:  ProblemsView()
@@ -92,6 +92,50 @@ struct BottomPanelView: View {
         case .sfcclogs:  SFCCLogView()
         case .references: ReferencesPanelView()
         }
+    }
+}
+
+// MARK: - TerminalPanelView
+
+/// Hosts the terminal panel's session tab strip plus the stack of every
+/// open session's `TerminalView` (plan.md item 21). Every session's view is
+/// kept mounted — never conditionally instantiated — so switching tabs only
+/// toggles which one is visible/hit-testable rather than tearing down (and
+/// killing) a background shell.
+private struct TerminalPanelView: View {
+    @Environment(AppState.self) private var appState
+
+    var body: some View {
+        VStack(spacing: 0) {
+            TerminalTabStripView()
+            Divider()
+
+            if appState.terminalSessions.isEmpty {
+                emptyState
+            } else {
+                ZStack {
+                    ForEach(appState.terminalSessions) { session in
+                        let isActive = session.id == appState.activeTerminalSessionId
+                        TerminalView(session: session, isActive: isActive)
+                            .opacity(isActive ? 1 : 0)
+                            .allowsHitTesting(isActive)
+                    }
+                }
+            }
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 8) {
+            Text("No terminal sessions")
+                .font(.system(size: appState.sf(13)))
+                .foregroundColor(.secondary)
+            Button("New Terminal") {
+                appState.newTerminalSession()
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .textBackgroundColor))
     }
 }
 

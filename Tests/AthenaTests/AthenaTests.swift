@@ -1153,3 +1153,63 @@ struct RepoFolderNameTests {
         #expect(GitService.repoFolderName(from: "   ") == "repository")
     }
 }
+
+// MARK: - TerminalSession.nextActiveId
+
+@Suite("TerminalSession.nextActiveId")
+struct TerminalSessionNextActiveIdTests {
+    private func session(_ title: String) -> TerminalSession {
+        TerminalSession(title: title, shell: "/bin/zsh")
+    }
+
+    @Test func closingNonActiveSessionLeavesActiveIdUnchanged() {
+        let a = session("a"), b = session("b"), c = session("c")
+        let result = TerminalSession.nextActiveId(
+            afterClosing: b.id, in: [a, b, c], previousActiveId: a.id
+        )
+        #expect(result == a.id)
+    }
+
+    @Test func closingActiveSessionPrefersTheOneNowAtTheSameIndex() {
+        // [a, b, c] closing b (index 1) -> c is now at index 1.
+        let a = session("a"), b = session("b"), c = session("c")
+        let result = TerminalSession.nextActiveId(
+            afterClosing: b.id, in: [a, b, c], previousActiveId: b.id
+        )
+        #expect(result == c.id)
+    }
+
+    @Test func closingActiveLastSessionFallsBackToTheNewLastOne() {
+        // [a, b, c] closing c (index 2, out of bounds after removal) -> b.
+        let a = session("a"), b = session("b"), c = session("c")
+        let result = TerminalSession.nextActiveId(
+            afterClosing: c.id, in: [a, b, c], previousActiveId: c.id
+        )
+        #expect(result == b.id)
+    }
+
+    @Test func closingTheOnlySessionLeavesNoActiveSession() {
+        let a = session("a")
+        let result = TerminalSession.nextActiveId(
+            afterClosing: a.id, in: [a], previousActiveId: a.id
+        )
+        #expect(result == nil)
+    }
+
+    @Test func closingAnIdNotInTheListLeavesActiveIdUnchanged() {
+        let a = session("a"), b = session("b")
+        let bogusId = UUID()
+        let result = TerminalSession.nextActiveId(
+            afterClosing: bogusId, in: [a, b], previousActiveId: a.id
+        )
+        #expect(result == a.id)
+    }
+
+    @Test func previousActiveIdNilStaysNilWhenClosingAnUnrelatedSession() {
+        let a = session("a"), b = session("b")
+        let result = TerminalSession.nextActiveId(
+            afterClosing: a.id, in: [a, b], previousActiveId: nil
+        )
+        #expect(result == nil)
+    }
+}
