@@ -30,6 +30,8 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
     case indentLine         = "editor.action.indentLines"
     case outdentLine        = "editor.action.outdentLines"
     case selectNextOccurrence = "editor.action.addSelectionToNextFindMatch"
+    case findReferences      = "editor.action.referenceSearch.trigger"
+    case renameSymbol        = "editor.action.rename"
     // Zoom
     case zoomIn             = "workbench.action.zoomIn"
     case zoomOut            = "workbench.action.zoomOut"
@@ -58,6 +60,8 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
         case .indentLine:        return "Indent Line"
         case .outdentLine:       return "Outdent Line"
         case .selectNextOccurrence: return "Select Next Occurrence"
+        case .findReferences:    return "Find All References"
+        case .renameSymbol:      return "Rename Symbol"
         case .zoomIn:            return "Zoom In"
         case .zoomOut:           return "Zoom Out"
         case .resetZoom:         return "Reset Zoom"
@@ -75,7 +79,7 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
         case .quickOpen, .commandPalette, .nextTab, .previousTab, .goToLine:
             return "Navigation"
         case .findInFile, .findAndReplace, .toggleComment, .indentLine, .outdentLine,
-             .selectNextOccurrence:
+             .selectNextOccurrence, .findReferences, .renameSymbol:
             return "Editor"
         }
     }
@@ -220,6 +224,15 @@ struct KeyBinding: Identifiable, Codable, Sendable {
         KeyBinding(action: .indentLine,        combo: KeyCombo(key: "]",   command: true)),
         KeyBinding(action: .outdentLine,       combo: KeyCombo(key: "[",   command: true)),
         KeyBinding(action: .selectNextOccurrence, combo: KeyCombo(key: "d", command: true)),
+        // Rename Symbol is plain F2, per VS Code, as directed.
+        KeyBinding(action: .renameSymbol,       combo: KeyCombo(key: "f2")),
+        // Find All References deliberately deviates from VS Code's plain
+        // ⇧F12: on stock Mac keyboard settings ("Use F1, F2, etc. keys as
+        // standard function keys" off, the default), F12 alone is the
+        // volume-up media key and never reaches the app as a keyDown, so
+        // plain ⇧F12 would silently never fire for most users. ⌥⇧F12 avoids
+        // that collision — see plan.md item 13's implementation notes.
+        KeyBinding(action: .findReferences,     combo: KeyCombo(key: "f12", shift: true, option: true)),
         // Zoom — default binding is Cmd+= (no shift); Cmd++ also triggers it (see dispatchKeyInfo)
         KeyBinding(action: .zoomIn,            combo: KeyCombo(key: "=",   command: true)),
         KeyBinding(action: .zoomOut,           combo: KeyCombo(key: "-",   command: true)),

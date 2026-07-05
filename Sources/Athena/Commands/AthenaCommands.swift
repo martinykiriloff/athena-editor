@@ -278,6 +278,18 @@ struct AthenaCommands: Commands {
             Button("Go to Line…") {
                 performAction(.goToLine)
             }
+
+            Divider()
+
+            // ⌥⇧F12 and F2 are owned by the keybinding monitor; clicks route
+            // through the same actions.
+            Button("Find All References") {
+                performAction(.findReferences)
+            }
+
+            Button("Rename Symbol…") {
+                performAction(.renameSymbol)
+            }
         }
     }
 

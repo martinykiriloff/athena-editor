@@ -18,6 +18,31 @@ final class EditorScrollProxy {
         scrollView.contentView.setBoundsOrigin(NSPoint(x: 0, y: targetY))
         scrollView.reflectScrolledClipView(scrollView.contentView)
     }
+
+    /// Moves the caret to 1-based `line`/`column` and scrolls it into view.
+    /// The single, canonical implementation of this position math — shared
+    /// by `EditorView.Coordinator`'s Cmd+Click "Go to Definition" jump and
+    /// `AppState`'s "Find All References" panel / rename-symbol navigation,
+    /// which reach the editor from outside its own view hierarchy and so
+    /// can't call a private Coordinator method directly.
+    func jumpTo(line: Int, column: Int) {
+        guard let tv = scrollView?.documentView as? NSTextView else { return }
+        let ns = tv.string as NSString
+        var idx = 0
+        var current = 1
+        while current < line && idx < ns.length {
+            let r = ns.range(of: "\n", options: [], range: NSRange(location: idx, length: ns.length - idx))
+            if r.location == NSNotFound { break }
+            idx = r.location + 1
+            current += 1
+        }
+        let lineRange   = ns.lineRange(for: NSRange(location: min(idx, ns.length), length: 0))
+        let targetIndex = min(idx + max(1, column) - 1, NSMaxRange(lineRange))
+        let range       = NSRange(location: min(targetIndex, ns.length), length: 0)
+        tv.setSelectedRange(range)
+        tv.scrollRangeToVisible(range)
+        tv.window?.makeFirstResponder(tv)
+    }
 }
 
 // MARK: - MinimapView (NSViewRepresentable)

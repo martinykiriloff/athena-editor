@@ -108,6 +108,22 @@ final class AppState {
     /// ">" to land directly in command-palette mode (⇧⌘P).
     var quickOpenPrefill: String = ""
 
+    // MARK: - Find All References / Rename Symbol
+
+    /// Results of the most recent "Find All References" (⌥⇧F12), shown in
+    /// `ReferencesPanelView`. Reuses `SearchResult` (mapped from each
+    /// `DefinitionLocation` by reading that file's line content) so the
+    /// panel can reuse `SearchPanelView`'s exact file-grouped row rendering.
+    var referencesResults: [SearchResult] = []
+    /// The identifier `referencesResults` was searched for — display only.
+    var referencesSymbol: String = ""
+    var isFindingReferences: Bool = false
+    /// A pending cross-view "jump to this location" request — set by
+    /// `navigateTo(_:)` (e.g. a References panel row click) and consumed by
+    /// `EditorView`/`Coordinator.consumePendingNavigation` once the target
+    /// file's content is loaded into the editor.
+    var pendingNavigationTarget: NavigationRequest?
+
     // Blame data keyed by file path.
     var blameCache: [String: [Int: BlameLine]] = [:]
 
@@ -1184,6 +1200,226 @@ final class AppState {
         return (totalOccurrences, filesChanged)
     }
 
+    // MARK: - Find All References
+
+    /// Requests `textDocument/references` at (0-based) `line`/`character` in
+    /// `fileURL` and populates `referencesResults`/`referencesSymbol`,
+    /// showing the References bottom panel. Each result's line content is
+    /// read from the corresponding open tab's in-memory content when one
+    /// exists (the LSP server's view of an open file is that content, not
+    /// necessarily what's on disk) and from `fileService` otherwise.
+    func findReferences(fileURL: URL, line: Int, character: Int) async {
+        isFindingReferences = true
+        showBottomPanel = true
+        activeBottomPanel = .references
+        referencesResults = []
+        referencesSymbol = Self.identifier(inLine: activeTab?.content, line: line, character: character)
+            ?? fileURL.lastPathComponent
+
+        defer { isFindingReferences = false }
+
+        guard let locations = try? await lspManager.references(
+            fileURL: fileURL, line: line, character: character
+        ), !locations.isEmpty else {
+            statusMessage = "No references found"
+            return
+        }
+
+        // Cache each file's content the first time it's needed — a symbol
+        // commonly has multiple references in the same file, and re-reading
+        // (or re-scanning an open tab's content) once per *location* instead
+        // of once per *file* would be wasted, repeated I/O.
+        var contentCache: [URL: String] = [:]
+        var results: [SearchResult] = []
+
+        for location in locations {
+            let content: String
+            if let cached = contentCache[location.fileURL] {
+                content = cached
+            } else if let openContent = openTabs.first(where: { $0.fileURL == location.fileURL })?.content {
+                content = openContent
+                contentCache[location.fileURL] = openContent
+            } else if let read = try? await fileService.readFile(location.fileURL) {
+                content = read
+                contentCache[location.fileURL] = read
+            } else {
+                continue
+            }
+
+            let lines = content.components(separatedBy: "\n")
+            let lineIndex = location.line - 1
+            guard lineIndex >= 0, lineIndex < lines.count else { continue }
+
+            results.append(SearchResult(
+                filePath:    location.fileURL.path,
+                lineNumber:  location.line,
+                lineContent: lines[lineIndex],
+                matchRange:  NSRange(location: max(0, location.character - 1), length: 0)
+            ))
+        }
+
+        results.sort {
+            $0.filePath == $1.filePath ? $0.lineNumber < $1.lineNumber : $0.filePath < $1.filePath
+        }
+        referencesResults = results
+        statusMessage = "\(results.count) reference\(results.count == 1 ? "" : "s") found"
+    }
+
+    /// The identifier touching (0-based) `line`/`character` in `content`, or
+    /// `nil` when `content` is missing or the position isn't inside a word —
+    /// used only to label the References panel's header. Delegates the
+    /// actual word-boundary scan to the shared top-level
+    /// `identifierWordRange`/`isIdentifierChar` (also used by
+    /// `EditorView.Coordinator`) so "what counts as one word" can't drift
+    /// between the editor and this panel-labeling code.
+    private static func identifier(inLine content: String?, line: Int, character: Int) -> String? {
+        guard let content else { return nil }
+        let lines = content.components(separatedBy: "\n")
+        guard line >= 0, line < lines.count else { return nil }
+        let ns = lines[line] as NSString
+        guard let range = identifierWordRange(in: ns, around: character) else { return nil }
+        return ns.substring(with: range)
+    }
+
+    /// Opens `location.fileURL` (activating its tab if already open, else
+    /// reading it into a new one) and jumps the editor's caret to
+    /// `location.line`/`location.character` once its content is loaded —
+    /// used by References panel row clicks. Bridges into the editor from
+    /// outside its own view hierarchy via `pendingNavigationTarget`, which
+    /// `EditorView`/`Coordinator.consumePendingNavigation` consumes. Wrapped
+    /// in a fresh `NavigationRequest` (unique `id` per call) rather than the
+    /// bare `DefinitionLocation` so navigating to the *same* location twice
+    /// in a row (e.g. clicking the same reference again) still produces a
+    /// distinct request the Coordinator recognizes as new — see
+    /// `NavigationRequest`'s doc comment in `SharedTypes.swift`.
+    func navigateTo(_ location: DefinitionLocation) async {
+        pendingNavigationTarget = NavigationRequest(id: UUID(), location: location)
+        await openFile(location.fileURL)
+    }
+
+    /// Maps a References-panel `SearchResult` row back to the
+    /// `DefinitionLocation` it came from (recovering the column from
+    /// `matchRange.location`, the same field `findReferences` populated it
+    /// with) and navigates to it.
+    func navigateToReference(_ result: SearchResult) async {
+        await navigateTo(DefinitionLocation(
+            fileURL: URL(fileURLWithPath: result.filePath),
+            line: result.lineNumber,
+            character: result.matchRange.location + 1
+        ))
+    }
+
+    // MARK: - Rename Symbol
+
+    /// Requests `textDocument/rename` at (0-based) `line`/`character` in
+    /// `fileURL`, renaming the symbol there to `newName`, and applies the
+    /// resulting workspace edit — reusing `applyLSPTextEdits`, the same pure
+    /// offset-conversion function `formattedContent(for:)` uses for
+    /// format-on-save, so that logic isn't duplicated here.
+    ///
+    /// Safety for files with unsaved edits: the LSP server's view of an
+    /// *open* file is whatever content `didOpen`/`didChange` last sent it —
+    /// the tab's in-memory content, not necessarily what's on disk — so an
+    /// open file's edits are always applied there, dirty or not. A **clean**
+    /// open tab is then written straight to disk (nothing to lose). A
+    /// **dirty** open tab is deliberately *not* written to disk: the rename
+    /// is folded into the in-memory buffer alongside the user's unsaved
+    /// edits and the tab is left dirty, so a normal Cmd+S persists both
+    /// together instead of the rename silently overwriting unsaved work (or
+    /// the rename being dropped to avoid that). Files not open in any tab
+    /// are read from and written straight back to disk.
+    ///
+    /// Safety against concurrent edits: `textDocument/rename` is a
+    /// round-trip to a subprocess and can take a noticeable moment; nothing
+    /// blocks the user from typing into an affected tab while it's in
+    /// flight (only the preceding rename-prompt alert blocks, and it's
+    /// already dismissed by the time this `await` starts). The server's
+    /// edit offsets are computed against whatever content it last saw via
+    /// `didOpen`/`didChange` — applying them to a buffer that has since
+    /// changed would silently misplace or corrupt text. Each open tab's
+    /// content is snapshotted *before* the request goes out, and any tab
+    /// whose content no longer matches its snapshot when the response comes
+    /// back has its edits skipped (reported in the status message) rather
+    /// than applied against stale offsets.
+    func renameSymbol(fileURL: URL, line: Int, character: Int, newName: String) async {
+        let contentSnapshot: [URL: String] = Dictionary(
+            uniqueKeysWithValues: openTabs.compactMap { tab in
+                tab.fileURL.map { ($0, tab.content) }
+            }
+        )
+
+        guard let edits = try? await lspManager.rename(
+            fileURL: fileURL, line: line, character: character, newName: newName
+        ), !edits.isEmpty else {
+            statusMessage = "Rename failed: language server returned no changes"
+            return
+        }
+
+        var writtenCount = 0
+        var bufferOnlyCount = 0
+        var staleSkippedCount = 0
+
+        for (url, textEdits) in edits where !textEdits.isEmpty {
+            if let index = openTabs.firstIndex(where: { $0.fileURL == url }) {
+                guard openTabs[index].content == contentSnapshot[url] else {
+                    // The buffer changed while the rename request was in
+                    // flight — the server's edit offsets no longer line up
+                    // with this content, so applying them now would corrupt
+                    // rather than rename.
+                    staleSkippedCount += 1
+                    continue
+                }
+
+                let renamed = applyLSPTextEdits(textEdits, to: openTabs[index].content)
+                openTabs[index].content = renamed
+                // The server itself dictated this content (it's the rename
+                // response), but it still needs to be told the document
+                // changed so its own subsequent requests (diagnostics,
+                // completions, another rename) see the renamed text —
+                // exactly what `updateTabContent` does for every other edit.
+                await lspManager.didChange(fileURL: url, content: renamed)
+
+                if openTabs[index].isDirty {
+                    bufferOnlyCount += 1
+                } else {
+                    do {
+                        try await fileService.writeFile(url, content: renamed)
+                        writtenCount += 1
+                    } catch {
+                        // Couldn't persist — keep the rename visible in the
+                        // buffer rather than silently dropping it, and mark
+                        // the tab dirty so the failure is obvious.
+                        openTabs[index].isDirty = true
+                        bufferOnlyCount += 1
+                    }
+                }
+            } else if let original = try? await fileService.readFile(url) {
+                let renamed = applyLSPTextEdits(textEdits, to: original)
+                do {
+                    try await fileService.writeFile(url, content: renamed)
+                    writtenCount += 1
+                } catch {
+                    continue
+                }
+            }
+        }
+
+        if writtenCount > 0 { await refreshGitStatus() }
+
+        var message = "Renamed to \"\(newName)\""
+        if writtenCount > 0 {
+            message += " — \(writtenCount) file\(writtenCount == 1 ? "" : "s") saved"
+        }
+        if bufferOnlyCount > 0 {
+            message += (writtenCount > 0 ? ", " : " — ")
+                + "\(bufferOnlyCount) applied to unsaved buffer\(bufferOnlyCount == 1 ? "" : "s") (save to persist)"
+        }
+        if staleSkippedCount > 0 {
+            message += " — \(staleSkippedCount) file\(staleSkippedCount == 1 ? "" : "s") skipped (edited during rename; re-run if still needed)"
+        }
+        statusMessage = message
+    }
+
     // MARK: - Claude sidebar
 
     /// Switches the active Claude account, aborting any in-flight request and
@@ -1462,6 +1698,10 @@ final class AppState {
             postEditorCommand(.outdent)
         case .selectNextOccurrence:
             postEditorCommand(.selectNextOccurrence)
+        case .findReferences:
+            postEditorCommand(.findReferences)
+        case .renameSymbol:
+            postEditorCommand(.renameSymbol)
         case .zoomIn:
             adjustFontSize(by: 2)
         case .zoomOut:

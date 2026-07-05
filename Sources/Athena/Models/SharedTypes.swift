@@ -152,7 +152,7 @@ extension DBConnection {
 }
 
 enum BottomPanel: String, Sendable, CaseIterable {
-    case terminal, scripts, output, problems, chat, sfcclogs
+    case terminal, scripts, output, problems, chat, sfcclogs, references
 }
 
 // MARK: - Language
@@ -292,6 +292,8 @@ enum EditorCommand: Sendable {
     case indent
     case outdent
     case selectNextOccurrence
+    case findReferences
+    case renameSymbol
 }
 
 // MARK: - Workspace & Files
@@ -512,6 +514,54 @@ struct DefinitionLocation: Sendable, Equatable {
     var fileURL: URL
     var line: Int
     var character: Int
+}
+
+/// A single "jump to this location" request originating outside the
+/// editor's own view hierarchy (e.g. a "Find All References" panel row
+/// click, routed via `AppState.pendingNavigationTarget`). Wraps
+/// `DefinitionLocation` with a unique `id` so
+/// `EditorView.Coordinator.consumePendingNavigation` can tell "already
+/// consumed this exact request" (dedup against redundant `updateNSView`
+/// calls before the request's async clear lands) apart from "the user asked
+/// to jump here again" (same location, but a new request, e.g. clicking the
+/// same reference twice) — value equality on `DefinitionLocation` alone
+/// can't distinguish those two cases.
+struct NavigationRequest: Sendable, Equatable {
+    var id: UUID
+    var location: DefinitionLocation
+}
+
+// MARK: - Identifier word matching
+
+/// ASCII identifier characters: `A–Z`, `a–z`, `0–9`, `_`, `$`. Shared by
+/// `EditorView.Coordinator` (Cmd+Click clickable-target detection, ⌘D
+/// "select next occurrence", rename's pre-fill) and `AppState`
+/// (References-panel symbol-name lookup) so the definition of "identifier
+/// character" can't drift between them.
+func isIdentifierChar(_ c: unichar) -> Bool {
+    (c >= 65 && c <= 90)  ||   // A–Z
+    (c >= 97 && c <= 122) ||   // a–z
+    (c >= 48 && c <= 57)  ||   // 0–9
+    c == 95 || c == 36         // _ $
+}
+
+/// The identifier range containing or touching `location` in `ns` — e.g.
+/// the caret placed immediately after a word, or at the end of the string.
+/// Shared by `EditorView.Coordinator` and `AppState` for the same reason as
+/// `isIdentifierChar` above.
+func identifierWordRange(in ns: NSString, around location: Int) -> NSRange? {
+    guard ns.length > 0 else { return nil }
+    var idx = location
+    if idx >= ns.length || !isIdentifierChar(ns.character(at: idx)) {
+        idx -= 1
+    }
+    guard idx >= 0, idx < ns.length, isIdentifierChar(ns.character(at: idx)) else { return nil }
+
+    var start = idx
+    while start > 0, isIdentifierChar(ns.character(at: start - 1)) { start -= 1 }
+    var end = idx + 1
+    while end < ns.length, isIdentifierChar(ns.character(at: end)) { end += 1 }
+    return NSRange(location: start, length: end - start)
 }
 
 // MARK: - Ghost Text Provider

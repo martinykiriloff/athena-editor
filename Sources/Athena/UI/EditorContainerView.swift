@@ -133,6 +133,18 @@ struct CodeEditorView: View {
                         fileURL: fileURL, line: line - 1, character: col - 1
                     )
                 },
+                onFindReferences: { line, col in
+                    guard let fileURL = tab.fileURL else { return }
+                    await appState.findReferences(fileURL: fileURL, line: line - 1, character: col - 1)
+                },
+                onRenameSymbol: { line, col, newName in
+                    guard let fileURL = tab.fileURL else { return }
+                    await appState.renameSymbol(
+                        fileURL: fileURL, line: line - 1, character: col - 1, newName: newName
+                    )
+                },
+                pendingNavigationTarget: appState.pendingNavigationTarget,
+                onNavigationConsumed: { appState.pendingNavigationTarget = nil },
                 scrollProxy: $scrollProxy,
                 findReplaceProxy: $findReplaceController,
                 breakpoints: fileBreakpoints,

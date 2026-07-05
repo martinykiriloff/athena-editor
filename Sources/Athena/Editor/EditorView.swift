@@ -43,6 +43,20 @@ struct EditorView: NSViewRepresentable {
     /// Requests LSP hover text (markdown/plaintext, already flattened to a
     /// plain string) for the given 1-based line/column.
     var onRequestHover: (Int, Int) async -> String? = { _, _ in nil }
+    /// Requests `textDocument/references` for the given 1-based line/column
+    /// (⌥⇧F12, "Find All References") and hands the results off to
+    /// `AppState` to populate the References panel.
+    var onFindReferences: (Int, Int) async -> Void = { _, _ in }
+    /// Requests `textDocument/rename` for the given 1-based line/column,
+    /// renaming the symbol there to `newName` (F2, "Rename Symbol"), and
+    /// applies the resulting workspace edit.
+    var onRenameSymbol: (Int, Int, String) async -> Void = { _, _, _ in }
+    /// A pending cross-view "jump to this location" request set by `AppState`
+    /// (e.g. a References panel row click) — consumed once this file's
+    /// content is the target's, then cleared via `onNavigationConsumed`.
+    var pendingNavigationTarget: NavigationRequest? = nil
+    /// Clears `pendingNavigationTarget` on `AppState` once consumed.
+    var onNavigationConsumed: () -> Void = {}
     /// Set by the representable so external callers can scroll the editor.
     var scrollProxy: Binding<EditorScrollProxy?>? = nil
     /// Set by the representable so the SwiftUI find/replace bar can drive
@@ -258,10 +272,16 @@ struct EditorView: NSViewRepresentable {
         if textView.string != content {
             textView.string = content
             coord.applyHighlighting(to: textView)
-            coord.consumePendingDefinitionScroll(in: textView)
+            coord.consumePendingDefinitionScroll()
         } else if themeChanged || fontChanged {
             coord.applyHighlighting(to: textView)
         }
+
+        // A "Find All References" panel click (or other cross-view jump)
+        // targeting this file — consume it once the content above matches.
+        coord.consumePendingNavigation(
+            pendingNavigationTarget, currentFileURL: fileURL, onConsumed: onNavigationConsumed
+        )
 
         if coord.currentBlameInfo != blameInfo {
             coord.currentBlameInfo = blameInfo
@@ -403,6 +423,15 @@ extension EditorView {
         // active tab and SwiftUI re-renders with the new file's content.
         private var pendingDefinitionScroll: DefinitionLocation?
 
+        // The `id` of the last externally-driven navigation request consumed
+        // via `consumePendingNavigation` (e.g. a References panel row
+        // click) — guards against re-jumping/re-clearing on every
+        // `updateNSView` call while that same request's asynchronous
+        // `AppState` clear is still in flight. Keyed by request `id` (not
+        // the `DefinitionLocation` itself) so clicking the *same* reference
+        // twice — a new request, same location — still triggers a fresh jump.
+        private var lastConsumedNavigationRequestId: UUID?
+
         init(_ parent: EditorView) {
             self.parent              = parent
             self.currentLanguage     = parent.language
@@ -524,15 +553,7 @@ extension EditorView {
             if importPath(from: text, at: charIndex) != nil { return true }
             let ns = text as NSString
             guard charIndex >= 0, charIndex < ns.length else { return false }
-            return Self.isIdentifierChar(ns.character(at: charIndex))
-        }
-
-        /// ASCII identifier characters: `A–Z`, `a–z`, `0–9`, `_`, `$`.
-        private static func isIdentifierChar(_ c: unichar) -> Bool {
-            (c >= 65 && c <= 90)  ||   // A–Z
-            (c >= 97 && c <= 122) ||   // a–z
-            (c >= 48 && c <= 57)  ||   // 0–9
-            c == 95 || c == 36         // _ $
+            return isIdentifierChar(ns.character(at: charIndex))
         }
 
         // MARK: - Go to Definition — LSP fallback when Cmd+Click isn't on an import path
@@ -555,8 +576,8 @@ extension EditorView {
         /// `consumePendingDefinitionScroll` finishes the jump once that
         /// file's content lands in this same, reused text view.
         private func navigate(to target: DefinitionLocation) {
-            if let tv = textView, target.fileURL.path == parent.fileURL?.path {
-                scrollToPosition(line: target.line, column: target.character, in: tv)
+            if target.fileURL.path == parent.fileURL?.path {
+                scrollProxy?.jumpTo(line: target.line, column: target.character)
                 return
             }
             pendingDefinitionScroll = target
@@ -569,30 +590,40 @@ extension EditorView {
         /// tab's content into the text view — completes a cross-file
         /// "Go to Definition" jump if the loaded file is the one it was
         /// waiting on.
-        func consumePendingDefinitionScroll(in textView: NSTextView) {
+        func consumePendingDefinitionScroll() {
             guard let target = pendingDefinitionScroll, target.fileURL.path == parent.fileURL?.path else { return }
             pendingDefinitionScroll = nil
-            scrollToPosition(line: target.line, column: target.character, in: textView)
+            scrollProxy?.jumpTo(line: target.line, column: target.character)
         }
 
-        /// Moves the caret to 1-based `line`/`column` and scrolls it into
-        /// view. Mirrors `promptGoToLine`'s line-walking, extended to also
-        /// land on a column instead of just the line start.
-        private func scrollToPosition(line: Int, column: Int, in tv: NSTextView) {
-            let ns = tv.string as NSString
-            var idx = 0
-            var current = 1
-            while current < line && idx < ns.length {
-                let r = ns.range(of: "\n", options: [], range: NSRange(location: idx, length: ns.length - idx))
-                if r.location == NSNotFound { break }
-                idx = r.location + 1
-                current += 1
-            }
-            let lineRange   = ns.lineRange(for: NSRange(location: min(idx, ns.length), length: 0))
-            let targetIndex = min(idx + max(1, column) - 1, NSMaxRange(lineRange))
-            let range       = NSRange(location: min(targetIndex, ns.length), length: 0)
-            tv.setSelectedRange(range)
-            tv.scrollRangeToVisible(range)
+        /// Consumes an externally-set "jump to location" request — e.g. a
+        /// "Find All References" panel row click, routed here via
+        /// `AppState.pendingNavigationTarget` since that click originates
+        /// outside this view's own hierarchy (unlike Cmd+Click, which starts
+        /// inside this same Coordinator) — once this file's content is the
+        /// request's target file. Idempotent *per request* (keyed by
+        /// `request.id`, not the location it points at): a burst of
+        /// `updateNSView` calls before `onConsumed`'s asynchronous `AppState`
+        /// clear lands won't re-jump or double-clear for the *same* request,
+        /// but a fresh request to the exact same location (e.g. clicking the
+        /// same reference twice) still gets a new `id` and so still jumps —
+        /// comparing by location alone would wrongly swallow that repeat
+        /// click. Clearing happens on a later run-loop turn
+        /// (`Task { onConsumed() }`) rather than synchronously here, since
+        /// this runs from within `updateNSView` itself — mutating
+        /// `@Observable` `AppState` state synchronously mid view-update is
+        /// undefined behavior in SwiftUI.
+        func consumePendingNavigation(
+            _ request: NavigationRequest?,
+            currentFileURL: URL?,
+            onConsumed: @escaping () -> Void
+        ) {
+            guard let request, request.location.fileURL.path == currentFileURL?.path,
+                  request.id != lastConsumedNavigationRequestId
+            else { return }
+            lastConsumedNavigationRequestId = request.id
+            scrollProxy?.jumpTo(line: request.location.line, column: request.location.character)
+            Task { onConsumed() }
         }
 
         // MARK: - Hover tooltip
@@ -647,7 +678,8 @@ extension EditorView {
             // text view itself to be focused, matching VS Code semantics.
             case .find:           findReplaceController?.present(withReplace: false)
             case .findAndReplace: findReplaceController?.present(withReplace: true)
-            case .goToLine, .toggleComment, .indent, .outdent, .selectNextOccurrence:
+            case .goToLine, .toggleComment, .indent, .outdent, .selectNextOccurrence,
+                 .findReferences, .renameSymbol:
                 guard tv.window?.firstResponder === tv else { return }
                 switch command {
                 case .goToLine:      promptGoToLine(tv)
@@ -655,6 +687,8 @@ extension EditorView {
                 case .indent:        shiftIndent(tv, indent: true)
                 case .outdent:       shiftIndent(tv, indent: false)
                 case .selectNextOccurrence: selectNextOccurrence(tv)
+                case .findReferences: requestFindReferences(tv)
+                case .renameSymbol:   promptRenameSymbol(tv)
                 case .find, .findAndReplace: break // handled above
                 }
             }
@@ -691,6 +725,56 @@ extension EditorView {
             let range = NSRange(location: min(idx, ns.length), length: 0)
             tv.setSelectedRange(range)
             tv.scrollRangeToVisible(range)
+        }
+
+        // MARK: - Find All References (⌥⇧F12)
+
+        /// Looks up `textDocument/references` at the caret and hands the
+        /// result off to `AppState` (via `onFindReferences`) to populate the
+        /// References panel. Unlike Cmd+Click "Go to Definition", this
+        /// doesn't scroll this text view itself — the panel drives
+        /// navigation for whichever result the user picks.
+        private func requestFindReferences(_ tv: NSTextView) {
+            let (line, col) = position(in: tv.string, at: tv.selectedRange().location)
+            Task { [weak self] in
+                await self?.parent.onFindReferences(line, col)
+            }
+        }
+
+        // MARK: - Rename Symbol (F2)
+
+        /// Prompts for a new name — mirroring `promptGoToLine`'s
+        /// NSAlert-with-accessory-`NSTextField` modal exactly — pre-filled
+        /// with the identifier touching the caret (found via the shared
+        /// top-level `identifierWordRange`, also used by ⌘D's "select next
+        /// occurrence" below, since it correctly grows in both directions
+        /// from the caret rather than only backward like the
+        /// completion-prefix helpers). Confirming invokes
+        /// `onRenameSymbol` with the *start* of that identifier, the
+        /// position convention LSP servers expect a rename request to point at.
+        private func promptRenameSymbol(_ tv: NSTextView) {
+            let ns = tv.string as NSString
+            guard let word = identifierWordRange(in: ns, around: tv.selectedRange().location) else { return }
+            let currentName = ns.substring(with: word)
+
+            let alert = NSAlert()
+            alert.messageText = "Rename Symbol"
+            alert.informativeText = "Enter the new name for \"\(currentName)\":"
+            let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+            field.stringValue = currentName
+            alert.accessoryView = field
+            alert.addButton(withTitle: "Rename")
+            alert.addButton(withTitle: "Cancel")
+            alert.window.initialFirstResponder = field
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+            let newName = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !newName.isEmpty, newName != currentName else { return }
+
+            let (line, col) = position(in: tv.string, at: word.location)
+            Task { [weak self] in
+                await self?.parent.onRenameSymbol(line, col, newName)
+            }
         }
 
         /// Comment token for the current language, or "" if line comments
@@ -816,7 +900,7 @@ extension EditorView {
 
             // No selection yet: select the word under/touching the caret.
             if ranges.count == 1, ranges[0].length == 0 {
-                guard let word = wordRange(in: ns, around: ranges[0].location) else { return }
+                guard let word = identifierWordRange(in: ns, around: ranges[0].location) else { return }
                 tv.setSelectedRange(word)
                 tv.scrollRangeToVisible(word)
                 return
@@ -843,24 +927,6 @@ extension EditorView {
             tv.scrollRangeToVisible(found)
         }
 
-        /// The identifier word containing `location`, or the word touching it
-        /// from the left when `location` sits at/after a non-word boundary —
-        /// e.g. the caret placed immediately after a word, or at end-of-document.
-        /// Reuses `isIdentifierChar` (shared with Cmd+Click's clickable-target check).
-        private func wordRange(in ns: NSString, around location: Int) -> NSRange? {
-            guard ns.length > 0 else { return nil }
-            var idx = location
-            if idx >= ns.length || !Self.isIdentifierChar(ns.character(at: idx)) {
-                idx -= 1
-            }
-            guard idx >= 0, idx < ns.length, Self.isIdentifierChar(ns.character(at: idx)) else { return nil }
-
-            var start = idx
-            while start > 0, Self.isIdentifierChar(ns.character(at: start - 1)) { start -= 1 }
-            var end = idx + 1
-            while end < ns.length, Self.isIdentifierChar(ns.character(at: end)) { end += 1 }
-            return NSRange(location: start, length: end - start)
-        }
 
         /// Case-sensitive, literal search for `target` starting at `location`
         /// and running to the document end, then wrapping around to the

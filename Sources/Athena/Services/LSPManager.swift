@@ -146,6 +146,64 @@ actor LSPManager {
         return parseDefinition(from: data)
     }
 
+    /// Requests every reference to the symbol at the given position via
+    /// `textDocument/references`. `includeDeclaration` mirrors the LSP
+    /// request field of the same name (VS Code's "Find All References"
+    /// includes the declaration itself by default). Returns an empty array
+    /// when no server is running or the response contains no locations.
+    func references(
+        fileURL: URL,
+        line: Int,
+        character: Int,
+        includeDeclaration: Bool = true
+    ) async throws -> [DefinitionLocation] {
+        let language = Language.detect(from: fileURL)
+        guard servers[language] != nil else { return [] }
+
+        let params: [String: Any] = [
+            "textDocument": ["uri": fileURL.absoluteString],
+            "position": ["line": line, "character": character],
+            "context": ["includeDeclaration": includeDeclaration],
+        ]
+
+        guard let data = try? await sendRequest(method: "textDocument/references", params: params, language: language) else {
+            return []
+        }
+
+        return parseReferences(from: data)
+    }
+
+    /// Requests a `textDocument/rename` workspace edit for the symbol at the
+    /// given position, renaming it to `newName`. Parses the response's
+    /// `WorkspaceEdit` (`{changes: {uri: TextEdit[]}}`, or the alternate
+    /// `documentChanges` form) into a per-file list of `LSPTextEdit`s —
+    /// callers apply each file's edits with `applyLSPTextEdits`, the same
+    /// pure function `formatting(fileURL:content:tabSize:insertSpaces:)`
+    /// already uses, so the offset-conversion logic isn't duplicated.
+    /// Returns an empty dictionary when no server is running, the server has
+    /// nothing to rename, or the response can't be parsed.
+    func rename(
+        fileURL: URL,
+        line: Int,
+        character: Int,
+        newName: String
+    ) async throws -> [URL: [LSPTextEdit]] {
+        let language = Language.detect(from: fileURL)
+        guard servers[language] != nil else { return [:] }
+
+        let params: [String: Any] = [
+            "textDocument": ["uri": fileURL.absoluteString],
+            "position": ["line": line, "character": character],
+            "newName": newName,
+        ]
+
+        guard let data = try? await sendRequest(method: "textDocument/rename", params: params, language: language) else {
+            return [:]
+        }
+
+        return parseWorkspaceEdit(from: data)
+    }
+
     /// Requests document formatting from the running language server for
     /// `fileURL`'s language and applies the returned `TextEdit[]` to
     /// `content`, returning the fully-formatted text. Returns `nil` when no
@@ -570,6 +628,56 @@ actor LSPManager {
         return DefinitionLocation(fileURL: url, line: line + 1, character: character + 1)
     }
 
+    /// Parses a `textDocument/references` response's `result`, which per the
+    /// LSP spec is always an array of plain `Location` (never `LocationLink`,
+    /// unlike `textDocument/definition`) — reuses the same `location(from:)`
+    /// helper `parseDefinition` uses.
+    private func parseReferences(from data: Data) -> [DefinitionLocation] {
+        guard
+            let json   = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let result = json["result"] as? [[String: Any]]
+        else { return [] }
+
+        return result.compactMap { location(from: $0) }
+    }
+
+    /// Parses a `textDocument/rename` response's `result` — a `WorkspaceEdit`
+    /// — into a per-file URL → edits map. Handles both the common `changes`
+    /// form (`{uri: TextEdit[]}`) and the alternate, versioned
+    /// `documentChanges` form some servers send instead, whose entries nest
+    /// the URI under `textDocument.uri` and the edits under `edits`. Each
+    /// file entry is cast individually (rather than casting the whole
+    /// `changes`/`documentChanges` collection in one shot) so one
+    /// unexpectedly-shaped entry only drops that file, not the entire
+    /// workspace edit.
+    private func parseWorkspaceEdit(from data: Data) -> [URL: [LSPTextEdit]] {
+        guard
+            let json   = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let result = json["result"] as? [String: Any]
+        else { return [:] }
+
+        var edits: [URL: [LSPTextEdit]] = [:]
+
+        if let changes = result["changes"] as? [String: Any] {
+            for (uriString, rawValue) in changes {
+                guard let url = URL(string: uriString), let rawEdits = rawValue as? [[String: Any]] else { continue }
+                edits[url] = rawEdits.compactMap(Self.parseTextEdit)
+            }
+        } else if let documentChanges = result["documentChanges"] as? [Any] {
+            for case let entry as [String: Any] in documentChanges {
+                guard
+                    let doc       = entry["textDocument"] as? [String: Any],
+                    let uriString = doc["uri"] as? String,
+                    let url       = URL(string: uriString),
+                    let rawEdits  = entry["edits"] as? [[String: Any]]
+                else { continue }
+                edits[url] = rawEdits.compactMap(Self.parseTextEdit)
+            }
+        }
+
+        return edits
+    }
+
     /// Parses a `textDocument/formatting` response's `result` — an array of
     /// `TextEdit` (`{range: {start, end}, newText}`) — and applies it to
     /// `originalContent`. Returns `nil` when `result` is missing, `null`, or
@@ -581,27 +689,33 @@ actor LSPManager {
             !result.isEmpty
         else { return nil }
 
-        let edits: [LSPTextEdit] = result.compactMap { entry in
-            guard
-                let range     = entry["range"] as? [String: Any],
-                let start     = range["start"] as? [String: Any],
-                let end       = range["end"] as? [String: Any],
-                let startLine = start["line"] as? Int,
-                let startChar = start["character"] as? Int,
-                let endLine   = end["line"] as? Int,
-                let endChar   = end["character"] as? Int,
-                let newText   = entry["newText"] as? String
-            else { return nil }
-
-            return LSPTextEdit(
-                startLine: startLine, startCharacter: startChar,
-                endLine: endLine, endCharacter: endChar,
-                newText: newText
-            )
-        }
+        let edits = result.compactMap(Self.parseTextEdit)
 
         guard !edits.isEmpty else { return nil }
         return applyLSPTextEdits(edits, to: originalContent)
+    }
+
+    /// Parses one LSP `TextEdit` (`{range: {start, end}, newText}`) object
+    /// into an `LSPTextEdit`. Shared by `parseFormatting`
+    /// (`textDocument/formatting`) and `parseWorkspaceEdit`
+    /// (`textDocument/rename`) so the JSON shape is only decoded once.
+    private static func parseTextEdit(_ entry: [String: Any]) -> LSPTextEdit? {
+        guard
+            let range     = entry["range"] as? [String: Any],
+            let start     = range["start"] as? [String: Any],
+            let end       = range["end"] as? [String: Any],
+            let startLine = start["line"] as? Int,
+            let startChar = start["character"] as? Int,
+            let endLine   = end["line"] as? Int,
+            let endChar   = end["character"] as? Int,
+            let newText   = entry["newText"] as? String
+        else { return nil }
+
+        return LSPTextEdit(
+            startLine: startLine, startCharacter: startChar,
+            endLine: endLine, endCharacter: endChar,
+            newText: newText
+        )
     }
 }
 
