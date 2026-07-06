@@ -20,6 +20,11 @@ jobs:
         with:
           xcode-version: latest-stable
 
+      - name: Show toolchain versions
+        run: |
+          xcodebuild -version
+          swift --version
+
       - name: Build (release)
         run: swift build -c release
 

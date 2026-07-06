@@ -15,6 +15,17 @@ import Darwin
 /// `DispatchSourceFileSystemObject`s cover with no new dependency.
 actor FileWatchService {
 
+    // MARK: - Weak-self box
+
+    /// Opaque, `Sendable`-conforming holder for a weak reference, so a
+    /// `DispatchSource` event-handler closure can capture an immutable `let`
+    /// instead of a bare `weak var` local. See the note on `watchFile` below
+    /// for why this indirection exists.
+    private final class WeakBox<T: AnyObject>: @unchecked Sendable {
+        weak var value: T?
+        init(_ value: T?) { self.value = value }
+    }
+
     // MARK: State
 
     /// One active `DispatchSource` plus the file descriptor it owns.
@@ -58,30 +69,30 @@ actor FileWatchService {
         stopWatchingFile(url)
         guard let watch = makeWatch(at: url, mask: [.write, .delete, .rename]) else { return }
 
-        // `nonisolated(unsafe)`: a stricter Swift 6 SDK's region-isolation
-        // checker flags a "sending" data-race risk here — a false positive
-        // for this well-established weak-self-then-optional-chain idiom: the
-        // closure only ever touches `self` through `await` inside a `Task`,
-        // which performs a real actor hop. `nonisolated(unsafe)` is the
-        // documented escape hatch for exactly this "checker can't prove it,
-        // but it's manually verified safe" situation — but it must be
-        // attached to the actual weak reference the checker flags. A prior
-        // attempt applied it to a *strong* `let` that only fed a `[weak
-        // watchSelf]` *capture-list* entry — capture-list syntax can't carry
-        // the modifier, so that new (unmarked) weak binding was still
-        // flagged and the fix silently did nothing on CI's toolchain (it
-        // doesn't reproduce locally at all, so this went unnoticed until a
-        // real CI run). Declaring the weak var directly, with the modifier on
-        // it, and letting the closure capture it as an ordinary (mutable,
-        // by-reference) local — no capture list — targets the actual
-        // flagged declaration. Two earlier attempts that instead
-        // restructured where the capture/`Task` sits (moving it into the
-        // inner `Task`, and `Task.detached`) compiled fine but caused a real
-        // "Incorrect actor executor assumption" runtime crash, so this fix
-        // deliberately keeps the closure/Task nesting itself unchanged.
-        nonisolated(unsafe) weak var watchSelf = self
+        // A stricter Swift 6 SDK's region-isolation checker flags a "sending"
+        // data-race risk on this closure — a false positive for this
+        // well-established weak-self-then-optional-chain idiom: the closure
+        // only ever touches `self` through `await` inside a `Task`, which
+        // performs a real actor hop. That check (SE-0430 "sending"
+        // parameters) is a different mechanism from Sendable-conformance
+        // checking, so `nonisolated(unsafe)` — tried directly on a `weak var`
+        // and, before that, misapplied to a strong `let` feeding a `[weak x]`
+        // capture-list alias — cannot satisfy it: it flags any *bare mutable
+        // local* (which `weak var` inherently is) still reachable from the
+        // enclosing method as unsendable, regardless of attributes. Routing
+        // through `WeakBox`, an opaque `@unchecked Sendable` reference type,
+        // means the closure captures an immutable `let` whose declared type
+        // is already Sendable — the mutability (the weak slot inside) is no
+        // longer visible to the checker at the capture site. Runtime
+        // behavior is unchanged: still a weak reference, still resolved at
+        // `Task`-execution time via `await`. Two earlier attempts that
+        // instead restructured where the capture/`Task` sits (moving it into
+        // the inner `Task`, and `Task.detached`) compiled fine but caused a
+        // real "Incorrect actor executor assumption" runtime crash, so this
+        // fix deliberately keeps the closure/Task nesting itself unchanged.
+        let watchSelf = WeakBox(self)
         watch.source.setEventHandler {
-            Task { await watchSelf?.handleFileEvent(url) }
+            Task { await watchSelf.value?.handleFileEvent(url) }
         }
         watch.source.resume()
         fileWatches[url] = watch
@@ -101,9 +112,9 @@ actor FileWatchService {
         guard let watch = makeWatch(at: url, mask: [.write]) else { return }
 
         // See the note on `watchFile` above.
-        nonisolated(unsafe) weak var watchSelf = self
+        let watchSelf = WeakBox(self)
         watch.source.setEventHandler {
-            Task { await watchSelf?.handleDirectoryEvent(url) }
+            Task { await watchSelf.value?.handleDirectoryEvent(url) }
         }
         watch.source.resume()
         directoryWatch = watch
