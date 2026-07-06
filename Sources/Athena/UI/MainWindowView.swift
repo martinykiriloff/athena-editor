@@ -74,10 +74,24 @@ private struct EditorSplitView: View {
         @Bindable var state = appState
 
         VStack(spacing: 0) {
-            EditorContainerView()
+            // Zen mode (plan.md item 28, "C8") centers the editor content
+            // with a max width — VS Code-style — rather than letting it
+            // stretch full-bleed once the sidebar/activity bar/panel chrome
+            // that used to bound it is hidden.
+            if appState.isZenMode {
+                HStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    EditorContainerView()
+                        .frame(maxWidth: 1000)
+                    Spacer(minLength: 0)
+                }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                EditorContainerView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
 
-            if appState.showBottomPanel {
+            if appState.showBottomPanel && !appState.isZenMode {
                 ResizeDivider(axis: .horizontal) { delta in
                     // Dragging upward (negative delta) should increase panel height.
                     let newHeight = (dragBaseHeight - delta)
@@ -121,10 +135,12 @@ struct MainWindowView: View {
     private var layoutContent: some View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
-                ActivityBarView()
-                    .frame(width: 48)
+                if !appState.isZenMode {
+                    ActivityBarView()
+                        .frame(width: 48)
+                }
 
-                if appState.showSidebar {
+                if appState.showSidebar && !appState.isZenMode {
                     SidebarView()
                         .frame(width: appState.sidebarWidth)
                     ResizeDivider(axis: .vertical) { delta in
@@ -151,8 +167,10 @@ struct MainWindowView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            StatusBarView()
-                .frame(height: 22)
+            if !appState.isZenMode {
+                StatusBarView()
+                    .frame(height: 22)
+            }
         }
     }
 }

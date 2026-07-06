@@ -251,6 +251,14 @@ struct AthenaCommands: Commands {
 
             Divider()
 
+            // ⌃⌘Z is owned by the keybinding monitor (so it isn't shadowed by
+            // the menu); clicks route through the same action.
+            Button("Toggle Zen Mode") {
+                performAction(.toggleZenMode)
+            }
+
+            Divider()
+
             Button("Zoom In") {
                 NotificationCenter.default.post(name: .athenaZoomIn, object: nil)
             }

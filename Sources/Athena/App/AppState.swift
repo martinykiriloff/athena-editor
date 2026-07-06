@@ -63,6 +63,15 @@ final class AppState {
     var activeSidebarPanel: SidebarPanel = .files
     var showSidebar: Bool = true
     var showBottomPanel: Bool = false
+    /// Distraction-free mode (plan.md item 28, "C8") — hides the activity
+    /// bar, sidebar, tab bar, and status bar, leaving just the editor
+    /// content (centered with a max width, VS Code-style). Deliberately a
+    /// plain bool rather than deriving from `showSidebar`/`showBottomPanel`
+    /// etc.: toggling Zen mode off must restore whichever of those the user
+    /// had before entering it, so their own state has to be preserved
+    /// untouched underneath (`MainWindowView`/`EditorContainerView` gate on
+    /// `showSidebar && !isZenMode` etc., not one flag stomping the other).
+    var isZenMode: Bool = false
     var activeBottomPanel: BottomPanel = .terminal
     var sidebarWidth: CGFloat = 260
     var bottomPanelHeight: CGFloat = 220
@@ -2526,6 +2535,8 @@ final class AppState {
             if let id = focusedTab?.id { closeTab(id) }
         case .splitEditorRight:
             splitEditorRight()
+        case .toggleZenMode:
+            isZenMode.toggle()
         case .toggleSidebar:
             showSidebar.toggle()
         case .toggleTerminal:

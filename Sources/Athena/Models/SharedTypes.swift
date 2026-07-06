@@ -856,6 +856,44 @@ func breadcrumbSymbolPath(in symbols: [DocumentSymbol], containingLine line: Int
     return []
 }
 
+/// Computes the sticky-scroll rows to pin above the editor viewport (plan.md
+/// item 28, "G3" — VS Code's "sticky scroll"): the chain of symbols currently
+/// enclosing `topVisibleLine`, reusing `breadcrumbSymbolPath`'s exact
+/// containment walk rather than re-implementing scope containment — sticky
+/// scroll and the breadcrumbs bar both answer "which symbols contain this
+/// line," just for a different line (the topmost visible line instead of the
+/// cursor's). Filtered down to only the symbols whose own opening line has
+/// ALREADY scrolled above the viewport (`rangeStartLine < topVisibleLine`) —
+/// a symbol whose header line IS the top visible line is already on screen,
+/// so pinning a duplicate row for it would be redundant. Capped to
+/// `maxLevels`, keeping the DEEPEST (innermost) entries when the chain runs
+/// longer than that: the immediately-enclosing scope is what's most worth
+/// surfacing while scrolling through deeply nested code; the outermost
+/// containers are usually inferable from the file/Outline panel anyway.
+func stickyScrollRows(in symbols: [DocumentSymbol], topVisibleLine: Int, maxLevels: Int = 4) -> [DocumentSymbol] {
+    let enclosing = breadcrumbSymbolPath(in: symbols, containingLine: topVisibleLine)
+        .filter { $0.rangeStartLine < topVisibleLine }
+    return Array(enclosing.suffix(maxLevels))
+}
+
+/// Given the total line count and the editor's current scroll state
+/// (`scrollFraction`/`visibleFraction`, both 0...1 — see
+/// `EditorView.onScrollChange`), returns the 1-based line number currently at
+/// the top of the viewport. This is the exact fraction→line-index arithmetic
+/// `MinimapNSView.draw(_:)` already uses to position its own viewport
+/// indicator (uniform per-line height, ignoring word-wrap — the same
+/// approximation the minimap already ships with), pulled out as a pure,
+/// testable function so sticky scroll and the minimap agree on "what's
+/// visible" instead of maintaining two possibly-divergent definitions of it.
+func firstVisibleLine(lineCount: Int, scrollFraction: Double, visibleFraction: Double) -> Int {
+    guard lineCount > 0 else { return 1 }
+    let fraction = max(0, min(1, scrollFraction))
+    let visible  = max(0, min(1, visibleFraction))
+    let visibleLines = visible * Double(lineCount)
+    let firstVisible  = fraction * max(0, Double(lineCount) - visibleLines)
+    return Int(firstVisible) + 1
+}
+
 // MARK: - Identifier word matching
 
 /// ASCII identifier characters: `A–Z`, `a–z`, `0–9`, `_`, `$`. Shared by

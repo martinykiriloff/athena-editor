@@ -141,8 +141,12 @@ private struct EditorPaneView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            TabBarView(side: side)
-            Divider()
+            // Zen mode (plan.md item 28, "C8") hides the tab bar too — just
+            // the editor content should remain.
+            if !appState.isZenMode {
+                TabBarView(side: side)
+                Divider()
+            }
             if let tab = appState.activeTab(in: side) {
                 // Image tabs (plan.md item 26, "G1") bypass `CodeEditorView`
                 // entirely — there's no text to edit, no diagnostics/blame/
@@ -378,6 +382,11 @@ struct CodeEditorView: View {
                     guard let url = tab.fileURL else { return }
                     appState.openDiffViewer(forConflict: region, in: url)
                 },
+                onEscapeUnhandled: {
+                    guard appState.isZenMode else { return false }
+                    appState.isZenMode = false
+                    return true
+                },
                 onRequestCompletion: { line, col in
                     // LSP completions (0-indexed internally)
                     let lspItems: [CompletionItem]
@@ -414,6 +423,9 @@ struct CodeEditorView: View {
                         .padding(.top, 8)
                         .padding(.trailing, 16)
                 }
+            }
+            .overlay(alignment: .top) {
+                StickyScrollBarView(tab: tab, scrollFraction: scrollFraction, visibleFraction: visibleFraction)
             }
 
             if appState.editorMinimapEnabled {
@@ -487,6 +499,85 @@ private struct BreadcrumbBarView: View {
 
     private func jump(to symbol: DocumentSymbol) {
         guard let fileURL = appState.focusedTab?.fileURL else { return }
+        Task { await appState.navigateTo(DefinitionLocation(fileURL: fileURL, line: symbol.line, character: symbol.character)) }
+    }
+}
+
+// MARK: - StickyScrollBarView
+
+/// Thin strip pinned to the TOP of the editor's own viewport while scrolling
+/// through a long nested function/class (plan.md item 28, "G3" — VS Code's
+/// "sticky scroll") — one row per enclosing scope whose own opening line has
+/// scrolled out of view. Unlike `BreadcrumbBarView` (cursor-position-driven,
+/// a real layout row that pushes content down), this is scroll-position-
+/// driven and rendered as an `.overlay(alignment: .top)` over the editor's
+/// content in `CodeEditorView.editorRow` — it needs to float ON TOP of
+/// whatever's scrolled beneath it, exactly like VS Code's own sticky rows
+/// visually cover the lines they're standing in for.
+///
+/// Reuses the exact same `documentSymbols` tree and containment logic
+/// (`breadcrumbSymbolPath`, via the pure `stickyScrollRows(in:topVisibleLine:maxLevels:)`)
+/// backing the breadcrumbs bar/Outline/Go to Symbol above — just keyed on
+/// the top-VISIBLE line (derived from `scrollFraction`/`visibleFraction`,
+/// the same scroll-tracking state `MinimapView` already consumes, via the
+/// pure `firstVisibleLine(lineCount:scrollFraction:visibleFraction:)`)
+/// instead of the cursor's line.
+///
+/// `AppState.documentSymbols` only ever holds the FOCUSED tab's tree (see
+/// `EditorContainerView`'s centralized fetch) — so, like the breadcrumbs
+/// bar, this renders nothing for a non-focused split pane rather than
+/// showing another file's (or stale) symbols.
+private struct StickyScrollBarView: View {
+    let tab: TabModel
+    let scrollFraction: Double
+    let visibleFraction: Double
+    @Environment(AppState.self) private var appState
+
+    private static let maxLevels = 4
+    private static let rowHeight: CGFloat = 20
+
+    private var rows: [DocumentSymbol] {
+        guard tab.id == appState.focusedTab?.id, !tab.content.isEmpty else { return [] }
+        let lineCount = tab.content.components(separatedBy: "\n").count
+        let topLine = firstVisibleLine(
+            lineCount: lineCount, scrollFraction: scrollFraction, visibleFraction: visibleFraction
+        )
+        return stickyScrollRows(in: appState.documentSymbols, topVisibleLine: topLine, maxLevels: Self.maxLevels)
+    }
+
+    var body: some View {
+        let symbols = rows
+        if !symbols.isEmpty {
+            VStack(spacing: 0) {
+                ForEach(Array(symbols.enumerated()), id: \.element.id) { index, symbol in
+                    Button {
+                        jump(to: symbol)
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: symbol.iconName)
+                                .font(.system(size: appState.sf(10)))
+                            Text(symbol.name)
+                                .font(.system(size: appState.sf(11)))
+                                .lineLimit(1)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.leading, 10 + CGFloat(index) * 12)
+                        .padding(.trailing, 10)
+                        .frame(height: Self.rowHeight)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.secondary)
+                    .background(Color(nsColor: .controlBackgroundColor))
+                }
+            }
+            .overlay(alignment: .bottom) { Divider() }
+        }
+    }
+
+    private func jump(to symbol: DocumentSymbol) {
+        guard let fileURL = tab.fileURL else { return }
         Task { await appState.navigateTo(DefinitionLocation(fileURL: fileURL, line: symbol.line, character: symbol.character)) }
     }
 }

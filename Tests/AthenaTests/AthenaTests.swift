@@ -587,6 +587,110 @@ struct BreadcrumbSymbolPathTests {
     }
 }
 
+// MARK: - Sticky Scroll (plan.md item 28, "G3")
+
+@Suite("stickyScrollRows")
+struct StickyScrollRowsTests {
+    private func symbol(
+        _ name: String,
+        rangeStart: Int,
+        rangeEnd: Int,
+        children: [DocumentSymbol]? = nil
+    ) -> DocumentSymbol {
+        DocumentSymbol(
+            name: name, kind: 5, line: rangeStart, character: 1,
+            rangeStartLine: rangeStart, rangeEndLine: rangeEnd, children: children
+        )
+    }
+
+    @Test func lineOutsideEverySymbolYieldsNoRows() {
+        let symbols = [symbol("Foo", rangeStart: 1, rangeEnd: 10)]
+        #expect(stickyScrollRows(in: symbols, topVisibleLine: 20).isEmpty)
+    }
+
+    @Test func headerLineStillVisibleYieldsNoRow() {
+        // The symbol's own opening line IS the top-visible line — already
+        // on screen, so no sticky row should be pinned for it.
+        let outer = symbol("Foo", rangeStart: 1, rangeEnd: 10)
+        #expect(stickyScrollRows(in: [outer], topVisibleLine: 1).isEmpty)
+    }
+
+    @Test func headerScrolledAboveViewportYieldsOneRow() {
+        let outer = symbol("Foo", rangeStart: 1, rangeEnd: 10)
+        let rows = stickyScrollRows(in: [outer], topVisibleLine: 5)
+        #expect(rows.map(\.name) == ["Foo"])
+    }
+
+    @Test func nestedScopesBothScrolledOffYieldFullChainOutermostFirst() {
+        let method = symbol("bar", rangeStart: 3, rangeEnd: 8)
+        let outer  = symbol("Foo", rangeStart: 1, rangeEnd: 10, children: [method])
+        let rows = stickyScrollRows(in: [outer], topVisibleLine: 6)
+        #expect(rows.map(\.name) == ["Foo", "bar"])
+    }
+
+    @Test func innerScopeHeaderStillVisibleDropsOnlyThatRow() {
+        // Top-visible line sits exactly on `bar`'s own header line: `bar`
+        // shouldn't get a row (already visible), but the still-enclosing
+        // `Foo` (scrolled off) should.
+        let method = symbol("bar", rangeStart: 3, rangeEnd: 8)
+        let outer  = symbol("Foo", rangeStart: 1, rangeEnd: 10, children: [method])
+        let rows = stickyScrollRows(in: [outer], topVisibleLine: 3)
+        #expect(rows.map(\.name) == ["Foo"])
+    }
+
+    @Test func chainLongerThanMaxLevelsKeepsDeepestEntries() {
+        let level4 = symbol("d", rangeStart: 4, rangeEnd: 20)
+        let level3 = symbol("c", rangeStart: 3, rangeEnd: 21, children: [level4])
+        let level2 = symbol("b", rangeStart: 2, rangeEnd: 22, children: [level3])
+        let level1 = symbol("a", rangeStart: 1, rangeEnd: 23, children: [level2])
+        let rows = stickyScrollRows(in: [level1], topVisibleLine: 10, maxLevels: 2)
+        #expect(rows.map(\.name) == ["c", "d"])
+    }
+
+    @Test func maxLevelsLargerThanChainReturnsWholeChain() {
+        let method = symbol("bar", rangeStart: 3, rangeEnd: 8)
+        let outer  = symbol("Foo", rangeStart: 1, rangeEnd: 10, children: [method])
+        let rows = stickyScrollRows(in: [outer], topVisibleLine: 6, maxLevels: 10)
+        #expect(rows.map(\.name) == ["Foo", "bar"])
+    }
+}
+
+@Suite("firstVisibleLine")
+struct FirstVisibleLineTests {
+    @Test func zeroLineCountReturnsLineOne() {
+        #expect(firstVisibleLine(lineCount: 0, scrollFraction: 0.5, visibleFraction: 0.2) == 1)
+    }
+
+    @Test func unscrolledDocumentReturnsLineOne() {
+        #expect(firstVisibleLine(lineCount: 100, scrollFraction: 0, visibleFraction: 0.2) == 1)
+    }
+
+    @Test func fullyScrolledDocumentReturnsLineAfterLastVisiblePage() {
+        // 100 lines, viewport shows 20% (20 lines) — fully scrolled puts the
+        // top-visible line at the start of the final page (line 81, 1-based).
+        #expect(firstVisibleLine(lineCount: 100, scrollFraction: 1.0, visibleFraction: 0.2) == 81)
+    }
+
+    @Test func halfwayScrolledDocumentLandsMidway() {
+        // 100 lines, 20-line viewport: scrollable range is 80 lines, halfway
+        // is +40, landing on line 41 (1-based).
+        #expect(firstVisibleLine(lineCount: 100, scrollFraction: 0.5, visibleFraction: 0.2) == 41)
+    }
+
+    @Test func visibleFractionCoveringWholeDocumentNeverScrolls() {
+        // Viewport shows the entire document (visibleFraction 1.0) — no room
+        // to scroll, so the top-visible line stays 1 regardless of fraction.
+        #expect(firstVisibleLine(lineCount: 50, scrollFraction: 1.0, visibleFraction: 1.0) == 1)
+    }
+
+    @Test func outOfRangeFractionsAreClamped() {
+        #expect(firstVisibleLine(lineCount: 100, scrollFraction: 1.5, visibleFraction: 0.2)
+                == firstVisibleLine(lineCount: 100, scrollFraction: 1.0, visibleFraction: 0.2))
+        #expect(firstVisibleLine(lineCount: 100, scrollFraction: -0.5, visibleFraction: 0.2)
+                == firstVisibleLine(lineCount: 100, scrollFraction: 0.0, visibleFraction: 0.2))
+    }
+}
+
 // MARK: - Snippet Engine (plan.md item 16, "B5")
 
 @Suite("SnippetEngine")

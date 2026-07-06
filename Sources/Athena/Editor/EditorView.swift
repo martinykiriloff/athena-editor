@@ -112,6 +112,16 @@ struct EditorView: NSViewRepresentable {
     /// "theirs" content — the gutter menu's "Compare" action (plan.md item
     /// 23, "D5").
     var onCompareConflict: (ConflictRegion) -> Void = { _ in }
+    /// Called when Escape reaches the bottom of the in-editor priority chain
+    /// (`Coordinator.handleKeyDown` case 53) with nothing left to dismiss —
+    /// popup/ghost-text/find-bar/multi-cursor/snippet were all already given
+    /// their chance and passed. Zen mode's "Escape exits" (plan.md item 28,
+    /// "C8") hooks in here, deliberately LAST in that chain, so it never
+    /// steals Escape from any of those higher-priority in-editor dismissals.
+    /// Return `true` to consume the event (this call exited Zen mode),
+    /// `false` to let it fall through to `super.keyDown` unchanged — same
+    /// return convention as every other entry in the chain.
+    var onEscapeUnhandled: () -> Bool = { false }
 
     /// Returns merged completion items (LSP + Drizzle) for the given 1-based line/col.
     var onRequestCompletion: (Int, Int) async -> [CompletionItem] = { _, _ in [] }
@@ -1941,7 +1951,9 @@ extension EditorView {
                     activeSnippet = nil
                     return true
                 }
-                return false
+                // Lowest priority: nothing in-editor was left to dismiss —
+                // let Zen mode's Escape-to-exit have it (plan.md item 28).
+                return parent.onEscapeUnhandled()
             case 125: // Down arrow — navigate popup
                 if completionController.isVisible  { completionController.moveDown(); return true }
                 return false

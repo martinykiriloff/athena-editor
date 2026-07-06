@@ -26,6 +26,7 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
     case goToSymbol         = "workbench.action.gotoSymbol"
     // Layout
     case splitEditorRight   = "workbench.action.splitEditorRight"
+    case toggleZenMode      = "workbench.action.toggleZenMode"
     // Editor
     case findInFile         = "actions.find"
     case findAndReplace     = "editor.action.startFindReplaceAction"
@@ -64,6 +65,7 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
         case .goToLine:          return "Go to Line"
         case .goToSymbol:        return "Go to Symbol"
         case .splitEditorRight:  return "Split Editor Right"
+        case .toggleZenMode:     return "Toggle Zen Mode"
         case .findInFile:        return "Find in File"
         case .findAndReplace:    return "Find and Replace"
         case .toggleComment:     return "Toggle Line Comment"
@@ -89,7 +91,7 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
             return "File"
         case .toggleSidebar, .toggleTerminal,
              .showExplorer, .showSourceControl, .showSearch, .showDatabase, .showClaude,
-             .zoomIn, .zoomOut, .resetZoom, .splitEditorRight:
+             .zoomIn, .zoomOut, .resetZoom, .splitEditorRight, .toggleZenMode:
             return "View"
         case .quickOpen, .commandPalette, .nextTab, .previousTab, .goToLine, .goToSymbol:
             return "Navigation"
@@ -237,6 +239,16 @@ struct KeyBinding: Identifiable, Codable, Sendable {
         // Layout — ⌘\ is VS Code's real macOS default for "Split Editor Right"
         // (plan.md item 22); no existing binding above claims the "\" key.
         KeyBinding(action: .splitEditorRight,  combo: KeyCombo(key: "\\",  command: true)),
+        // Zen Mode (plan.md item 28, "C8"). VS Code's real default is the
+        // two-key CHORD ⌘K Z, but `KeyCombo` has no chord support anywhere in
+        // this codebase (it's a flat modifiers+key struct, and
+        // `dispatchKeyInfo` looks up a single combo per keystroke — adding
+        // chord sequencing would be a much bigger, riskier change than this
+        // feature warrants). ⌃⌘Z is the simpler single-combo alternative the
+        // task explicitly allows for this exact situation: unclaimed by any
+        // other binding above, and distinct from the OS-level Cmd+Z (Undo)
+        // since it also requires Control.
+        KeyBinding(action: .toggleZenMode,     combo: KeyCombo(key: "z",   command: true, control: true)),
         // Editor
         KeyBinding(action: .findInFile,        combo: KeyCombo(key: "f",   command: true)),
         KeyBinding(action: .findAndReplace,    combo: KeyCombo(key: "f",   command: true, option: true)),
