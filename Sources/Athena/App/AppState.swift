@@ -1023,7 +1023,7 @@ final class AppState {
         let respData: Data
         let response: URLResponse
         do {
-            (respData, response) = try await URLSession.shared.data(for: req)
+            (respData, response) = try await Self.dataWithConnectionRetry(for: req)
         } catch {
             statusMessage = "Ollama unreachable at \(base): \(error.localizedDescription)"
             return nil
@@ -1041,6 +1041,37 @@ final class AppState {
         else { return nil }
 
         return Self.cleanInlineCompletion(text, prefix: promptHead)
+    }
+
+    /// Performs `req` and retries on connection-level failures (host not yet
+    /// listening, connection lost) that are typically transient — e.g. Ollama
+    /// still finishing startup. Does not retry HTTP error responses or other
+    /// URL errors (those surface immediately).
+    private static func dataWithConnectionRetry(
+        for req: URLRequest,
+        attempts: Int = 3,
+        initialDelay: Duration = .milliseconds(300)
+    ) async throws -> (Data, URLResponse) {
+        var delay = initialDelay
+        for _ in 1..<attempts {
+            do {
+                return try await URLSession.shared.data(for: req)
+            } catch let error as URLError where Self.isTransientConnectionError(error) {
+                try await Task.sleep(for: delay)
+                delay *= 2
+            }
+        }
+        // Final attempt: let any error (transient or not) propagate to the caller.
+        return try await URLSession.shared.data(for: req)
+    }
+
+    private static func isTransientConnectionError(_ error: URLError) -> Bool {
+        switch error.code {
+        case .cannotConnectToHost, .networkConnectionLost:
+            return true
+        default:
+            return false
+        }
     }
 
     /// Strips markdown fences and any echoed prefix from a raw model completion,
