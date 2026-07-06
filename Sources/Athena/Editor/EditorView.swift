@@ -32,6 +32,13 @@ struct EditorView: NSViewRepresentable {
     /// (`AppState.gitLineChanges[fileURL]`), feeding the gutter's colored
     /// change bar (plan.md item 19, "D4").
     var gitLineChanges: [Int: GitLineChangeType] = [:]
+    /// Whether `ConflictParser`'s raw marker-text scan should be trusted for
+    /// this file (`AppState.isConflictScanTrusted(for:)`) — gates the
+    /// merge-conflict resolution UI against a false positive on a file that
+    /// merely *contains* the literal marker strings for an unrelated reason
+    /// (plan.md item 23, "D5"). Defaults `true` so standalone editing with
+    /// no workspace/git context still works off the scan alone.
+    var isConflictScanTrusted: Bool = true
     /// The URL of the file being edited — used for import path resolution.
     var fileURL: URL? = nil
     /// True when this instance's editor GROUP is the one the user last
@@ -85,6 +92,10 @@ struct EditorView: NSViewRepresentable {
     var debugLine: Int? = nil
     /// Called when the user clicks in the gutter to toggle a breakpoint.
     var onToggleBreakpoint: (Int) -> Void = { _ in }
+    /// Opens the diff viewer comparing one conflict region's "ours" vs
+    /// "theirs" content — the gutter menu's "Compare" action (plan.md item
+    /// 23, "D5").
+    var onCompareConflict: (ConflictRegion) -> Void = { _ in }
 
     /// Returns merged completion items (LSP + Drizzle) for the given 1-based line/col.
     var onRequestCompletion: (Int, Int) async -> [CompletionItem] = { _, _ in [] }
@@ -133,6 +144,12 @@ struct EditorView: NSViewRepresentable {
         gutter.onToggleBreakpoint = { [weak coordinator] line in
             coordinator?.parent.onToggleBreakpoint(line)
         }
+        gutter.onConflictResolve = { [weak coordinator] region, choice in
+            coordinator?.resolveConflict(region, choice: choice)
+        }
+        gutter.onConflictCompare = { [weak coordinator] region in
+            coordinator?.parent.onCompareConflict(region)
+        }
         gutter.installObservers(textView: textView)
 
         configureTextView(textView, coordinator: context.coordinator)
@@ -142,6 +159,8 @@ struct EditorView: NSViewRepresentable {
         context.coordinator.currentDiagnostics = diagnostics
         context.coordinator.updateDiagnosticHighlights(in: textView)
         context.coordinator.currentGitLineChanges = gitLineChanges
+        context.coordinator.currentConflictScanTrusted = isConflictScanTrusted
+        context.coordinator.updateConflictHighlights(in: textView)
 
         // Inline blame annotation label.
         let blameLabel = NSTextField(labelWithString: "")
@@ -256,6 +275,8 @@ struct EditorView: NSViewRepresentable {
                         || coord.currentLineHeight != lineHeight
         let wrapChanged  = coord.currentWordWrap != wordWrap
         let wsChanged    = coord.currentRenderWhitespace != renderWhitespace
+        let conflictTrustChanged = coord.currentConflictScanTrusted != isConflictScanTrusted
+        coord.currentConflictScanTrusted = isConflictScanTrusted
 
         if themeChanged {
             coord.currentTheme = theme
@@ -301,8 +322,12 @@ struct EditorView: NSViewRepresentable {
             coord.applyHighlighting(to: textView)
             coord.consumePendingDefinitionScroll()
             coord.cancelActiveSnippet()
+            coord.updateConflictHighlights(in: textView)
         } else if themeChanged || fontChanged {
             coord.applyHighlighting(to: textView)
+            coord.updateConflictHighlights(in: textView)   // tint colors are theme-derived
+        } else if conflictTrustChanged {
+            coord.updateConflictHighlights(in: textView)
         }
 
         // A "Find All References" panel click (or other cross-view jump)
@@ -510,6 +535,22 @@ extension EditorView {
         // gating `GutterView.gitLineChanges` re-sync to only fire when
         // `AppState.gitLineChanges[fileURL]` actually changed.
         var currentGitLineChanges: [Int: GitLineChangeType] = [:]
+
+        // Merge-conflict resolution UI (plan.md item 23, "D5") — same
+        // clear-then-repaint temporary-attribute mechanism as
+        // `highlightedBracketRanges`/`highlightedDiagnosticRanges` above,
+        // reapplied from the same three spots: initial load, a fresh file
+        // swapped into this `NSTextView` (`updateNSView`'s content-changed
+        // branch), and `textViewDidChangeSelection` (typing always moves
+        // the caret, so this gets the "reapply after every edit" behavior
+        // those two get for free).
+        private(set) var currentConflictRegions: [ConflictRegion] = []
+        private var highlightedConflictRanges: [NSRange] = []
+        /// Mirrors `currentDiagnostics`'s "only reapply on real change" gate
+        /// — set from `EditorView.isConflictScanTrusted` (see its doc
+        /// comment for why a file git doesn't consider unmerged shouldn't
+        /// show this UI even if its text happens to contain marker-like lines).
+        var currentConflictScanTrusted: Bool = true
 
         // Completion popup and ghost text
         let completionController = CompletionWindowController()
@@ -1385,6 +1426,7 @@ extension EditorView {
             )
             updateBracketMatchHighlight(in: textView)
             updateDiagnosticHighlights(in: textView)
+            updateConflictHighlights(in: textView)
             updateActiveSnippetTracking(for: textView)
         }
 
@@ -1668,6 +1710,74 @@ extension EditorView {
                 }
             }
             return nil
+        }
+
+        // MARK: - Merge-conflict resolution UI (plan.md item 23, "D5")
+
+        /// Recomputes conflict regions from the live buffer and repaints
+        /// their ours/theirs background tints — mirrors
+        /// `updateBracketMatchHighlight`/`updateDiagnosticHighlights`'s
+        /// clear-then-repaint shape exactly, called from the same spots
+        /// (see `currentConflictRegions`'s doc comment). Also pushes the
+        /// region list to `GutterView` so its marker glyph and click menu
+        /// stay in sync — when `currentConflictScanTrusted` is `false`
+        /// (git itself doesn't consider this file unmerged), both the
+        /// overlay and the gutter's regions are cleared instead, even if
+        /// the raw text still contains marker-like lines.
+        func updateConflictHighlights(in textView: NSTextView) {
+            guard let lm = textView.layoutManager else { return }
+            let textLength = (textView.string as NSString).length
+            for r in highlightedConflictRanges where NSMaxRange(r) <= textLength {
+                lm.removeTemporaryAttribute(.backgroundColor, forCharacterRange: r)
+            }
+            highlightedConflictRanges = []
+
+            guard currentConflictScanTrusted else {
+                currentConflictRegions = []
+                gutterView?.conflictRegions = []
+                gutterView?.needsDisplay = true
+                return
+            }
+
+            let regions = ConflictParser.parse(textView.string)
+            currentConflictRegions = regions
+            gutterView?.conflictRegions = regions
+            gutterView?.needsDisplay = true
+            guard !regions.isEmpty else { return }
+
+            // Treats the conflict the same way the diff viewer treats an
+            // old/new pair — "ours" as the losing/old side, "theirs" as the
+            // incoming/new side — reusing `diffRemoved`/`diffAdded` rather
+            // than adding two more theme colors (plan.md item 23 point 3
+            // explicitly allows either).
+            let oursColor   = currentTheme.diffRemoved.withAlphaComponent(0.15)
+            let theirsColor = currentTheme.diffAdded.withAlphaComponent(0.15)
+            var newRanges: [NSRange] = []
+            for region in regions {
+                if region.oursRange.length > 0, NSMaxRange(region.oursRange) <= textLength {
+                    lm.addTemporaryAttribute(.backgroundColor, value: oursColor, forCharacterRange: region.oursRange)
+                    newRanges.append(region.oursRange)
+                }
+                if region.theirsRange.length > 0, NSMaxRange(region.theirsRange) <= textLength {
+                    lm.addTemporaryAttribute(.backgroundColor, value: theirsColor, forCharacterRange: region.theirsRange)
+                    newRanges.append(region.theirsRange)
+                }
+            }
+            highlightedConflictRanges = newRanges
+        }
+
+        /// Applies one `ConflictRegion` resolution through the same
+        /// undo-aware `replace(_:with:in:)` path as every other editor
+        /// command (line move/copy, indent, comment…) — resolving a
+        /// conflict is a normal, undoable edit. Replaces the ENTIRE region
+        /// (all three marker lines included) with just the chosen content;
+        /// `textDidChange`/`textViewDidChangeSelection` re-run
+        /// `updateConflictHighlights` afterward, so a file with no regions
+        /// left simply stops showing this UI (plan.md item 23 point 4) with
+        /// no separate bookkeeping needed here.
+        func resolveConflict(_ region: ConflictRegion, choice: ConflictResolutionChoice) {
+            guard let tv = textView else { return }
+            replace(region.range, with: region.resolvedText(for: choice), in: tv)
         }
 
         /// Escape with multiple ranges/carets selected: drop back to a single

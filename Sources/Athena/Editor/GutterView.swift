@@ -29,6 +29,19 @@ final class GutterView: NSRulerView {
     var theme: EditorTheme = .darcula
     var onToggleBreakpoint: ((Int) -> Void)?
 
+    /// Conflict regions found in the current buffer (plan.md item 23, "D5"),
+    /// kept in sync by `EditorView.Coordinator.updateConflictHighlights`.
+    /// Each region's `startLine` draws a small marker glyph; clicking
+    /// anywhere on one of its lines pops the resolution menu instead of
+    /// toggling a breakpoint.
+    var conflictRegions: [ConflictRegion] = []
+    /// Fired when the user picks "Accept Ours"/"Accept Theirs"/"Accept Both"
+    /// from a conflict region's gutter menu.
+    var onConflictResolve: ((ConflictRegion, ConflictResolutionChoice) -> Void)?
+    /// Fired when the user picks "Compare" from a conflict region's gutter menu.
+    var onConflictCompare: ((ConflictRegion) -> Void)?
+    private var pendingConflictRegion: ConflictRegion?
+
     // Visual constants
     private let gutterWidth:    CGFloat = 52
     private let dotRadius:      CGFloat = 5
@@ -161,6 +174,27 @@ final class GutterView: NSRulerView {
             path.fill()
         }
 
+        // Merge-conflict marker — a small orange diamond at a conflict
+        // region's opening `<<<<<<<` line only (not every line it spans,
+        // to avoid a wall of glyphs down the gutter); clicking it, or any
+        // other line in the region, pops the resolution menu (see
+        // `mouseDown`) instead of toggling a breakpoint. Shares the
+        // breakpoint dot's column — the two are rarely on the same line at
+        // once, and it's an acceptable visual overlap on the rare line that is.
+        if conflictRegions.contains(where: { $0.startLine == lineNum }) {
+            let cx = gutterWidth - 10
+            let cy = rulerY + height / 2
+            let s: CGFloat = 5
+            let path = NSBezierPath()
+            path.move(to: NSPoint(x: cx,     y: cy - s))
+            path.line(to: NSPoint(x: cx + s, y: cy))
+            path.line(to: NSPoint(x: cx,     y: cy + s))
+            path.line(to: NSPoint(x: cx - s, y: cy))
+            path.close()
+            NSColor.systemOrange.setFill()
+            path.fill()
+        }
+
         // Breakpoint dot or debug arrow
         if hasBP || isDebugLine {
             let cx = gutterWidth - 10
@@ -221,10 +255,64 @@ final class GutterView: NSRulerView {
             if idx <= charIdx { lineNum += 1 }
         }
 
+        // A click anywhere on one of a conflict region's lines (not just its
+        // marker-glyph start line — the whole tinted block is a fair target)
+        // pops the resolution menu instead of toggling a breakpoint.
+        if let region = conflictRegions.first(where: { ($0.startLine...$0.endLine).contains(lineNum) }) {
+            showConflictMenu(for: region, at: local)
+            textView.window?.makeFirstResponder(textView)
+            return
+        }
+
         onToggleBreakpoint?(lineNum)
 
         // Restore focus to the editor so keyboard shortcuts keep working after a gutter click.
         textView.window?.makeFirstResponder(textView)
+    }
+
+    // MARK: - Merge-conflict resolution menu
+
+    /// A plain `NSMenu` positioned at the click — the "small buttons
+    /// rendered via the gutter" option (plan.md item 23, "D5") rather than a
+    /// custom floating overlay view. `pendingConflictRegion` carries the
+    /// clicked region across to whichever `@objc` action selector fires,
+    /// since `NSMenuItem` has no closure-based action.
+    private func showConflictMenu(for region: ConflictRegion, at point: NSPoint) {
+        pendingConflictRegion = region
+
+        func item(_ title: String, _ action: Selector) -> NSMenuItem {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self
+            return item
+        }
+
+        let menu = NSMenu()
+        menu.addItem(item("Accept Ours",   #selector(acceptOursMenuAction)))
+        menu.addItem(item("Accept Theirs", #selector(acceptTheirsMenuAction)))
+        menu.addItem(item("Accept Both",   #selector(acceptBothMenuAction)))
+        menu.addItem(.separator())
+        menu.addItem(item("Compare Ours ↔ Theirs", #selector(compareMenuAction)))
+        menu.popUp(positioning: nil, at: point, in: self)
+    }
+
+    @objc private func acceptOursMenuAction() {
+        guard let region = pendingConflictRegion else { return }
+        onConflictResolve?(region, .ours)
+    }
+
+    @objc private func acceptTheirsMenuAction() {
+        guard let region = pendingConflictRegion else { return }
+        onConflictResolve?(region, .theirs)
+    }
+
+    @objc private func acceptBothMenuAction() {
+        guard let region = pendingConflictRegion else { return }
+        onConflictResolve?(region, .both)
+    }
+
+    @objc private func compareMenuAction() {
+        guard let region = pendingConflictRegion else { return }
+        onConflictCompare?(region)
     }
 
     // MARK: - Helpers

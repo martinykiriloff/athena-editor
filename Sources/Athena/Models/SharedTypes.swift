@@ -470,11 +470,19 @@ struct GitStatus: Sendable {
     var staged: [GitFileChange] = []
     var unstaged: [GitFileChange] = []
     var untracked: [GitFileChange] = []
+    /// Files `git status` reports as unmerged (`UU`/`AA`/`DD`/… porcelain
+    /// codes) — an active, unresolved merge/rebase conflict. Kept separate
+    /// from `staged`/`unstaged` rather than landing in (or duplicated
+    /// across) both, since "conflicted" isn't really either bucket. Feeds
+    /// the editor's merge-conflict resolution UI (plan.md item 23, "D5") as
+    /// the gate against a false positive on a file that merely *contains*
+    /// the literal marker strings for an unrelated reason.
+    var conflicted: [GitFileChange] = []
     var ahead: Int = 0
     var behind: Int = 0
 
     var isClean: Bool {
-        staged.isEmpty && unstaged.isEmpty && untracked.isEmpty
+        staged.isEmpty && unstaged.isEmpty && untracked.isEmpty && conflicted.isEmpty
     }
 }
 

@@ -215,6 +215,14 @@ struct CodeEditorView: View {
         return appState.gitLineChanges[url] ?? [:]
     }
 
+    /// Gates the editor's merge-conflict resolution UI (plan.md item 23,
+    /// "D5") — `true` (trust the raw marker scan) for an unsaved/untitled
+    /// buffer with no file URL to check git status against.
+    private var fileIsConflictScanTrusted: Bool {
+        guard let url = tab.fileURL else { return true }
+        return appState.isConflictScanTrusted(for: url)
+    }
+
     private var fileDebugLine: Int? {
         guard let path = tab.fileURL?.path,
               appState.debugCurrentFile?.path == path else { return nil }
@@ -249,6 +257,7 @@ struct CodeEditorView: View {
                 blameInfo:        blameInfo,
                 diagnostics:      fileDiagnostics,
                 gitLineChanges:   fileGitLineChanges,
+                isConflictScanTrusted: fileIsConflictScanTrusted,
                 fileURL:          tab.fileURL,
                 isFocusedGroup:   appState.focusedGroup == side,
                 onCursorMove: { line, col in
@@ -299,6 +308,10 @@ struct CodeEditorView: View {
                 onToggleBreakpoint: { line in
                     guard let path = tab.fileURL?.path else { return }
                     appState.toggleBreakpoint(filePath: path, line: line)
+                },
+                onCompareConflict: { region in
+                    guard let url = tab.fileURL else { return }
+                    appState.openDiffViewer(forConflict: region, in: url)
                 },
                 onRequestCompletion: { line, col in
                     // LSP completions (0-indexed internally)

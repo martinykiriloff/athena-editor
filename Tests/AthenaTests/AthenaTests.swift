@@ -1291,3 +1291,190 @@ struct TerminalSessionNextActiveIdTests {
         #expect(result == nil)
     }
 }
+
+// MARK: - ConflictParser
+
+@Suite("ConflictParser")
+struct ConflictParserTests {
+
+    @Test func fileWithNoMarkersHasNoRegions() {
+        let text = "line one\nline two\nline three\n"
+        #expect(ConflictParser.parse(text).isEmpty)
+    }
+
+    @Test func singleRegionExtractsOursAndTheirsContentAndLabels() {
+        let text = """
+        before
+        <<<<<<< HEAD
+        ours line A
+        ours line B
+        =======
+        theirs line A
+        >>>>>>> feature-branch
+        after
+        """
+        let regions = ConflictParser.parse(text)
+        #expect(regions.count == 1)
+
+        let region = regions[0]
+        #expect(region.oursLabel == "HEAD")
+        #expect(region.theirsLabel == "feature-branch")
+        #expect(region.oursText == "ours line A\nours line B")
+        #expect(region.theirsText == "theirs line A")
+        #expect(region.startLine == 2)
+        #expect(region.endLine == 7)
+    }
+
+    @Test func regionRangesCoverExactlyTheMarkerAndContentLines() {
+        let text = "<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> other\n"
+        let ns = text as NSString
+        let region = ConflictParser.parse(text)[0]
+
+        // The whole range spans from the start of "<<<<<<<" through the end
+        // of ">>>>>>> other\n" — replacing it removes all three markers.
+        #expect(ns.substring(with: region.range) == "<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> other\n")
+        // The ours/theirs sub-ranges cover only their own content line(s),
+        // terminator included (matching `NSString.lineRange(for:)`'s own
+        // convention) so a background-tint attribute over the range fills
+        // the full row width, not just up to the last visible glyph.
+        #expect(ns.substring(with: region.oursRange) == "ours\n")
+        #expect(ns.substring(with: region.theirsRange) == "theirs\n")
+    }
+
+    @Test func multipleRegionsInOneFileAreEachParsedIndependently() {
+        let text = """
+        <<<<<<< HEAD
+        first ours
+        =======
+        first theirs
+        >>>>>>> branch-a
+        middle, unrelated to either conflict
+        <<<<<<< HEAD
+        second ours
+        =======
+        second theirs
+        >>>>>>> branch-b
+        """
+        let regions = ConflictParser.parse(text)
+        #expect(regions.count == 2)
+        #expect(regions[0].oursText == "first ours")
+        #expect(regions[0].theirsText == "first theirs")
+        #expect(regions[0].theirsLabel == "branch-a")
+        #expect(regions[1].oursText == "second ours")
+        #expect(regions[1].theirsText == "second theirs")
+        #expect(regions[1].theirsLabel == "branch-b")
+    }
+
+    @Test func emptyOursOrTheirsSideYieldsEmptyTextAndZeroLengthRange() {
+        // "ours" side is empty (separator immediately follows the opening marker).
+        let text = "<<<<<<< HEAD\n=======\ntheirs\n>>>>>>> other\n"
+        let region = ConflictParser.parse(text)[0]
+        #expect(region.oursText == "")
+        #expect(region.oursRange.length == 0)
+        #expect(region.theirsText == "theirs")
+    }
+
+    @Test func unmatchedOpeningMarkerWithNoSeparatorYieldsNoRegion() {
+        let text = "<<<<<<< HEAD\nsome text with no closing markers\n"
+        #expect(ConflictParser.parse(text).isEmpty)
+    }
+
+    @Test func unmatchedSeparatorWithNoClosingMarkerYieldsNoRegion() {
+        let text = "<<<<<<< HEAD\nours\n=======\ntheirs, but no closing marker follows\n"
+        #expect(ConflictParser.parse(text).isEmpty)
+    }
+
+    @Test func resolvedTextForOursTheirsAndBoth() {
+        let region = ConflictParser.parse(
+            "<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> other\n"
+        )[0]
+        #expect(region.resolvedText(for: .ours) == "ours")
+        #expect(region.resolvedText(for: .theirs) == "theirs")
+        #expect(region.resolvedText(for: .both) == "ours\ntheirs")
+    }
+
+    @Test func resolvedTextForBothOmitsAnEmptySideRatherThanLeavingAStrayNewline() {
+        let text = "<<<<<<< HEAD\n=======\ntheirs\n>>>>>>> other\n"
+        let region = ConflictParser.parse(text)[0]
+        #expect(region.resolvedText(for: .both) == "theirs")
+    }
+
+    @Test func compareDiffMarksOursAsRemovedAndTheirsAsAdded() {
+        let text = "<<<<<<< HEAD\nours line\n=======\ntheirs line\n>>>>>>> other\n"
+        let region = ConflictParser.parse(text)[0]
+        let diff = region.compareDiff
+        #expect(diff.hunks.count == 1)
+        let lines = diff.hunks[0].lines
+        #expect(lines.contains(DiffLine(kind: .removed, oldLineNumber: 1, newLineNumber: nil, text: "ours line")))
+        #expect(lines.contains(DiffLine(kind: .added, oldLineNumber: nil, newLineNumber: 1, text: "theirs line")))
+    }
+}
+
+// MARK: - GitService.parsePorcelainStatus
+
+@Suite("GitService.parsePorcelainStatus")
+struct GitServiceParsePorcelainStatusTests {
+
+    @Test func modifiedUnstagedFileIsClassifiedUnstaged() {
+        let result = GitService.parsePorcelainStatus(" M foo.swift\n")
+        #expect(result.unstaged.map(\.path) == ["foo.swift"])
+        #expect(result.unstaged.map(\.status) == ["M"])
+        #expect(result.staged.isEmpty)
+        #expect(result.conflicted.isEmpty)
+    }
+
+    @Test func modifiedStagedFileIsClassifiedStaged() {
+        let result = GitService.parsePorcelainStatus("M  foo.swift\n")
+        #expect(result.staged.map(\.path) == ["foo.swift"])
+        #expect(result.staged.map(\.status) == ["M"])
+        #expect(result.unstaged.isEmpty)
+    }
+
+    @Test func untrackedFileIsClassifiedUntracked() {
+        let result = GitService.parsePorcelainStatus("?? new.swift\n")
+        #expect(result.untracked.map(\.path) == ["new.swift"])
+        #expect(result.untracked.map(\.status) == ["??"])
+    }
+
+    @Test func bothModifiedConflictIsClassifiedConflictedNotStagedOrUnstaged() {
+        let result = GitService.parsePorcelainStatus("UU conflicted.swift\n")
+        #expect(result.conflicted.map(\.path) == ["conflicted.swift"])
+        #expect(result.conflicted.map(\.status) == ["UU"])
+        #expect(result.staged.isEmpty)
+        #expect(result.unstaged.isEmpty)
+    }
+
+    @Test func everyDocumentedUnmergedCodeIsClassifiedConflicted() {
+        // Porcelain v1's full set of unmerged XY combinations.
+        let codes = ["DD", "AU", "UD", "UA", "DU", "AA", "UU"]
+        for code in codes {
+            let result = GitService.parsePorcelainStatus("\(code) file.swift\n")
+            #expect(result.conflicted.map(\.status) == [code], "expected \(code) to be conflicted")
+            #expect(result.staged.isEmpty, "expected \(code) not to also appear staged")
+            #expect(result.unstaged.isEmpty, "expected \(code) not to also appear unstaged")
+        }
+    }
+
+    @Test func addedFileIsNotMisclassifiedAsConflicted() {
+        // "A " (added to index, clean in working tree) must NOT match the
+        // "AA" conflict rule — only both sides being "A" counts.
+        let result = GitService.parsePorcelainStatus("A  new.swift\n")
+        #expect(result.staged.map(\.path) == ["new.swift"])
+        #expect(result.staged.map(\.status) == ["A"])
+        #expect(result.conflicted.isEmpty)
+    }
+
+    @Test func multipleLinesAreEachClassifiedIndependently() {
+        let porcelain = "M  staged.swift\n M unstaged.swift\n?? new.swift\nUU conflicted.swift\n"
+        let result = GitService.parsePorcelainStatus(porcelain)
+        #expect(result.staged.map(\.path) == ["staged.swift"])
+        #expect(result.unstaged.map(\.path) == ["unstaged.swift"])
+        #expect(result.untracked.map(\.path) == ["new.swift"])
+        #expect(result.conflicted.map(\.path) == ["conflicted.swift"])
+    }
+
+    @Test func blankLinesAreIgnored() {
+        let result = GitService.parsePorcelainStatus("M  foo.swift\n\n")
+        #expect(result.staged.count == 1)
+    }
+}

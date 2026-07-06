@@ -186,6 +186,17 @@ struct GitPanelView: View {
 
     private var changeSections: some View {
         VStack(spacing: 0) {
+            // Shown first — an unresolved conflict is the most urgent thing
+            // in the working tree, matching VS Code's own "Merge Changes"
+            // section ordering (plan.md item 23, "D5").
+            if !appState.gitStatus.conflicted.isEmpty {
+                ChangeSection(
+                    title: "Merge Conflicts",
+                    changes: appState.gitStatus.conflicted,
+                    isStaged: false
+                )
+            }
+
             if !appState.gitStatus.staged.isEmpty {
                 ChangeSection(
                     title: "Staged Changes",

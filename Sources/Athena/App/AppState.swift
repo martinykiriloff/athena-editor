@@ -728,6 +728,39 @@ final class AppState {
         return UnifiedDiffParser.classifyLineChanges(in: parsed)
     }
 
+    /// Whether `ConflictParser`'s raw marker-text scan should be trusted for
+    /// `fileURL` — gates the editor's merge-conflict resolution UI (plan.md
+    /// item 23, "D5") against a false positive on a file that merely
+    /// *contains* the literal `<<<<<<<`/`=======`/`>>>>>>>` strings for an
+    /// unrelated reason (e.g. a doc file explaining git conflicts) rather
+    /// than an actual unresolved merge.
+    ///
+    /// Trusts the scan on its own (`true`) whenever there's no repo to check
+    /// against, or `gitStatus` hasn't been populated yet (its all-empty
+    /// default is indistinguishable from "a freshly opened, genuinely clean
+    /// repo" — in that rare ambiguous case this errs toward showing the UI
+    /// rather than risking hiding a real conflict). Once a real status is in
+    /// hand, only a file git itself lists as unmerged (`gitStatus.conflicted`,
+    /// matched the same way `computeGitLineChanges` matches `untracked`)
+    /// opens the gate — any other known git state (clean, modified,
+    /// untracked, staged) means this can't be a live conflict, since real
+    /// conflict markers are themselves an uncommitted change git would have
+    /// flagged as unmerged.
+    func isConflictScanTrusted(for fileURL: URL) -> Bool {
+        guard let ws = workspace else { return true }
+
+        func matches(_ change: GitFileChange) -> Bool {
+            ws.rootURL.appendingPathComponent(change.path).standardizedFileURL == fileURL.standardizedFileURL
+        }
+
+        if gitStatus.conflicted.contains(where: matches) { return true }
+
+        let statusLoaded = !gitStatus.branch.isEmpty
+            || !gitStatus.staged.isEmpty || !gitStatus.unstaged.isEmpty
+            || !gitStatus.untracked.isEmpty || !gitStatus.conflicted.isEmpty
+        return !statusLoaded
+    }
+
     // MARK: - Settings persistence
 
     /// Loads all persisted settings into AppState. Call once at app launch.
@@ -1669,6 +1702,24 @@ final class AppState {
         } catch {
             diffViewerErrorMessage = "Git error: \(error.localizedDescription)"
         }
+    }
+
+    /// Opens `DiffViewerView` showing one merge-conflict region's "ours" vs
+    /// "theirs" content as a diff — the gutter menu's "Compare" action
+    /// (plan.md item 23, "D5"). Reuses `diffViewerChange`/
+    /// `diffViewerParsedDiff` exactly like `openDiffViewer(for:staged:)`
+    /// above, so the view's existing filename/path header and per-file
+    /// syntax-highlighting language detection come along for free; unlike
+    /// that method, this never touches disk or git — `region.compareDiff`
+    /// is synthesized entirely from content already parsed out of the live
+    /// editor buffer.
+    func openDiffViewer(forConflict region: ConflictRegion, in fileURL: URL) {
+        diffViewerChange       = GitFileChange(path: fileURL.path, status: "UU")
+        diffViewerCommit       = nil
+        diffViewerStaged       = false
+        diffViewerErrorMessage = nil
+        diffViewerIsLoading    = false
+        diffViewerParsedDiff   = region.compareDiff
     }
 
     /// Dismisses the diff viewer overlay.

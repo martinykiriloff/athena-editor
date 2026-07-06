@@ -55,31 +55,7 @@ actor GitService {
             branch = ""
         }
 
-        var staged: [GitFileChange] = []
-        var unstaged: [GitFileChange] = []
-        var untracked: [GitFileChange] = []
-
-        for line in porcelain.components(separatedBy: "\n") {
-            guard line.count >= 2 else { continue }
-
-            let indexStatus = line[line.index(line.startIndex, offsetBy: 0)]
-            let workTreeStatus = line[line.index(line.startIndex, offsetBy: 1)]
-            let path = String(line.dropFirst(3))
-
-            if path.isEmpty { continue }
-
-            if indexStatus == "?" && workTreeStatus == "?" {
-                untracked.append(GitFileChange(path: path, status: "??"))
-                continue
-            }
-
-            if indexStatus != " " && indexStatus != "?" {
-                staged.append(GitFileChange(path: path, status: String(indexStatus)))
-            }
-            if workTreeStatus != " " && workTreeStatus != "?" {
-                unstaged.append(GitFileChange(path: path, status: String(workTreeStatus)))
-            }
-        }
+        let (staged, unstaged, untracked, conflicted) = Self.parsePorcelainStatus(porcelain)
 
         var ahead = 0
         var behind = 0
@@ -99,9 +75,63 @@ actor GitService {
             staged: staged,
             unstaged: unstaged,
             untracked: untracked,
+            conflicted: conflicted,
             ahead: ahead,
             behind: behind
         )
+    }
+
+    /// Classifies every `git status --porcelain=v1` line into this app's
+    /// four buckets. Pulled out as a pure `static func` (mirrors
+    /// `parseBranches`/`repoFolderName`) so the porcelain-format decisions —
+    /// including which XY combinations mean "unmerged" — are unit-testable
+    /// without shelling out to git (see `GitServiceParsePorcelainStatusTests`).
+    static func parsePorcelainStatus(_ porcelain: String) -> (
+        staged: [GitFileChange], unstaged: [GitFileChange],
+        untracked: [GitFileChange], conflicted: [GitFileChange]
+    ) {
+        var staged: [GitFileChange] = []
+        var unstaged: [GitFileChange] = []
+        var untracked: [GitFileChange] = []
+        var conflicted: [GitFileChange] = []
+
+        for line in porcelain.components(separatedBy: "\n") {
+            guard line.count >= 2 else { continue }
+
+            let indexStatus = line[line.index(line.startIndex, offsetBy: 0)]
+            let workTreeStatus = line[line.index(line.startIndex, offsetBy: 1)]
+            let path = String(line.dropFirst(3))
+
+            if path.isEmpty { continue }
+
+            if indexStatus == "?" && workTreeStatus == "?" {
+                untracked.append(GitFileChange(path: path, status: "??"))
+                continue
+            }
+
+            // Unmerged (an active, unresolved conflict) — porcelain v1's
+            // documented XY combinations are DD/AU/UD/UA/DU/AA/UU: either
+            // side being "U", or both sides matching on "A"/"D", covers all
+            // seven without an explicit lookup table. Kept out of
+            // staged/unstaged below — the old parsing put a "UU" line into
+            // *both* of those (a non-blank, non-"?" char on both sides),
+            // which is a worse fit than its own bucket.
+            if indexStatus == "U" || workTreeStatus == "U"
+                || (indexStatus == "A" && workTreeStatus == "A")
+                || (indexStatus == "D" && workTreeStatus == "D") {
+                conflicted.append(GitFileChange(path: path, status: "\(indexStatus)\(workTreeStatus)"))
+                continue
+            }
+
+            if indexStatus != " " && indexStatus != "?" {
+                staged.append(GitFileChange(path: path, status: String(indexStatus)))
+            }
+            if workTreeStatus != " " && workTreeStatus != "?" {
+                unstaged.append(GitFileChange(path: path, status: String(workTreeStatus)))
+            }
+        }
+
+        return (staged, unstaged, untracked, conflicted)
     }
 
     // MARK: - Staging
