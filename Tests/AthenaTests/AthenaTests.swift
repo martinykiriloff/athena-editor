@@ -39,6 +39,84 @@ struct TabModelTests {
     }
 }
 
+// MARK: - TabModel.nextActiveId
+
+/// `TabModel.nextActiveId` (plan.md item 22) is the pure-function seam the
+/// split-editor refactor introduced — shared by `AppState.closeTab`'s
+/// primary- and secondary-group cases so "which tab activates next" can't
+/// drift between the two panes. Mirrors `TerminalSessionNextActiveIdTests`
+/// exactly, since it's the same rule applied to a different tab type.
+@Suite("TabModel.nextActiveId")
+struct TabModelNextActiveIdTests {
+    private func tab(_ title: String) -> TabModel {
+        TabModel(title: title)
+    }
+
+    @Test func closingNonActiveTabLeavesActiveIdUnchanged() {
+        let a = tab("a"), b = tab("b"), c = tab("c")
+        let result = TabModel.nextActiveId(
+            afterClosing: b.id, in: [a, b, c], previousActiveId: a.id
+        )
+        #expect(result == a.id)
+    }
+
+    @Test func closingActiveTabPrefersTheOneNowAtTheSameIndex() {
+        // [a, b, c] closing b (index 1) -> c is now at index 1.
+        let a = tab("a"), b = tab("b"), c = tab("c")
+        let result = TabModel.nextActiveId(
+            afterClosing: b.id, in: [a, b, c], previousActiveId: b.id
+        )
+        #expect(result == c.id)
+    }
+
+    @Test func closingActiveLastTabFallsBackToTheNewLastOne() {
+        // [a, b, c] closing c (index 2, out of bounds after removal) -> b.
+        let a = tab("a"), b = tab("b"), c = tab("c")
+        let result = TabModel.nextActiveId(
+            afterClosing: c.id, in: [a, b, c], previousActiveId: c.id
+        )
+        #expect(result == b.id)
+    }
+
+    @Test func closingTheOnlyTabLeavesNoActiveTab() {
+        let a = tab("a")
+        let result = TabModel.nextActiveId(
+            afterClosing: a.id, in: [a], previousActiveId: a.id
+        )
+        #expect(result == nil)
+    }
+
+    @Test func closingAnIdNotInTheListLeavesActiveIdUnchanged() {
+        let a = tab("a"), b = tab("b")
+        let bogusId = UUID()
+        let result = TabModel.nextActiveId(
+            afterClosing: bogusId, in: [a, b], previousActiveId: a.id
+        )
+        #expect(result == a.id)
+    }
+
+    @Test func previousActiveIdNilStaysNilWhenClosingAnUnrelatedTab() {
+        let a = tab("a"), b = tab("b")
+        let result = TabModel.nextActiveId(
+            afterClosing: a.id, in: [a, b], previousActiveId: nil
+        )
+        #expect(result == nil)
+    }
+}
+
+// MARK: - EditorGroupSide
+
+@Suite("EditorGroupSide")
+struct EditorGroupSideTests {
+    @Test func otherOfPrimaryIsSecondary() {
+        #expect(EditorGroupSide.primary.other == .secondary)
+    }
+
+    @Test func otherOfSecondaryIsPrimary() {
+        #expect(EditorGroupSide.secondary.other == .primary)
+    }
+}
+
 // MARK: - GitStatus
 
 @Suite("GitStatus")

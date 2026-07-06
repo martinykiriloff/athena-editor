@@ -474,8 +474,8 @@ struct ClaudePanel: View {
     }
 
     private func buildPrompt(for cmd: PanelCommand) -> String? {
-        let fileName = appState.activeTab?.title ?? "the active file"
-        let content  = appState.activeTab?.content ?? ""
+        let fileName = appState.focusedTab?.title ?? "the active file"
+        let content  = appState.focusedTab?.content ?? ""
         let snippet  = String(content.prefix(8000))
         let hasFile  = !content.isEmpty
         let fileBlock = hasFile ? "\n\n```\n\(snippet)\n```" : ""

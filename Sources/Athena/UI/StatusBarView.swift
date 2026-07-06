@@ -127,13 +127,14 @@ struct StatusBarView: View {
                         .lineLimit(1)
                 }
 
-                // Cursor position
-                if let tab = appState.activeTab {
+                // Cursor position — the FOCUSED group's active tab (plan.md
+                // item 22), so this tracks whichever pane the user is in.
+                if let tab = appState.focusedTab {
                     Text("Ln \(tab.cursorLine)  Col \(tab.cursorColumn)")
                 }
 
                 // Language
-                if let tab = appState.activeTab {
+                if let tab = appState.focusedTab {
                     Text(tab.language.rawValue.capitalized)
                 }
             }

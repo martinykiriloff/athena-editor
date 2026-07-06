@@ -91,7 +91,9 @@ struct WelcomeView: View {
     }
 
     private func newFile() {
-        appState.openNewTab()
+        // WelcomeView only ever renders in the primary pane's empty state
+        // (plan.md item 22 — a second group always seeds itself with a tab).
+        appState.openNewTab(in: .primary)
     }
 
     /// Prompts for a repo URL, then a destination folder to clone into (an

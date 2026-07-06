@@ -16,7 +16,7 @@ struct OutlineView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if appState.activeTab?.fileURL == nil {
+            if appState.focusedTab?.fileURL == nil {
                 emptyState("No file open")
             } else if flattened.isEmpty {
                 emptyState("No symbols")
@@ -47,7 +47,7 @@ struct OutlineView: View {
     }
 
     private func jump(to symbol: DocumentSymbol) {
-        guard let fileURL = appState.activeTab?.fileURL else { return }
+        guard let fileURL = appState.focusedTab?.fileURL else { return }
         Task {
             await appState.navigateTo(
                 DefinitionLocation(fileURL: fileURL, line: symbol.line, character: symbol.character)

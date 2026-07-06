@@ -8,6 +8,11 @@ import SwiftUI
 // MARK: - TabBarView
 
 struct TabBarView: View {
+    /// Which editor group this bar controls (plan.md item 22) — defaults to
+    /// `.primary` so every pre-existing call site (single-pane) is
+    /// unaffected; the secondary pane's own `EditorPaneView` instantiates a
+    /// second `TabBarView(side: .secondary)`.
+    var side: EditorGroupSide = .primary
     @Environment(AppState.self) private var appState
 
     var body: some View {
@@ -15,8 +20,8 @@ struct TabBarView: View {
             // Scrollable tab list
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 0) {
-                    ForEach(appState.openTabs) { tab in
-                        TabItemView(tab: tab)
+                    ForEach(appState.tabs(in: side)) { tab in
+                        TabItemView(tab: tab, side: side)
                         Divider()
                             .frame(height: 16)
                     }
@@ -28,7 +33,7 @@ struct TabBarView: View {
 
             // Add-tab button
             Button {
-                appState.openNewTab()
+                appState.openNewTab(in: side)
             } label: {
                 Image(systemName: "plus")
                     .font(.system(size: appState.sf(12), weight: .medium))
@@ -49,12 +54,13 @@ struct TabBarView: View {
 
 private struct TabItemView: View {
     let tab: TabModel
+    let side: EditorGroupSide
 
     @Environment(AppState.self) private var appState
     @State private var isHovering: Bool = false
 
     private var isActive: Bool {
-        appState.activeTabId == tab.id
+        appState.activeTabId(in: side) == tab.id
     }
 
     var body: some View {
@@ -116,12 +122,12 @@ private struct TabItemView: View {
         .contextMenu {
             Button("Close") { appState.closeTab(tab.id) }
             Button("Close Others") {
-                for t in appState.openTabs where t.id != tab.id {
+                for t in appState.tabs(in: side) where t.id != tab.id {
                     appState.closeTab(t.id)
                 }
             }
             Button("Close All") {
-                let ids = appState.openTabs.map { $0.id }
+                let ids = appState.tabs(in: side).map { $0.id }
                 for id in ids { appState.closeTab(id) }
             }
         }

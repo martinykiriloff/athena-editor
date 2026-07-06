@@ -276,7 +276,7 @@ struct QuickOpenView: View {
     /// path Find All References and Rename Symbol already use — no separate
     /// jump implementation for Go to Symbol.
     private func selectSymbol(_ symbol: DocumentSymbol) {
-        if let fileURL = appState.activeTab?.fileURL {
+        if let fileURL = appState.focusedTab?.fileURL {
             Task {
                 await appState.navigateTo(
                     DefinitionLocation(fileURL: fileURL, line: symbol.line, character: symbol.character)

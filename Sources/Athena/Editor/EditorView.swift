@@ -34,6 +34,15 @@ struct EditorView: NSViewRepresentable {
     var gitLineChanges: [Int: GitLineChangeType] = [:]
     /// The URL of the file being edited — used for import path resolution.
     var fileURL: URL? = nil
+    /// True when this instance's editor GROUP is the one the user last
+    /// interacted with — always `true` in single-pane/unsplit mode (plan.md
+    /// item 22). Gates `.find`/`.findAndReplace` in `Coordinator.handle`,
+    /// which deliberately bypass the `firstResponder` check every other
+    /// editor command uses (so ⌘F can summon Find even when focus is
+    /// elsewhere in the window) — without this, BOTH panes' Coordinators
+    /// would receive the same `.athenaEditorCommand` notification and pop
+    /// open their own find bar simultaneously once a split exists.
+    var isFocusedGroup: Bool = true
     var onCursorMove: (Int, Int) -> Void = { _, _ in }
     var onContentChange: (String) -> Void = { _ in }
     /// Called whenever the scroll position changes. (fraction 0‥1, visible ratio 0‥1)
@@ -790,8 +799,11 @@ extension EditorView {
             // terminal) — matching VS Code, where ⌘F/⌥⌘F always reach the
             // active editor. Every other editor command still requires the
             // text view itself to be focused, matching VS Code semantics.
-            case .find:           findReplaceController?.present(withReplace: false)
-            case .findAndReplace: findReplaceController?.present(withReplace: true)
+            // Gated on `isFocusedGroup` instead (rather than firstResponder)
+            // so that with a split editor, only the FOCUSED pane's find bar
+            // opens — both panes' Coordinators receive this notification.
+            case .find:           guard parent.isFocusedGroup else { return }; findReplaceController?.present(withReplace: false)
+            case .findAndReplace: guard parent.isFocusedGroup else { return }; findReplaceController?.present(withReplace: true)
             case .goToLine, .toggleComment, .indent, .outdent, .selectNextOccurrence,
                  .findReferences, .renameSymbol,
                  .moveLineUp, .moveLineDown, .copyLineUp, .copyLineDown, .deleteLine:

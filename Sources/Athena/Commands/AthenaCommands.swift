@@ -243,6 +243,14 @@ struct AthenaCommands: Commands {
 
             Divider()
 
+            // ⌘\ is owned by the keybinding monitor (so it isn't shadowed by
+            // the menu); clicks route through the same action.
+            Button("Split Editor Right") {
+                performAction(.splitEditorRight)
+            }
+
+            Divider()
+
             Button("Zoom In") {
                 NotificationCenter.default.post(name: .athenaZoomIn, object: nil)
             }

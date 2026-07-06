@@ -24,6 +24,8 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
     case previousTab        = "workbench.action.previousEditor"
     case goToLine           = "workbench.action.gotoLine"
     case goToSymbol         = "workbench.action.gotoSymbol"
+    // Layout
+    case splitEditorRight   = "workbench.action.splitEditorRight"
     // Editor
     case findInFile         = "actions.find"
     case findAndReplace     = "editor.action.startFindReplaceAction"
@@ -61,6 +63,7 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
         case .previousTab:       return "Previous Editor"
         case .goToLine:          return "Go to Line"
         case .goToSymbol:        return "Go to Symbol"
+        case .splitEditorRight:  return "Split Editor Right"
         case .findInFile:        return "Find in File"
         case .findAndReplace:    return "Find and Replace"
         case .toggleComment:     return "Toggle Line Comment"
@@ -86,7 +89,7 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
             return "File"
         case .toggleSidebar, .toggleTerminal,
              .showExplorer, .showSourceControl, .showSearch, .showDatabase, .showClaude,
-             .zoomIn, .zoomOut, .resetZoom:
+             .zoomIn, .zoomOut, .resetZoom, .splitEditorRight:
             return "View"
         case .quickOpen, .commandPalette, .nextTab, .previousTab, .goToLine, .goToSymbol:
             return "Navigation"
@@ -231,6 +234,9 @@ struct KeyBinding: Identifiable, Codable, Sendable {
         KeyBinding(action: .previousTab,       combo: KeyCombo(key: "tab", shift: true, control: true)),
         KeyBinding(action: .goToLine,          combo: KeyCombo(key: "g",   control: true)),
         KeyBinding(action: .goToSymbol,        combo: KeyCombo(key: "o",   command: true, shift: true)),
+        // Layout — ⌘\ is VS Code's real macOS default for "Split Editor Right"
+        // (plan.md item 22); no existing binding above claims the "\" key.
+        KeyBinding(action: .splitEditorRight,  combo: KeyCombo(key: "\\",  command: true)),
         // Editor
         KeyBinding(action: .findInFile,        combo: KeyCombo(key: "f",   command: true)),
         KeyBinding(action: .findAndReplace,    combo: KeyCombo(key: "f",   command: true, option: true)),

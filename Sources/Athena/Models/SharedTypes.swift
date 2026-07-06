@@ -342,6 +342,72 @@ struct TabModel: Identifiable, Sendable {
     }
 }
 
+extension TabModel {
+    /// Computes the tab that should become active after closing `closedId`
+    /// within `tabs` — prefer the tab now at the same index, falling back to
+    /// the last remaining one; `nil` once none remain. Returns
+    /// `previousActiveId` unchanged when the closed tab wasn't the active
+    /// one. Mirrors `TerminalSession.nextActiveId`'s rule exactly; shared by
+    /// both the primary and secondary editor group's close-tab logic
+    /// (plan.md item 22) so "which tab activates next" can't drift between
+    /// the two panes.
+    static func nextActiveId(
+        afterClosing closedId: UUID,
+        in tabs: [TabModel],
+        previousActiveId: UUID?
+    ) -> UUID? {
+        guard previousActiveId == closedId else { return previousActiveId }
+        guard let index = tabs.firstIndex(where: { $0.id == closedId }) else {
+            return previousActiveId
+        }
+        var remaining = tabs
+        remaining.remove(at: index)
+        guard !remaining.isEmpty else { return nil }
+        let newIndex = min(index, remaining.count - 1)
+        return remaining[newIndex].id
+    }
+}
+
+// MARK: - Editor Groups (Split Editor)
+
+/// Identifies one of the (at most two) editor panes once the editor is split
+/// (plan.md item 22, "Split Editor Right"). `.primary` is always present —
+/// it's `AppState.openTabs`/`activeTabId` directly, kept as top-level fields
+/// rather than wrapped in an `EditorGroup` to minimize disruption to the
+/// dozens of call sites already written against "the" active tab from before
+/// split editors existed. `.secondary` only exists while
+/// `AppState.secondaryGroup != nil`.
+enum EditorGroupSide: Sendable, Equatable {
+    case primary
+    case secondary
+
+    /// The other side — used to check whether a file being closed in one
+    /// group is still open as an independent tab in the other before
+    /// tearing down its LSP/file-watch/diagnostics state (`AppState.closeTab`).
+    var other: EditorGroupSide {
+        switch self {
+        case .primary:   return .secondary
+        case .secondary: return .primary
+        }
+    }
+}
+
+/// The secondary editor pane's tab state (plan.md item 22). `nil` on
+/// `AppState.secondaryGroup` means "not split" — matching how `debugState`/
+/// other optional-feature state already models "feature not active" in this
+/// codebase — and single-pane behavior must be identical to today in that
+/// case. The primary pane deliberately isn't wrapped in this same type; see
+/// `EditorGroupSide`'s doc comment.
+struct EditorGroup: Identifiable, Sendable {
+    let id: UUID = UUID()
+    var tabs: [TabModel] = []
+    var activeTabId: UUID?
+
+    var activeTab: TabModel? {
+        tabs.first { $0.id == activeTabId }
+    }
+}
+
 // MARK: - Terminal Sessions
 
 /// One tab in the integrated terminal panel (plan.md item 21). SwiftTerm's

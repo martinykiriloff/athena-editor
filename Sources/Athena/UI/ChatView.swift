@@ -244,7 +244,7 @@ struct ChatView: View {
 
             // Build context prefix if enabled
             var userContent = trimmed
-            if useContext, let tab = appState.activeTab {
+            if useContext, let tab = appState.focusedTab {
                 var contextParts: [String] = []
                 contextParts.append("File: \(tab.title)")
                 if !tab.content.isEmpty {

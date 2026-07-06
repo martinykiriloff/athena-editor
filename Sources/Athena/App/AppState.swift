@@ -32,6 +32,24 @@ final class AppState {
     var workspace: WorkspaceModel?
     var openTabs: [TabModel] = []
     var activeTabId: UUID?
+
+    // MARK: - Editor Groups (Split Editor)
+
+    /// The secondary editor pane's tab state (plan.md item 22, "Split
+    /// Editor Right"). `nil` means single-pane — `openTabs`/`activeTabId`
+    /// above ARE the primary group's state (see `EditorGroupSide`'s doc
+    /// comment in SharedTypes.swift). Created by `splitEditorRight()`;
+    /// closing its last tab sets this back to `nil` (collapses to
+    /// single-pane).
+    var secondaryGroup: EditorGroup?
+    /// Which pane the user last interacted with (activated a tab in it, or
+    /// clicked/moved the cursor in its editor — see `activateTab(_:)` and
+    /// `setCursorPosition`). Determines which group "current file" commands
+    /// (Cmd+S, Save As, Revert, format-on-save, breadcrumbs, Go to
+    /// Symbol/Outline) act on via `focusedTab`. Always `.primary` while
+    /// `secondaryGroup == nil`, so single-pane behavior is unaffected.
+    var focusedGroup: EditorGroupSide = .primary
+
     var fileTree: [FileNode] = []
     var gitStatus: GitStatus = GitStatus()
     /// All local + remote-tracking branches for the current workspace, kept
@@ -189,7 +207,7 @@ final class AppState {
     /// tab, no symbols loaded yet, or the cursor sits outside every symbol's
     /// range.
     var breadcrumbPath: [DocumentSymbol] {
-        guard let line = activeTab?.cursorLine else { return [] }
+        guard let line = focusedTab?.cursorLine else { return [] }
         return breadcrumbSymbolPath(in: documentSymbols, containingLine: line)
     }
 
@@ -235,6 +253,129 @@ final class AppState {
 
     var activeTab: TabModel? {
         openTabs.first { $0.id == activeTabId }
+    }
+
+    // MARK: - Editor Groups (Split Editor)
+
+    /// `side`'s open tabs — primary is `openTabs` directly; secondary is
+    /// `secondaryGroup?.tabs`, empty when not split.
+    func tabs(in side: EditorGroupSide) -> [TabModel] {
+        switch side {
+        case .primary:   return openTabs
+        case .secondary: return secondaryGroup?.tabs ?? []
+        }
+    }
+
+    func activeTabId(in side: EditorGroupSide) -> UUID? {
+        switch side {
+        case .primary:   return activeTabId
+        case .secondary: return secondaryGroup?.activeTabId
+        }
+    }
+
+    func activeTab(in side: EditorGroupSide) -> TabModel? {
+        tabs(in: side).first { $0.id == activeTabId(in: side) }
+    }
+
+    /// The focused group's active tab — the "current file" group-aware
+    /// commands act on. Identical to `activeTab` (primary) while unsplit.
+    var focusedTab: TabModel? { activeTab(in: focusedGroup) }
+
+    private func setTabs(_ tabs: [TabModel], in side: EditorGroupSide) {
+        switch side {
+        case .primary:   openTabs = tabs
+        case .secondary: secondaryGroup?.tabs = tabs
+        }
+    }
+
+    private func setActiveTabId(_ id: UUID?, in side: EditorGroupSide) {
+        switch side {
+        case .primary:   activeTabId = id
+        case .secondary: secondaryGroup?.activeTabId = id
+        }
+    }
+
+    /// The group currently holding an open tab with id `id`, if any. Tab
+    /// ids are unique per group — `splitEditorRight()` gives the secondary
+    /// copy of a file its own fresh `TabModel`/id rather than sharing the
+    /// source tab's — so a plain membership check is unambiguous.
+    private func side(ofTab id: UUID) -> EditorGroupSide? {
+        if openTabs.contains(where: { $0.id == id }) { return .primary }
+        if secondaryGroup?.tabs.contains(where: { $0.id == id }) == true { return .secondary }
+        return nil
+    }
+
+    /// The group with an open tab for `url`, if any (used by `openFile` to
+    /// reveal/focus an already-open file rather than duplicating it).
+    private func side(ofOpenFile url: URL) -> EditorGroupSide? {
+        if openTabs.contains(where: { $0.fileURL == url }) { return .primary }
+        if secondaryGroup?.tabs.contains(where: { $0.fileURL == url }) == true { return .secondary }
+        return nil
+    }
+
+    private func isFileOpen(_ url: URL) -> Bool {
+        openTabs.contains { $0.fileURL == url } || (secondaryGroup?.tabs.contains { $0.fileURL == url } ?? false)
+    }
+
+    /// Applies `mutate` to every open tab (in either group) whose `fileURL`
+    /// equals `url` — used by URL-driven bulk updates (external file-change
+    /// reload, discard changes, workspace search & replace) so a file split
+    /// into both groups doesn't leave one pane showing stale content.
+    private func updateTabs(withFileURL url: URL, _ mutate: (inout TabModel) -> Void) {
+        for side: EditorGroupSide in [.primary, .secondary] {
+            var groupTabs = tabs(in: side)
+            guard let index = groupTabs.firstIndex(where: { $0.fileURL == url }) else { continue }
+            mutate(&groupTabs[index])
+            setTabs(groupTabs, in: side)
+        }
+    }
+
+    /// "Split Editor Right" (⌘\, plan.md item 22): opens the focused
+    /// group's active tab's file as an INDEPENDENT tab (its own id, cursor,
+    /// scroll position) in the secondary group, creating that group first
+    /// if this is the first split — matching VS Code, which duplicates the
+    /// file into a second, independent tab rather than sharing one `TabModel`
+    /// across groups. Repeated ⌘\ on the same file activates the existing
+    /// secondary copy instead of piling up duplicates (mirrors `openFile`'s
+    /// own open-or-activate rule). No-op for an unsaved Untitled tab (no
+    /// `fileURL` to duplicate) or when nothing is focused.
+    func splitEditorRight() {
+        guard let source = focusedTab, let url = source.fileURL else { return }
+
+        if secondaryGroup == nil {
+            secondaryGroup = EditorGroup()
+        }
+
+        if let existing = secondaryGroup?.tabs.first(where: { $0.fileURL == url }) {
+            secondaryGroup?.activeTabId = existing.id
+            focusedGroup = .secondary
+            return
+        }
+
+        var copy = TabModel(title: source.title)
+        copy.fileURL      = url
+        copy.content      = source.content
+        copy.language     = source.language
+        copy.isDirty      = source.isDirty
+        copy.cursorLine   = source.cursorLine
+        copy.cursorColumn = source.cursorColumn
+
+        secondaryGroup?.tabs.append(copy)
+        secondaryGroup?.activeTabId = copy.id
+        focusedGroup = .secondary
+    }
+
+    /// Records `tabId`'s cursor position (in `side`) and makes `side` the
+    /// focused group — cursor movement (including a click) is itself a
+    /// focus event (plan.md item 22 point 3). Feeds the status bar's
+    /// "Ln n Col n", and — via `focusedTab` — the breadcrumbs bar.
+    func setCursorPosition(tabId: UUID, in side: EditorGroupSide, line: Int, column: Int) {
+        var groupTabs = tabs(in: side)
+        guard let index = groupTabs.firstIndex(where: { $0.id == tabId }) else { return }
+        groupTabs[index].cursorLine   = line
+        groupTabs[index].cursorColumn = column
+        setTabs(groupTabs, in: side)
+        focusedGroup = side
     }
 
     /// Flat, sorted list of every non-directory file in the workspace tree.
@@ -298,14 +439,23 @@ final class AppState {
 
     // MARK: - Methods
 
-    /// Opens a file URL in a new tab, or activates the existing tab if already open.
+    /// Opens a file URL in a new tab, or activates the existing tab if
+    /// already open. If the file is already open in EITHER group, this
+    /// reveals it there (switching focus to that group) rather than opening
+    /// a duplicate; otherwise it opens into the currently focused group
+    /// (`.primary` while unsplit, so single-pane behavior is unchanged —
+    /// plan.md item 22). Use `splitEditorRight()` to deliberately open the
+    /// same file a second time as an independent tab in the other group.
     func openFile(_ url: URL) async {
-        // If the file is already open, just activate it.
-        if let existing = openTabs.first(where: { $0.fileURL == url }) {
-            activeTabId = existing.id
-            await persistSession()
+        if let existingSide = side(ofOpenFile: url),
+           let existingId = tabs(in: existingSide).first(where: { $0.fileURL == url })?.id {
+            setActiveTabId(existingId, in: existingSide)
+            focusedGroup = existingSide
+            if existingSide == .primary { await persistSession() }
             return
         }
+
+        let side = focusedGroup
 
         do {
             let content = try await fileService.readFile(url)
@@ -314,12 +464,16 @@ final class AppState {
             tab.content = content
             tab.language = Language.detect(from: url)
             tab.isDirty = false
-            openTabs.append(tab)
-            activeTabId = tab.id
+
+            var groupTabs = tabs(in: side)
+            groupTabs.append(tab)
+            setTabs(groupTabs, in: side)
+            setActiveTabId(tab.id, in: side)
+
             statusMessage = "Opened \(url.lastPathComponent)"
             AppState.registerRecentPath(url)
             await fileWatchService.watchFile(url)
-            await persistSession()
+            if side == .primary { await persistSession() }
 
             // Bring up the language server (no-op if none is installed) and tell
             // it about the newly opened document. Fired unstructured so file
@@ -349,11 +503,22 @@ final class AppState {
         }
     }
 
-    /// Closes the tab with the given ID, activating an adjacent tab if needed.
+    /// Closes the tab with the given ID — looked up in whichever group
+    /// currently contains it (see `side(ofTab:)`) — activating an adjacent
+    /// tab in that same group if needed. Closing the secondary group's last
+    /// tab collapses back to single-pane (plan.md item 22 point 4).
     func closeTab(_ id: UUID) {
-        guard let index = openTabs.firstIndex(where: { $0.id == id }) else { return }
+        guard let side = side(ofTab: id) else { return }
 
-        if let url = openTabs[index].fileURL {
+        var groupTabs = tabs(in: side)
+        guard let index = groupTabs.firstIndex(where: { $0.id == id }) else { return }
+        let closedURL = groupTabs[index].fileURL
+
+        // LSP/file-watch/diagnostics/gutter state is keyed by file URL and
+        // shared by both groups when the same file is split into each — only
+        // tear it down once the closed tab's file isn't ALSO open in the
+        // other group (a still-open twin tab still needs it).
+        if let url = closedURL, !tabs(in: side.other).contains(where: { $0.fileURL == url }) {
             Task {
                 await self.lspManager.didClose(fileURL: url)
                 await self.fileWatchService.stopWatchingFile(url)
@@ -362,33 +527,47 @@ final class AppState {
             gitLineChanges.removeValue(forKey: url)
         }
 
-        openTabs.remove(at: index)
+        groupTabs.remove(at: index)
+        setTabs(groupTabs, in: side)
 
         // If we just closed the active tab, select an adjacent one.
-        if activeTabId == id {
-            if openTabs.isEmpty {
-                activeTabId = nil
-                // No `CodeEditorView` is rendered with no tabs open, so its
-                // `.task(id: tab.id)` won't fire to refresh this — clear it
-                // directly so the Outline panel / breadcrumbs / Go to Symbol
-                // don't keep showing the closed tab's stale symbol tree.
-                documentSymbols = []
+        if activeTabId(in: side) == id {
+            if groupTabs.isEmpty {
+                setActiveTabId(nil, in: side)
+                // documentSymbols/breadcrumbs are refreshed centrally from
+                // `focusedTab`'s identity (see `EditorContainerView`'s
+                // document-symbols task), so no manual clear is needed here.
             } else {
                 // Prefer the tab now at the same index; fall back to the last tab.
-                let newIndex = min(index, openTabs.count - 1)
-                activeTabId = openTabs[newIndex].id
+                let newIndex = min(index, groupTabs.count - 1)
+                setActiveTabId(groupTabs[newIndex].id, in: side)
             }
         }
 
-        // Persist the updated tab layout so a relaunch reopens what's still open.
-        Task { await self.persistSession() }
+        // Closing the secondary group's last tab collapses back to single-pane.
+        if side == .secondary, groupTabs.isEmpty {
+            secondaryGroup = nil
+            if focusedGroup == .secondary { focusedGroup = .primary }
+        }
+
+        // Session persistence only tracks the primary group (plan.md item
+        // 22: split layout itself isn't restored across relaunches).
+        if side == .primary {
+            Task { await self.persistSession() }
+        }
     }
 
-    /// Activates the tab with the given ID (e.g. a tab-bar click) and persists
-    /// the new selection so a relaunch restores the same active tab.
+    /// Activates the tab with the given ID (e.g. a tab-bar click) in
+    /// whichever group contains it, makes that group focused (a tab click
+    /// is itself a focus event), and — for the primary group — persists the
+    /// new selection so a relaunch restores the same active tab.
     func activateTab(_ id: UUID) {
-        activeTabId = id
-        Task { await self.persistSession() }
+        guard let side = side(ofTab: id) else { return }
+        setActiveTabId(id, in: side)
+        focusedGroup = side
+        if side == .primary {
+            Task { await self.persistSession() }
+        }
     }
 
     /// Opens a workspace directory, builds the file tree, and refreshes Git status.
@@ -445,15 +624,17 @@ final class AppState {
     // MARK: - Document Symbols (Go to Symbol / Outline / Breadcrumbs)
 
     /// Fetches `textDocument/documentSymbol` for `tab`'s file and populates
-    /// `documentSymbols`. Called from `CodeEditorView`'s `.task(id: tab.id)`
-    /// (mirroring `loadBlame(for:)`'s own per-tab task), so it refetches on
-    /// every tab switch rather than trusting a possibly-stale tree. Shows the
-    /// cached tree for this file (if any) immediately so switching back to a
-    /// previously-visited tab doesn't blank the Outline panel/breadcrumbs for
-    /// the round-trip, then replaces it with the fresh result — unless the
-    /// user has already switched to a different tab by the time the response
-    /// lands, in which case that tab's own fetch (or debounce) owns what's
-    /// displayed.
+    /// `documentSymbols`. Called from a single `.task(id:)` in
+    /// `EditorContainerView` keyed to the FOCUSED group's active tab, not
+    /// each pane's own tab — `documentSymbols`/`breadcrumbPath` are a single
+    /// global tree (unlike `diagnostics`/`gitLineChanges`, which are per-URL
+    /// dictionaries), so only the focused pane may ever drive them, or two
+    /// panes' fetches would race to overwrite each other (plan.md item 22).
+    /// Shows the cached tree for this file (if any) immediately so switching
+    /// back to a previously-visited tab doesn't blank the Outline panel/
+    /// breadcrumbs for the round-trip, then replaces it with the fresh
+    /// result — unless focus has already moved elsewhere by the time the
+    /// response lands, in which case that move's own fetch owns what's shown.
     func loadDocumentSymbols(for tab: TabModel) async {
         guard let fileURL = tab.fileURL else {
             documentSymbols = []
@@ -462,13 +643,13 @@ final class AppState {
         documentSymbols = documentSymbolsCache[fileURL.path] ?? []
 
         guard let symbols = try? await lspManager.documentSymbols(fileURL: fileURL) else { return }
-        guard !Task.isCancelled, activeTabId == tab.id else { return }
+        guard !Task.isCancelled, focusedTab?.id == tab.id else { return }
         documentSymbolsCache[fileURL.path] = symbols
         documentSymbols = symbols
     }
 
     /// Debounces a `textDocument/documentSymbol` refetch 800 ms after the
-    /// last keystroke in the active tab's file (called from
+    /// last keystroke in the focused group's active tab's file (called from
     /// `updateTabContent`) — symbols don't need to track every keystroke,
     /// only be eventually consistent, matching the debounce style
     /// `EditorView.Coordinator` already uses for ghost text / completions.
@@ -478,7 +659,7 @@ final class AppState {
             try? await Task.sleep(nanoseconds: 800_000_000)
             guard !Task.isCancelled, let self else { return }
             guard let symbols = try? await self.lspManager.documentSymbols(fileURL: fileURL) else { return }
-            guard !Task.isCancelled, self.activeTabId == tabId else { return }
+            guard !Task.isCancelled, self.focusedTab?.id == tabId else { return }
             self.documentSymbolsCache[fileURL.path] = symbols
             self.documentSymbols = symbols
         }
@@ -497,19 +678,24 @@ final class AppState {
         gitLineChanges[fileURL] = changes
     }
 
-    /// Debounces a `git diff` refetch 800 ms after the last keystroke in the
-    /// active tab's file (called from `updateTabContent`) — mirrors
-    /// `scheduleDocumentSymbolsRefresh`'s debounce style exactly: the change
-    /// bar only needs to be eventually consistent, not track every
-    /// keystroke (a real `git diff` subprocess call per keystroke would be
-    /// wasteful).
+    /// Debounces a `git diff` refetch 800 ms after the last keystroke in
+    /// EITHER group's visible tab (called from `updateTabContent`) — mirrors
+    /// `scheduleDocumentSymbolsRefresh`'s debounce style, but — unlike that
+    /// single global tree — `gitLineChanges` is per-URL, so it's safe (and
+    /// correct) for it to stay current for whichever group's tab is being
+    /// edited, not just the focused one. The change bar only needs to be
+    /// eventually consistent, not track every keystroke (a real `git diff`
+    /// subprocess call per keystroke would be wasteful).
     private func scheduleGitLineChangesRefresh(tabId: UUID, fileURL: URL) {
         gitLineChangesRefreshTask?.cancel()
         gitLineChangesRefreshTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 800_000_000)
             guard !Task.isCancelled, let self else { return }
             guard let changes = await self.computeGitLineChanges(for: fileURL) else { return }
-            guard !Task.isCancelled, self.activeTabId == tabId else { return }
+            guard !Task.isCancelled,
+                  let side = self.side(ofTab: tabId),
+                  self.activeTabId(in: side) == tabId
+            else { return }
             self.gitLineChanges[fileURL] = changes
         }
     }
@@ -848,28 +1034,43 @@ final class AppState {
         )
     }
 
-    /// Saves the content of the currently active tab to disk.
+    /// Saves the content of the currently active tab to disk. Acts on the
+    /// FOCUSED group's active tab — "the current file" for Cmd+S is
+    /// whichever pane the user was last in (plan.md item 22).
     func saveActiveTab() async {
-        guard
-            var tab = activeTab,
-            let url = tab.fileURL
+        guard let tab = focusedTab else { return }
+        await saveTab(id: tab.id, in: focusedGroup)
+    }
+
+    /// Saves `id`'s content (in `side`) to disk, running format-on-save
+    /// first. Shared by `saveActiveTab()` (Cmd+S) and the debounced
+    /// auto-save timer in `updateTabContent`, which must target the EDITED
+    /// tab directly rather than "whichever tab is focused" — those can
+    /// differ for a moment if focus moves to another pane while an
+    /// auto-save for the previous edit is still in flight.
+    private func saveTab(id: UUID, in side: EditorGroupSide) async {
+        var groupTabs = tabs(in: side)
+        guard let index = groupTabs.firstIndex(where: { $0.id == id }),
+              let url = groupTabs[index].fileURL
         else { return }
+        var tab = groupTabs[index]
 
         if let formatted = await formattedContent(for: tab) {
             tab.content = formatted
-            if let index = openTabs.firstIndex(where: { $0.id == tab.id }) {
-                openTabs[index].content = formatted
-            }
+            groupTabs[index].content = formatted
+            setTabs(groupTabs, in: side)
         }
 
         do {
             try await fileService.writeFile(url, content: tab.content)
-            if let index = openTabs.firstIndex(where: { $0.id == tab.id }) {
-                openTabs[index].isDirty = false
+            groupTabs = tabs(in: side)
+            if let i = groupTabs.firstIndex(where: { $0.id == id }) {
+                groupTabs[i].isDirty = false
                 // A completed save overwrites whatever triggered the
                 // "changed on disk" banner, so it's no longer relevant.
-                openTabs[index].externallyModified = false
-                tab = openTabs[index]
+                groupTabs[i].externallyModified = false
+                setTabs(groupTabs, in: side)
+                tab = groupTabs[i]
             }
             statusMessage = "Saved \(url.lastPathComponent)"
         } catch {
@@ -904,8 +1105,10 @@ final class AppState {
 
     // MARK: - Save As / Revert / Close Folder
 
+    /// Acts on the focused group's active tab, same as `saveActiveTab()`.
     func saveActiveTabAs() async {
-        guard let tab = activeTab else { return }
+        guard let tab = focusedTab else { return }
+        let side = focusedGroup
         let panel = NSSavePanel()
         panel.title = "Save As"
         if let url = tab.fileURL {
@@ -920,12 +1123,14 @@ final class AppState {
         guard response == .OK, let newURL = panel.url else { return }
         do {
             try await fileService.writeFile(newURL, content: tab.content)
-            if let index = openTabs.firstIndex(where: { $0.id == tab.id }) {
-                openTabs[index].fileURL    = newURL
-                openTabs[index].title      = newURL.lastPathComponent
-                openTabs[index].isDirty    = false
-                openTabs[index].externallyModified = false
-                openTabs[index].language   = Language.detect(from: newURL)
+            var groupTabs = tabs(in: side)
+            if let index = groupTabs.firstIndex(where: { $0.id == tab.id }) {
+                groupTabs[index].fileURL    = newURL
+                groupTabs[index].title      = newURL.lastPathComponent
+                groupTabs[index].isDirty    = false
+                groupTabs[index].externallyModified = false
+                groupTabs[index].language   = Language.detect(from: newURL)
+                setTabs(groupTabs, in: side)
             }
             statusMessage = "Saved \(newURL.lastPathComponent)"
             AppState.registerRecentPath(newURL)
@@ -934,22 +1139,27 @@ final class AppState {
                 gitLineChanges.removeValue(forKey: previousURL)
             }
             await fileWatchService.watchFile(newURL)
-            if let index = openTabs.firstIndex(where: { $0.id == tab.id }) {
-                await refreshGitLineChanges(for: openTabs[index])
+            groupTabs = tabs(in: side)
+            if let index = groupTabs.firstIndex(where: { $0.id == tab.id }) {
+                await refreshGitLineChanges(for: groupTabs[index])
             }
         } catch {
             statusMessage = "Save failed: \(error.localizedDescription)"
         }
     }
 
+    /// Acts on the focused group's active tab, same as `saveActiveTab()`.
     func revertActiveTab() async {
-        guard let tab = activeTab, let url = tab.fileURL else { return }
+        guard let tab = focusedTab, let url = tab.fileURL else { return }
+        let side = focusedGroup
         do {
             let content = try await fileService.readFile(url)
-            if let index = openTabs.firstIndex(where: { $0.id == tab.id }) {
-                openTabs[index].content = content
-                openTabs[index].isDirty = false
-                openTabs[index].externallyModified = false
+            var groupTabs = tabs(in: side)
+            if let index = groupTabs.firstIndex(where: { $0.id == tab.id }) {
+                groupTabs[index].content = content
+                groupTabs[index].isDirty = false
+                groupTabs[index].externallyModified = false
+                setTabs(groupTabs, in: side)
             }
             statusMessage = "Reverted \(url.lastPathComponent)"
         } catch {
@@ -971,6 +1181,8 @@ final class AppState {
         gitStatus    = GitStatus()
         openTabs     = []
         activeTabId  = nil
+        secondaryGroup = nil
+        focusedGroup   = .primary
         statusMessage = ""
         diffViewerChange = nil
     }
@@ -1385,12 +1597,12 @@ final class AppState {
 
         await refreshGitStatus()
 
-        if let index = openTabs.firstIndex(where: { $0.fileURL == url }),
-           let content = try? await fileService.readFile(url)
-        {
-            openTabs[index].content = content
-            openTabs[index].isDirty = false
-            openTabs[index].externallyModified = false
+        if let content = try? await fileService.readFile(url) {
+            updateTabs(withFileURL: url) { tab in
+                tab.content = content
+                tab.isDirty = false
+                tab.externallyModified = false
+            }
         }
     }
 
@@ -1465,27 +1677,40 @@ final class AppState {
         diffViewerCommit = nil
     }
 
-    /// Updates the text content of a tab and marks it as dirty.
+    /// Updates the text content of a tab (in whichever group currently
+    /// contains it) and marks it as dirty.
     func updateTabContent(_ id: UUID, content: String) {
-        guard let index = openTabs.firstIndex(where: { $0.id == id }) else { return }
-        openTabs[index].content = content
-        openTabs[index].isDirty = true
+        guard let side = side(ofTab: id) else { return }
+        var groupTabs = tabs(in: side)
+        guard let index = groupTabs.firstIndex(where: { $0.id == id }) else { return }
+        groupTabs[index].content = content
+        groupTabs[index].isDirty = true
+        setTabs(groupTabs, in: side)
 
-        if let url = openTabs[index].fileURL {
+        if let url = groupTabs[index].fileURL {
             Task { await self.lspManager.didChange(fileURL: url, content: content) }
-            if id == activeTabId {
-                scheduleDocumentSymbolsRefresh(tabId: id, fileURL: url)
+            if activeTabId(in: side) == id {
+                // Per-URL keyed state (the gutter's change bar) refreshes for
+                // either group's visible tab, regardless of focus.
                 scheduleGitLineChangesRefresh(tabId: id, fileURL: url)
+                // documentSymbols/breadcrumbs are a single global tree — only
+                // the FOCUSED group's visible tab may drive them (see
+                // `loadDocumentSymbols`'s doc comment).
+                if side == focusedGroup {
+                    scheduleDocumentSymbolsRefresh(tabId: id, fileURL: url)
+                }
             }
         }
 
-        // Auto-save: debounce 1 s after the last keystroke.
+        // Auto-save: debounce 1 s after the last keystroke. Targets the
+        // EDITED tab directly (not "the active/focused tab") — see
+        // `saveTab(id:in:)`'s doc comment.
         if UserDefaults.standard.bool(forKey: "athenaAutoSave") {
             autoSaveTask?.cancel()
             autoSaveTask = Task { [weak self] in
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 guard !Task.isCancelled else { return }
-                await self?.saveActiveTab()
+                await self?.saveTab(id: id, in: side)
             }
         }
     }
@@ -1550,10 +1775,10 @@ final class AppState {
             totalOccurrences += count
             filesChanged += 1
 
-            if let index = openTabs.firstIndex(where: { $0.fileURL == url }) {
-                openTabs[index].content = replaced
-                openTabs[index].isDirty = false
-                openTabs[index].externallyModified = false
+            updateTabs(withFileURL: url) { tab in
+                tab.content = replaced
+                tab.isDirty = false
+                tab.externallyModified = false
             }
         }
 
@@ -1577,7 +1802,11 @@ final class AppState {
         showBottomPanel = true
         activeBottomPanel = .references
         referencesResults = []
-        referencesSymbol = Self.identifier(inLine: activeTab?.content, line: line, character: character)
+        // `focusedTab`, not `activeTab` — this is invoked from whichever
+        // pane's editor is actually focused (its Coordinator gates
+        // `onFindReferences` on `firstResponder`), which may be the
+        // secondary group.
+        referencesSymbol = Self.identifier(inLine: focusedTab?.content, line: line, character: character)
             ?? fileURL.lastPathComponent
 
         defer { isFindingReferences = false }
@@ -1894,17 +2123,17 @@ final class AppState {
     /// unsaved edits, don't clobber them — flag the tab so the editor can
     /// show a "file changed on disk" banner instead.
     private func handleExternalFileChange(_ url: URL) async {
-        guard let index = openTabs.firstIndex(where: { $0.fileURL == url }) else { return }
-
-        if openTabs[index].isDirty {
-            openTabs[index].externallyModified = true
-            return
+        guard isFileOpen(url) else { return }
+        let content = try? await fileService.readFile(url)
+        updateTabs(withFileURL: url) { tab in
+            if tab.isDirty {
+                tab.externallyModified = true
+            } else if let content {
+                tab.content = content
+                tab.isDirty = false
+                tab.externallyModified = false
+            }
         }
-
-        guard let content = try? await fileService.readFile(url) else { return }
-        openTabs[index].content = content
-        openTabs[index].isDirty = false
-        openTabs[index].externallyModified = false
     }
 
     /// `FileWatchService` reports "gone" whenever the descriptor it was
@@ -1916,7 +2145,7 @@ final class AppState {
     /// (the service already tore down the stale one) and treat it as an
     /// ordinary content change; if it doesn't, the file is genuinely gone.
     private func handleExternalFileRemoval(_ url: URL) async {
-        guard openTabs.contains(where: { $0.fileURL == url }) else { return }
+        guard isFileOpen(url) else { return }
 
         if FileManager.default.fileExists(atPath: url.path) {
             await fileWatchService.watchFile(url)
@@ -1926,33 +2155,40 @@ final class AppState {
         }
     }
 
-    /// A truly-deleted file's tab: force it dirty rather than let a later
-    /// save silently fail — the status bar message is the signal for this
-    /// pass; the banner is reserved for the "changed while dirty" case above.
+    /// A truly-deleted file's tab(s): force them dirty rather than let a
+    /// later save silently fail — the status bar message is the signal for
+    /// this pass; the banner is reserved for the "changed while dirty" case
+    /// above. Caller (`handleExternalFileRemoval`) already confirmed the
+    /// file is open somewhere, so the status message is always relevant.
     private func markFileOrphaned(_ url: URL) {
-        guard let index = openTabs.firstIndex(where: { $0.fileURL == url }) else { return }
-        openTabs[index].isDirty = true
+        updateTabs(withFileURL: url) { tab in tab.isDirty = true }
         statusMessage = "\(url.lastPathComponent) was deleted on disk — save to recreate it."
     }
 
     /// "Reload" banner action: discards local edits and reloads the tab's
-    /// content from disk.
+    /// content from disk (whichever group holds it).
     func reloadTabFromDisk(_ id: UUID) async {
+        guard let side = side(ofTab: id) else { return }
+        var groupTabs = tabs(in: side)
         guard
-            let index = openTabs.firstIndex(where: { $0.id == id }),
-            let url = openTabs[index].fileURL,
+            let index = groupTabs.firstIndex(where: { $0.id == id }),
+            let url = groupTabs[index].fileURL,
             let content = try? await fileService.readFile(url)
         else { return }
-        openTabs[index].content = content
-        openTabs[index].isDirty = false
-        openTabs[index].externallyModified = false
+        groupTabs[index].content = content
+        groupTabs[index].isDirty = false
+        groupTabs[index].externallyModified = false
+        setTabs(groupTabs, in: side)
     }
 
     /// "Keep My Changes" banner action: dismisses the notice without
     /// touching the buffer — the next save overwrites the on-disk version.
     func keepLocalChanges(_ id: UUID) {
-        guard let index = openTabs.firstIndex(where: { $0.id == id }) else { return }
-        openTabs[index].externallyModified = false
+        guard let side = side(ofTab: id) else { return }
+        var groupTabs = tabs(in: side)
+        guard let index = groupTabs.firstIndex(where: { $0.id == id }) else { return }
+        groupTabs[index].externallyModified = false
+        setTabs(groupTabs, in: side)
     }
 
     // MARK: - Key bindings
@@ -2021,9 +2257,11 @@ final class AppState {
         case .saveFile:
             await saveActiveTab()
         case .newFile:
-            openNewTab()
+            openNewTab(in: focusedGroup)
         case .closeTab:
-            if let id = activeTabId { closeTab(id) }
+            if let id = focusedTab?.id { closeTab(id) }
+        case .splitEditorRight:
+            splitEditorRight()
         case .toggleSidebar:
             showSidebar.toggle()
         case .toggleTerminal:
@@ -2097,30 +2335,38 @@ final class AppState {
         showQuickOpen = true
     }
 
-    /// Saves every open tab that has unsaved changes, formatting each one
-    /// first (per-tab) when `editorFormatOnSave` is on — same formatters as
-    /// `saveActiveTab()`.
+    /// Saves every open tab (in EITHER group) that has unsaved changes,
+    /// formatting each one first (per-tab) when `editorFormatOnSave` is on —
+    /// same formatters as `saveActiveTab()`. Unlike the other "current file"
+    /// commands, Save All isn't group-scoped — there's no per-group "save
+    /// all" in VS Code either, it just means "save everything open."
     func saveAllTabs() async {
-        for tab in openTabs where tab.isDirty {
-            guard let url = tab.fileURL else { continue }
+        for side: EditorGroupSide in [.primary, .secondary] {
+            for tab in tabs(in: side) where tab.isDirty {
+                guard let url = tab.fileURL else { continue }
 
-            var contentToSave = tab.content
-            if let formatted = await formattedContent(for: tab) {
-                contentToSave = formatted
-                if let i = openTabs.firstIndex(where: { $0.id == tab.id }) {
-                    openTabs[i].content = formatted
+                var contentToSave = tab.content
+                if let formatted = await formattedContent(for: tab) {
+                    contentToSave = formatted
+                    var groupTabs = tabs(in: side)
+                    if let i = groupTabs.firstIndex(where: { $0.id == tab.id }) {
+                        groupTabs[i].content = formatted
+                        setTabs(groupTabs, in: side)
+                    }
                 }
-            }
 
-            do {
-                try await fileService.writeFile(url, content: contentToSave)
-                if let i = openTabs.firstIndex(where: { $0.id == tab.id }) {
-                    openTabs[i].isDirty = false
-                    openTabs[i].externallyModified = false
-                    await refreshGitLineChanges(for: openTabs[i])
+                do {
+                    try await fileService.writeFile(url, content: contentToSave)
+                    var groupTabs = tabs(in: side)
+                    if let i = groupTabs.firstIndex(where: { $0.id == tab.id }) {
+                        groupTabs[i].isDirty = false
+                        groupTabs[i].externallyModified = false
+                        setTabs(groupTabs, in: side)
+                        await refreshGitLineChanges(for: groupTabs[i])
+                    }
+                } catch {
+                    statusMessage = "Error saving \(url.lastPathComponent): \(error.localizedDescription)"
                 }
-            } catch {
-                statusMessage = "Error saving \(url.lastPathComponent): \(error.localizedDescription)"
             }
         }
         statusMessage = "Saved all files"
@@ -2138,11 +2384,19 @@ final class AppState {
         persistSetting(editorFontSize, for: "editorFontSize")
     }
 
-    func openNewTab() {
+    /// Opens a new blank ("Untitled") tab in `side` and makes it that
+    /// group's active tab (and the focused one) — the tab bar's "+" button,
+    /// per-pane, and Cmd+N (routed to whichever group is currently focused).
+    func openNewTab(in side: EditorGroupSide) {
         let tab = TabModel.untitled()
-        openTabs.append(tab)
-        activeTabId = tab.id
-        Task { await self.persistSession() }
+        var groupTabs = tabs(in: side)
+        groupTabs.append(tab)
+        setTabs(groupTabs, in: side)
+        setActiveTabId(tab.id, in: side)
+        focusedGroup = side
+        if side == .primary {
+            Task { await self.persistSession() }
+        }
     }
 
     // MARK: - Terminal Sessions
@@ -2210,14 +2464,20 @@ final class AppState {
         }
     }
 
+    /// Cycles the FOCUSED group's active tab — Next/Previous Editor act on
+    /// "the current" tab strip, same as VS Code's per-group tab cycling.
     private func cycleTab(forward: Bool) {
-        guard !openTabs.isEmpty else { return }
-        let current  = openTabs.firstIndex(where: { $0.id == activeTabId }) ?? 0
+        let side = focusedGroup
+        let groupTabs = tabs(in: side)
+        guard !groupTabs.isEmpty else { return }
+        let current  = groupTabs.firstIndex(where: { $0.id == activeTabId(in: side) }) ?? 0
         let next     = forward
-            ? (current + 1) % openTabs.count
-            : (current - 1 + openTabs.count) % openTabs.count
-        activeTabId = openTabs[next].id
-        Task { await self.persistSession() }
+            ? (current + 1) % groupTabs.count
+            : (current - 1 + groupTabs.count) % groupTabs.count
+        setActiveTabId(groupTabs[next].id, in: side)
+        if side == .primary {
+            Task { await self.persistSession() }
+        }
     }
 
     /// Builds a prompt that includes recent conversation history as context.

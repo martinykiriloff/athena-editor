@@ -1,58 +1,193 @@
 // EditorContainerView.swift
-// Athena — central editor area: tab bar + active editor or welcome screen.
+// Athena — central editor area: tab bar(s) + active editor(s) or welcome screen.
 // Swift 6, strict concurrency.
 
 import SwiftUI
 
 // MARK: - EditorContainerView
 
+/// Renders one editor pane (single-pane, today's default) or two side-by-side
+/// panes once `AppState.secondaryGroup` exists (plan.md item 22, "Split
+/// Editor Right" — ⌘\). A single shared breadcrumb bar sits above whichever
+/// layout is active, reflecting `AppState.focusedTab` (the pane last
+/// interacted with) rather than a per-pane bar — the smallest architectural
+/// footprint for a feature VS Code itself renders per-group, matching this
+/// codebase's existing "smallest slice first" precedent (see plan.md item 18).
 struct EditorContainerView: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
-        VStack(spacing: 0) {
-            TabBarView()
-            Divider()
-            editorContent
-        }
-    }
-
-    @ViewBuilder
-    private var editorContent: some View {
         VStack(spacing: 0) {
             // Show debug toolbar whenever a session is active.
             if appState.debugState != .idle && appState.debugState != .stopped {
                 DebugToolbarView()
             }
 
-            if appState.activeTab != nil {
+            if appState.focusedTab != nil {
                 BreadcrumbBarView()
-                CodeEditorView(tab: activeTabBinding)
+            }
+
+            editorPanes
+        }
+        // Single source of truth for `documentSymbols`/breadcrumbs/Outline/Go
+        // to Symbol — see `AppState.loadDocumentSymbols(for:)`'s doc comment
+        // for why only ONE fetch site may exist once there are two panes.
+        // Keyed on (focusedGroup, focusedTab.id) rather than just the tab id
+        // so a focus change between panes with no tab switch still refetches.
+        .task(id: DocumentSymbolsTaskKey(group: appState.focusedGroup, tabId: appState.focusedTab?.id)) {
+            if let tab = appState.focusedTab {
+                await appState.loadDocumentSymbols(for: tab)
+            } else {
+                appState.documentSymbols = []
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var editorPanes: some View {
+        if appState.secondaryGroup != nil {
+            SplitEditorPanesView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            EditorPaneView(side: .primary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+}
+
+/// Identifies "which tab's document symbols should currently be loaded" —
+/// see `EditorContainerView`'s centralized `.task(id:)` above.
+private struct DocumentSymbolsTaskKey: Equatable {
+    let group: EditorGroupSide
+    let tabId: UUID?
+}
+
+// MARK: - SplitEditorPanesView
+
+/// Two side-by-side editor panes with a basic draggable splitter between
+/// them (plan.md item 22 point 3: "a simple fixed-ratio or basic-draggable-
+/// width split is fine" — this isn't pixel-perfect resizable, just a
+/// `GeometryReader`-driven width fraction clamped to a sane range).
+private struct SplitEditorPanesView: View {
+    @Environment(AppState.self) private var appState
+    /// Primary pane's fraction of the total available width.
+    @State private var splitFraction: CGFloat = 0.5
+
+    private static let handleWidth: CGFloat = 4
+
+    var body: some View {
+        GeometryReader { geo in
+            let totalWidth = max(1, geo.size.width - Self.handleWidth)
+            HStack(spacing: 0) {
+                EditorPaneView(side: .primary)
+                    .frame(width: totalWidth * splitFraction)
+                SplitterHandleView(fraction: $splitFraction, totalWidth: totalWidth)
+                EditorPaneView(side: .secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+}
+
+/// A narrow draggable divider between the two editor panes. Reports the
+/// primary pane's fraction of `totalWidth` (clamped to 20%–80% so neither
+/// pane can be dragged away entirely) back to the parent via `fraction`.
+private struct SplitterHandleView: View {
+    @Binding var fraction: CGFloat
+    let totalWidth: CGFloat
+    @State private var isHovering = false
+    @State private var dragStartFraction: CGFloat?
+
+    private let minFraction: CGFloat = 0.2
+    private let maxFraction: CGFloat = 0.8
+
+    var body: some View {
+        Rectangle()
+            .fill(isHovering ? Color.accentColor.opacity(0.6) : Color(nsColor: .separatorColor))
+            .frame(width: 4)
+            // Widen the actual hit target beyond the thin visible line
+            // (dragging a literal 4pt strip is fiddly) without affecting
+            // layout — `.overlay` content isn't clipped to the base view.
+            .overlay(
+                Color.clear
+                    .frame(width: 10)
+                    .contentShape(Rectangle())
+            )
+            .onHover { isHovering = $0 }
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        let base = dragStartFraction ?? fraction
+                        dragStartFraction = base
+                        guard totalWidth > 0 else { return }
+                        let delta = value.translation.width / totalWidth
+                        fraction = min(maxFraction, max(minFraction, base + delta))
+                    }
+                    .onEnded { _ in dragStartFraction = nil }
+            )
+    }
+}
+
+// MARK: - EditorPaneView
+
+/// One editor group's pane: its own tab bar + active tab's editor (or the
+/// Welcome screen, primary only, when nothing is open). `side` is fixed at
+/// construction, so a pane never has to ask "which side am I" — its own
+/// tabs/active tab/cursor writes are always unambiguous even with a second
+/// pane mounted simultaneously (plan.md item 22).
+private struct EditorPaneView: View {
+    let side: EditorGroupSide
+    @Environment(AppState.self) private var appState
+
+    var body: some View {
+        VStack(spacing: 0) {
+            TabBarView(side: side)
+            Divider()
+            if let tab = appState.activeTab(in: side) {
+                CodeEditorView(tab: tabBinding(for: tab), side: side)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if side == .primary {
+                WelcomeView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                WelcomeView()
+                // Unreachable in practice: `AppState.closeTab` collapses
+                // `secondaryGroup` back to `nil` (removing this pane
+                // entirely) in the same call that would otherwise leave it
+                // empty. Kept as a harmless fallback rather than force-
+                // unwrapping — an empty second pane, not the Welcome screen
+                // (which reads as "open a workspace," the wrong invitation
+                // for a second editor group).
+                Color(nsColor: .textBackgroundColor)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
     }
 
-    /// A binding to the active tab's content that round-trips writes through
-    /// `AppState.updateTabContent` so the dirty flag is maintained correctly.
-    private var activeTabBinding: Binding<TabModel> {
+    /// A binding to `side`'s active tab's content that round-trips writes
+    /// through `AppState.updateTabContent` (which resolves the correct
+    /// group from the tab's id) so the dirty flag is maintained correctly.
+    private func tabBinding(for tab: TabModel) -> Binding<TabModel> {
         Binding {
-            appState.activeTab ?? TabModel.untitled()
+            appState.activeTab(in: side) ?? tab
         } set: { updated in
-            guard let id = appState.activeTabId else { return }
-            appState.updateTabContent(id, content: updated.content)
+            appState.updateTabContent(updated.id, content: updated.content)
         }
     }
 }
 
 // MARK: - CodeEditorView
 
-/// Bridges the active TabModel binding to the NSTextView-based EditorView.
+/// Bridges an editor group's active-tab binding to the NSTextView-based
+/// EditorView. `side` identifies which group this instance belongs to —
+/// needed only for cursor-position writes (`AppState.setCursorPosition`,
+/// which also updates `AppState.focusedGroup`) and to gate Find/Replace
+/// (`isFocusedGroup`, see `EditorView`'s doc comment) so a still-mounted,
+/// non-focused pane doesn't also react — everything else this view reads
+/// (diagnostics, blame, git line changes, breakpoints, debug line) is keyed
+/// by file URL, not by group, and "just works" unchanged for either pane.
 struct CodeEditorView: View {
     @Binding var tab: TabModel
+    var side: EditorGroupSide = .primary
     @Environment(AppState.self) private var appState
 
     @State private var scrollFraction:  Double = 0
@@ -115,10 +250,9 @@ struct CodeEditorView: View {
                 diagnostics:      fileDiagnostics,
                 gitLineChanges:   fileGitLineChanges,
                 fileURL:          tab.fileURL,
+                isFocusedGroup:   appState.focusedGroup == side,
                 onCursorMove: { line, col in
-                    guard let idx = appState.openTabs.firstIndex(where: { $0.id == tab.id }) else { return }
-                    appState.openTabs[idx].cursorLine   = line
-                    appState.openTabs[idx].cursorColumn = col
+                    appState.setCursorPosition(tabId: tab.id, in: side, line: line, column: col)
                 },
                 onContentChange: { newContent in
                     appState.updateTabContent(tab.id, content: newContent)
@@ -195,7 +329,6 @@ struct CodeEditorView: View {
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .task(id: tab.id) { await appState.loadBlame(for: tab) }
-            .task(id: tab.id) { await appState.loadDocumentSymbols(for: tab) }
             .task(id: tab.id) { await appState.refreshGitLineChanges(for: tab) }
             .overlay(alignment: .topTrailing) {
                 if let controller = findReplaceController, controller.isVisible {
@@ -229,10 +362,12 @@ struct CodeEditorView: View {
 /// cursor's current line (e.g. "ClassName › methodName"), derived from
 /// `AppState.breadcrumbPath` — itself computed from the same document-symbol
 /// tree that feeds Go to Symbol (⇧⌘O) and the Outline panel, kept current by
-/// the existing `onCursorMove` wiring in `CodeEditorView.editorRow` (no extra
-/// plumbing needed — `breadcrumbPath` recomputes whenever `cursorLine` or
-/// `documentSymbols` changes). Renders nothing when there's no path to show
-/// (no symbols loaded yet, or the cursor sits outside every symbol's range).
+/// the existing `onCursorMove`/`setCursorPosition` wiring in
+/// `CodeEditorView.editorRow` (no extra plumbing needed — `breadcrumbPath`
+/// recomputes whenever `focusedTab`'s `cursorLine` or `documentSymbols`
+/// changes). Renders nothing when there's no path to show (no symbols loaded
+/// yet, or the cursor sits outside every symbol's range). Reflects whichever
+/// pane is FOCUSED (plan.md item 22), not necessarily the primary one.
 /// Clicking a segment jumps to that symbol via the same `jumpTo` mechanism
 /// every other cross-view navigation uses (`AppState.navigateTo`).
 private struct BreadcrumbBarView: View {
@@ -273,7 +408,7 @@ private struct BreadcrumbBarView: View {
     }
 
     private func jump(to symbol: DocumentSymbol) {
-        guard let fileURL = appState.activeTab?.fileURL else { return }
+        guard let fileURL = appState.focusedTab?.fileURL else { return }
         Task { await appState.navigateTo(DefinitionLocation(fileURL: fileURL, line: symbol.line, character: symbol.character)) }
     }
 }
