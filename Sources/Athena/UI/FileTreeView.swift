@@ -351,6 +351,8 @@ private struct FileNodeRow: View {
             return "curlybraces.square.fill"
         case .markdown:
             return "doc.richtext.fill"
+        case .image:
+            return "photo.fill"
         case .plaintext:
             return "doc.text"
         }
@@ -370,6 +372,7 @@ private struct FileNodeRow: View {
         case .isml:       return Color(red: 0.0, green: 0.68, blue: 0.94)
         case .ds:         return Color(red: 0.0, green: 0.68, blue: 0.94)
         case .markdown:   return .white
+        case .image:      return .pink
         case .plaintext:  return .secondary
         }
     }

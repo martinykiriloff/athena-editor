@@ -252,6 +252,7 @@ enum Language: String, Sendable, CaseIterable {
     case isml
     case ds
     case markdown
+    case image
     case plaintext
 
     /// Returns the file extensions associated with this language.
@@ -269,6 +270,11 @@ enum Language: String, Sendable, CaseIterable {
         case .isml:       return ["isml"]
         case .ds:         return ["ds"]
         case .markdown:   return ["md", "markdown"]
+        // Formats NSImage loads natively (plan.md item 26, "G1") — opening one
+        // of these shows `ImagePreviewView` instead of the plain-text editor.
+        // `svg` deliberately included per the task spec even though it's also
+        // XML source; there is no "open as text" escape hatch yet.
+        case .image:      return ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "tiff", "tif"]
         case .plaintext:  return []
         }
     }
@@ -418,6 +424,14 @@ struct TabModel: Identifiable, Sendable {
     /// overwrite it). Drives the "file changed on disk" banner in
     /// `CodeEditorView`.
     var externallyModified: Bool = false
+    /// Markdown-only Source/Preview toggle (plan.md item 26, "G2") — kept on
+    /// `TabModel` rather than local `@State` in `CodeEditorView` so it
+    /// persists per-tab and doesn't bleed onto the next markdown tab
+    /// switched into (a plain `@State` in that view isn't reset by a tab
+    /// switch, since the view's identity in the SwiftUI tree doesn't change
+    /// when `AppState.activeTab(in:)` swaps out from under it — see
+    /// `EditorPaneView.body`). Ignored for every non-markdown language.
+    var isMarkdownPreview: Bool = false
 
     static func untitled() -> TabModel {
         TabModel(title: "Untitled")

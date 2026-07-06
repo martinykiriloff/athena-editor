@@ -468,13 +468,39 @@ final class AppState {
         }
 
         let side = focusedGroup
+        let language = Language.detect(from: url)
+
+        // Image files (plan.md item 26, "G1") never go through the text
+        // decode path at all — `FileService.readFile` would happily decode
+        // arbitrary binary bytes as ISO-Latin-1 "text" (see its fallback),
+        // producing a garbage string that's expensive to hold and never
+        // rendered (`ImagePreviewView` reads the file itself via `NSImage`).
+        // No LSP hookup either: there's no document content for a language
+        // server to reason about.
+        guard language != .image else {
+            var tab = TabModel(title: url.lastPathComponent)
+            tab.fileURL = url
+            tab.language = language
+            tab.isDirty = false
+
+            var groupTabs = tabs(in: side)
+            groupTabs.append(tab)
+            setTabs(groupTabs, in: side)
+            setActiveTabId(tab.id, in: side)
+
+            statusMessage = "Opened \(url.lastPathComponent)"
+            AppState.registerRecentPath(url)
+            await fileWatchService.watchFile(url)
+            if side == .primary { await persistSession() }
+            return
+        }
 
         do {
             let content = try await fileService.readFile(url)
             var tab = TabModel(title: url.lastPathComponent)
             tab.fileURL = url
             tab.content = content
-            tab.language = Language.detect(from: url)
+            tab.language = language
             tab.isDirty = false
 
             var groupTabs = tabs(in: side)
@@ -491,7 +517,6 @@ final class AppState {
             // it about the newly opened document. Fired unstructured so file
             // opening itself stays instant.
             if let workspace {
-                let language = tab.language
                 Task {
                     try? await self.lspManager.startServer(for: language, workspaceURL: workspace.rootURL)
                     await self.lspManager.didOpen(fileURL: url, content: content)
@@ -1082,8 +1107,15 @@ final class AppState {
     /// Saves the content of the currently active tab to disk. Acts on the
     /// FOCUSED group's active tab — "the current file" for Cmd+S is
     /// whichever pane the user was last in (plan.md item 22).
+    ///
+    /// Image tabs (plan.md item 26, "G1") are never dirty and are skipped
+    /// here explicitly rather than relying on that alone — `saveTab` writes
+    /// `tab.content` unconditionally (it doesn't re-check `isDirty`), and an
+    /// image tab's `content` is always the empty string (never populated;
+    /// see `openFile`'s image branch), so without this guard Cmd+S on an
+    /// image tab would silently truncate the file on disk to zero bytes.
     func saveActiveTab() async {
-        guard let tab = focusedTab else { return }
+        guard let tab = focusedTab, tab.language != .image else { return }
         await saveTab(id: tab.id, in: focusedGroup)
     }
 
@@ -1151,8 +1183,11 @@ final class AppState {
     // MARK: - Save As / Revert / Close Folder
 
     /// Acts on the focused group's active tab, same as `saveActiveTab()`.
+    /// Guarded against image tabs for the same reason `saveActiveTab()` is —
+    /// `tab.content` is always empty for one, so "Save As" would write an
+    /// empty file rather than copying the image.
     func saveActiveTabAs() async {
-        guard let tab = focusedTab else { return }
+        guard let tab = focusedTab, tab.language != .image else { return }
         let side = focusedGroup
         let panel = NSSavePanel()
         panel.title = "Save As"
@@ -1194,8 +1229,11 @@ final class AppState {
     }
 
     /// Acts on the focused group's active tab, same as `saveActiveTab()`.
+    /// Skips image tabs — there's no text buffer to revert (they're never
+    /// dirty in the first place), and re-decoding the image's bytes as text
+    /// would just be wasted work.
     func revertActiveTab() async {
-        guard let tab = focusedTab, let url = tab.fileURL else { return }
+        guard let tab = focusedTab, tab.language != .image, let url = tab.fileURL else { return }
         let side = focusedGroup
         do {
             let content = try await fileService.readFile(url)
@@ -1861,6 +1899,20 @@ final class AppState {
                 await self?.saveTab(id: id, in: side)
             }
         }
+    }
+
+    /// Flips a markdown tab's Source/Preview flag (plan.md item 26, "G2") —
+    /// looked up by id in whichever group currently holds it, mirroring
+    /// `updateTabContent`'s side-resolution. A plain, synchronous mutation:
+    /// there's no re-render debounce here (unlike live-as-you-type preview,
+    /// out of scope for this pass) — the preview is simply recomputed once,
+    /// on the switch itself, from whatever `tab.content` holds right now.
+    func toggleMarkdownPreview(_ id: UUID) {
+        guard let side = side(ofTab: id) else { return }
+        var groupTabs = tabs(in: side)
+        guard let index = groupTabs.firstIndex(where: { $0.id == id }) else { return }
+        groupTabs[index].isMarkdownPreview.toggle()
+        setTabs(groupTabs, in: side)
     }
 
     // MARK: - Workspace Search & Replace

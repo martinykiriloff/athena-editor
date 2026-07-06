@@ -25,6 +25,34 @@ struct LanguageDetectionTests {
         let url = URL(fileURLWithPath: "/tmp/binary.exe")
         #expect(Language.detect(from: url) == .plaintext)
     }
+
+    // plan.md item 26 ("G1") — image extensions NSImage loads natively.
+    @Test func detectImagePNG() {
+        #expect(Language.detect(from: URL(fileURLWithPath: "/tmp/photo.png")) == .image)
+    }
+
+    @Test func detectImageJPEG() {
+        #expect(Language.detect(from: URL(fileURLWithPath: "/tmp/photo.jpg")) == .image)
+        #expect(Language.detect(from: URL(fileURLWithPath: "/tmp/photo.jpeg")) == .image)
+    }
+
+    @Test func detectImageOtherFormats() {
+        #expect(Language.detect(from: URL(fileURLWithPath: "/tmp/anim.gif")) == .image)
+        #expect(Language.detect(from: URL(fileURLWithPath: "/tmp/pic.webp")) == .image)
+        #expect(Language.detect(from: URL(fileURLWithPath: "/tmp/icon.svg")) == .image)
+        #expect(Language.detect(from: URL(fileURLWithPath: "/tmp/scan.bmp")) == .image)
+        #expect(Language.detect(from: URL(fileURLWithPath: "/tmp/scan.tiff")) == .image)
+        #expect(Language.detect(from: URL(fileURLWithPath: "/tmp/scan.tif")) == .image)
+    }
+
+    @Test func detectImageIsCaseInsensitive() {
+        #expect(Language.detect(from: URL(fileURLWithPath: "/tmp/PHOTO.PNG")) == .image)
+    }
+
+    @Test func detectMarkdown() {
+        #expect(Language.detect(from: URL(fileURLWithPath: "/tmp/notes.md")) == .markdown)
+        #expect(Language.detect(from: URL(fileURLWithPath: "/tmp/README.markdown")) == .markdown)
+    }
 }
 
 // MARK: - TabModel
@@ -36,6 +64,12 @@ struct TabModelTests {
         #expect(tab.title == "Untitled")
         #expect(tab.isDirty == false)
         #expect(tab.content == "")
+    }
+
+    // plan.md item 26 ("G2") — markdown Source/Preview defaults to Source.
+    @Test func defaultsToSourceNotPreview() {
+        let tab = TabModel.untitled()
+        #expect(tab.isMarkdownPreview == false)
     }
 }
 
@@ -1638,5 +1672,91 @@ struct HoverTierTests {
     @Test func lspWinsWhenNeitherDiagnosticNorPausedNorIdentifier() {
         let tier = hoverTier(hasDiagnosticAtPosition: false, isDebuggerPaused: false, isIdentifierAtPosition: false)
         #expect(tier == .lsp)
+    }
+}
+
+// MARK: - Markdown preview (plan.md item 26, "G2")
+
+/// `MarkdownRenderer.render`/`blocks(in:)` are the pure seam behind
+/// `MarkdownPreviewView` — no SwiftUI involved, so parsing/grouping is
+/// covered directly here.
+@Suite("MarkdownRenderer")
+struct MarkdownRendererTests {
+    @Test func headingBecomesItsOwnHeadingBlock() {
+        let blocks = MarkdownRenderer.blocks(in: MarkdownRenderer.render("# Title"))
+        #expect(blocks.count == 1)
+        #expect(blocks[0].kind == .heading(level: 1))
+        #expect(String(blocks[0].text.characters) == "Title")
+    }
+
+    @Test func headingLevelIsPreserved() {
+        let blocks = MarkdownRenderer.blocks(in: MarkdownRenderer.render("### Sub"))
+        #expect(blocks[0].kind == .heading(level: 3))
+    }
+
+    @Test func plainParagraphBecomesOneBlock() {
+        let blocks = MarkdownRenderer.blocks(in: MarkdownRenderer.render("Just some plain text."))
+        #expect(blocks.count == 1)
+        #expect(blocks[0].kind == .paragraph)
+    }
+
+    @Test func multiRunParagraphWithInlineEmphasisStaysOneBlock() {
+        // "bold"/"and"/"italic" each land in a separate AttributedString run
+        // (different inlinePresentationIntent) but share one paragraph
+        // identity — this is the exact case `blocks(in:)`'s run-merging
+        // exists for for; must not fragment into three paragraph blocks.
+        let blocks = MarkdownRenderer.blocks(in: MarkdownRenderer.render("A **bold** and *italic* word."))
+        #expect(blocks.count == 1)
+        #expect(blocks[0].kind == .paragraph)
+        #expect(String(blocks[0].text.characters) == "A bold and italic word.")
+    }
+
+    @Test func fencedCodeBlockIsClassifiedAsCodeBlockWithLanguageHint() {
+        let markdown = "```swift\nlet x = 1\n```"
+        let blocks = MarkdownRenderer.blocks(in: MarkdownRenderer.render(markdown))
+        #expect(blocks.count == 1)
+        #expect(blocks[0].kind == .codeBlock(language: "swift"))
+        #expect(String(blocks[0].text.characters).contains("let x = 1"))
+    }
+
+    @Test func blockQuoteIsClassifiedAsBlockQuoteNotPlainParagraph() {
+        let blocks = MarkdownRenderer.blocks(in: MarkdownRenderer.render("> a quote"))
+        #expect(blocks.count == 1)
+        #expect(blocks[0].kind == .blockQuote)
+    }
+
+    @Test func unorderedListItemsAreClassifiedAsUnordered() {
+        let blocks = MarkdownRenderer.blocks(in: MarkdownRenderer.render("- one\n- two"))
+        #expect(blocks.count == 2)
+        #expect(blocks[0].kind == .listItem(ordinal: 1, ordered: false))
+        #expect(blocks[1].kind == .listItem(ordinal: 2, ordered: false))
+    }
+
+    @Test func orderedListItemsAreClassifiedAsOrdered() {
+        let blocks = MarkdownRenderer.blocks(in: MarkdownRenderer.render("1. one\n2. two"))
+        #expect(blocks.count == 2)
+        #expect(blocks[0].kind == .listItem(ordinal: 1, ordered: true))
+        #expect(blocks[1].kind == .listItem(ordinal: 2, ordered: true))
+    }
+
+    @Test func distinctConsecutiveParagraphsStaySeparateBlocks() {
+        let blocks = MarkdownRenderer.blocks(in: MarkdownRenderer.render("First paragraph.\n\nSecond paragraph."))
+        #expect(blocks.count == 2)
+        #expect(String(blocks[0].text.characters) == "First paragraph.")
+        #expect(String(blocks[1].text.characters) == "Second paragraph.")
+    }
+
+    @Test func emptyStringProducesNoBlocks() {
+        let blocks = MarkdownRenderer.blocks(in: MarkdownRenderer.render(""))
+        #expect(blocks.isEmpty)
+    }
+
+    @Test func renderNeverThrowsOutwardForArbitraryText() {
+        // No `try`/`throws` in `render`'s signature — this just documents
+        // that a source string real markdown never produces (an unterminated
+        // fence, stray backticks) still yields *a* renderable string rather
+        // than crashing.
+        let attributed = MarkdownRenderer.render("Some ```unterminated fence and a stray ` backtick")
+        #expect(!String(attributed.characters).isEmpty)
     }
 }

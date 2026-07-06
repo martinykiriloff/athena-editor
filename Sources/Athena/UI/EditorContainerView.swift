@@ -144,8 +144,18 @@ private struct EditorPaneView: View {
             TabBarView(side: side)
             Divider()
             if let tab = appState.activeTab(in: side) {
-                CodeEditorView(tab: tabBinding(for: tab), side: side)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // Image tabs (plan.md item 26, "G1") bypass `CodeEditorView`
+                // entirely — there's no text to edit, no diagnostics/blame/
+                // LSP/minimap machinery applicable, just the file's bytes
+                // rendered as a picture. Still a normal closable tab: only
+                // the content area differs.
+                if tab.language == .image {
+                    ImagePreviewView(fileURL: tab.fileURL)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    CodeEditorView(tab: tabBinding(for: tab), side: side)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             } else if side == .primary {
                 WelcomeView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -243,9 +253,48 @@ struct CodeEditorView: View {
             if tab.externallyModified {
                 ExternalChangeBanner(tab: tab)
             }
-            editorRow
+            if tab.language == .markdown {
+                markdownToolbar
+            }
+            if tab.language == .markdown, tab.isMarkdownPreview {
+                MarkdownPreviewView(markdown: tab.content)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                editorRow
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Source/Preview toggle for markdown tabs (plan.md item 26, "G2") —
+    /// mirrors `GitPanelView.gitHeader`'s Changes/History toggle button
+    /// exactly (icon swap + `.help` tooltip on a plain hover button, same
+    /// row height/background), the closest existing precedent in this
+    /// codebase for "one view, two mutually-exclusive render modes."
+    private var markdownToolbar: some View {
+        HStack(spacing: 6) {
+            Text(tab.isMarkdownPreview ? "PREVIEW" : "SOURCE")
+                .font(.system(size: appState.sf(10), weight: .semibold))
+                .foregroundStyle(.secondary)
+                .tracking(0.5)
+
+            Spacer()
+
+            Button {
+                appState.toggleMarkdownPreview(tab.id)
+            } label: {
+                Image(systemName: tab.isMarkdownPreview ? "pencil" : "eye")
+                    .font(.system(size: appState.sf(12)))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help(tab.isMarkdownPreview ? "Show Source" : "Show Preview")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .frame(height: 26)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .overlay(alignment: .bottom) { Divider() }
     }
 
     private var editorRow: some View {

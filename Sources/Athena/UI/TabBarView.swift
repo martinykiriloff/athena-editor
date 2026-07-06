@@ -156,6 +156,7 @@ private struct TabItemView: View {
         case .markdown:  return "doc.richtext.fill"
         case .isml:      return "curlybraces.square.fill"
         case .ds:        return "doc.text.fill"
+        case .image:     return "photo.fill"
         case .plaintext: return "doc.text"
         default:         return "doc.text.fill"
         }
@@ -175,6 +176,7 @@ private struct TabItemView: View {
         case .isml:       return Color(red: 0.0, green: 0.68, blue: 0.94)   // SFCC teal
         case .ds:         return Color(red: 0.0, green: 0.68, blue: 0.94)
         case .markdown:   return .white
+        case .image:      return .pink
         case .plaintext:  return .secondary
         }
     }

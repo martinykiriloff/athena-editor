@@ -1057,7 +1057,7 @@ extension EditorView {
             case .python:                         return "#"
             case .swift, .typescript, .javascript,
                  .rust, .go, .css, .ds:            return "//"
-            case .json, .html, .isml, .markdown, .plaintext: return ""
+            case .json, .html, .isml, .markdown, .plaintext, .image: return ""
             }
         }
 

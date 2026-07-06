@@ -299,7 +299,10 @@ final class SyntaxHighlighter {
             add("\\[[^\\]]+\\]\\([^)]+\\)", color: fn)
 
         // --------------------------------------------------------------------
-        case .plaintext:
+        // Image tabs render `ImagePreviewView` instead of the text editor, so
+        // this highlighter never actually runs against one in practice — a
+        // no-op case is here only to keep the switch exhaustive.
+        case .plaintext, .image:
             break
         }
 
