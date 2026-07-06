@@ -5,6 +5,14 @@
 
 import Foundation
 import Darwin
+// `@preconcurrency`: CI's SDK annotates `DispatchSourceProtocol.setEventHandler`'s
+// handler parameter as `sending` more strictly than the SDK this was developed
+// against, flagging the `weak self` capture below as a data-race risk even
+// though it's a manually-verified-safe, well-established idiom. This downgrades
+// that module's concurrency annotations to advisory rather than fixing the
+// actual (safe) closure — see the note on `watchFile` below for why the
+// closure/Task shape itself must not change.
+@preconcurrency import Dispatch
 
 // MARK: - FileWatchService
 
