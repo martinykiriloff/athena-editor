@@ -3,6 +3,8 @@
 // All controls write directly to AppState; changes take effect immediately.
 
 import SwiftUI
+import AppKit
+import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @Environment(AppState.self)      private var appState
@@ -198,7 +200,7 @@ struct SettingsView: View {
         Form {
             Section("Theme") {
                 Picker("Color Theme", selection: state.currentTheme) {
-                    ForEach(EditorTheme.all, id: \.id) { t in
+                    ForEach(appState.allThemes, id: \.id) { t in
                         Text(t.name).tag(t)
                     }
                 }
@@ -206,6 +208,11 @@ struct SettingsView: View {
                 .onChange(of: appState.currentTheme) { _, v in
                     appState.persistSetting(v.id, for: "theme")
                 }
+
+                Button("Import VS Code Theme…") {
+                    importVSCodeTheme()
+                }
+                .help("Pick a VS Code theme JSON file (colors + tokenColors) to add it to the list above")
             }
 
             Section("Minimap") {
@@ -217,6 +224,26 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    /// `NSOpenPanel` file-picker filtered to JSON, matching
+    /// `WelcomeView.cloneRepository()`'s folder-picker pattern — runs
+    /// modally (this is a Settings sheet, already modal-ish in feel) then
+    /// hands the chosen file to `AppState.importVSCodeTheme(from:)`.
+    private func importVSCodeTheme() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.json]
+        panel.title = "Import VS Code Theme"
+        panel.message = "Choose a VS Code theme JSON file"
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        Task {
+            await appState.importVSCodeTheme(from: url)
+        }
     }
 
     // MARK: - AI Tab

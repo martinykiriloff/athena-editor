@@ -70,6 +70,12 @@ final class AppState {
     var searchQuery: String = ""
     var commitMessage: String = ""
     var currentTheme: EditorTheme = .darcula
+    /// User-imported VS Code themes (plan.md item 27, "G4"), persisted via
+    /// `settingsService` under the `"customThemes"` key alongside every
+    /// other setting. Combined with the built-ins for the theme picker via
+    /// `allThemes` — kept separate from `EditorTheme.all` so built-in theme
+    /// resolution (`EditorTheme.named(_:)`) stays a pure static lookup.
+    var customThemes: [EditorTheme] = []
     var dbConnections: [DBConnection] = []
     var sfccConnections: [SFCCConnection] = []
     var sfccAvailableLogs: [String] = []
@@ -819,6 +825,7 @@ final class AppState {
         async let ai   = settingsService.value(for: "editorAutoIndent",        default: true)
         async let di   = settingsService.value(for: "editorDetectIndentation", default: true)
         async let th   = settingsService.value(for: "theme",                   default: "darcula")
+        async let ct   = settingsService.value(for: "customThemes",            default: [EditorTheme]())
 
         editorFontSize          = await fs
         editorFontFamily        = await ff
@@ -836,7 +843,9 @@ final class AppState {
         editorFormatOnSave      = await fos
         editorAutoIndent        = await ai
         editorDetectIndentation = await di
-        currentTheme            = EditorTheme.named(await th)
+        customThemes            = await ct
+        let themeId             = await th
+        currentTheme            = allThemes.first(where: { $0.id == themeId }) ?? EditorTheme.named(themeId)
 
         // Ghost text / predictive completion provider
         async let gtp = settingsService.value(for: "ghostTextProvider", default: "none")
@@ -853,6 +862,61 @@ final class AppState {
     /// Persists a single setting value, ignoring errors.
     func persistSetting<T: Codable & Sendable>(_ value: T, for key: String) {
         Task { try? await settingsService.setValue(value, for: key) }
+    }
+
+    // MARK: - VS Code theme import (plan.md item 27, "G4")
+
+    /// Every selectable theme — built-ins plus user-imported VS Code
+    /// themes — for `SettingsView`'s theme picker.
+    var allThemes: [EditorTheme] { EditorTheme.all + customThemes }
+
+    /// Reads `url`, parses it as a VS Code theme JSON file via
+    /// `VSCodeThemeImporter`, and — on success — adds it to `customThemes`
+    /// (persisted the same way every other setting is, via
+    /// `settingsService`) and selects it immediately. Parse failures surface
+    /// via `statusMessage` rather than throwing further, matching this
+    /// app's other file-picker-triggered actions (e.g. `cloneRepository`) —
+    /// a malformed or unrelated JSON file fails cleanly, no crash.
+    func importVSCodeTheme(from url: URL) async {
+        guard
+            let data = try? Data(contentsOf: url),
+            let json = String(data: data, encoding: .utf8)
+        else {
+            statusMessage = "Couldn't read \"\(url.lastPathComponent)\"."
+            return
+        }
+
+        let id = uniqueCustomThemeId(from: url.deletingPathExtension().lastPathComponent)
+
+        do {
+            let theme = try VSCodeThemeImporter.parse(json, id: id)
+            customThemes.append(theme)
+            persistSetting(customThemes, for: "customThemes")
+            currentTheme = theme
+            persistSetting(theme.id, for: "theme")
+            statusMessage = "Imported theme \"\(theme.name)\""
+        } catch {
+            statusMessage = "\"\(url.lastPathComponent)\" isn't a recognized VS Code theme file."
+        }
+    }
+
+    /// Slugifies `base` (the file's name, sans extension) into a theme id,
+    /// disambiguating against every existing built-in/custom id so
+    /// re-importing a same-named theme (or two themes that happen to share
+    /// a display name) never silently overwrites another entry.
+    private func uniqueCustomThemeId(from base: String) -> String {
+        let slug = base
+            .lowercased()
+            .replacingOccurrences(of: "[^a-z0-9]+", with: "-", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        let candidateBase = "custom-\(slug.isEmpty ? "imported-theme" : slug)"
+
+        let existingIds = Set(EditorTheme.all.map(\.id) + customThemes.map(\.id))
+        guard existingIds.contains(candidateBase) else { return candidateBase }
+
+        var suffix = 2
+        while existingIds.contains("\(candidateBase)-\(suffix)") { suffix += 1 }
+        return "\(candidateBase)-\(suffix)"
     }
 
     // MARK: - Claude API key (Keychain-backed)

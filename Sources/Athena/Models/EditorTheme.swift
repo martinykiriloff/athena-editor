@@ -5,7 +5,7 @@ import AppKit
 
 // MARK: - EditorTheme
 
-struct EditorTheme: Sendable, Equatable, Hashable {
+struct EditorTheme: Sendable, Equatable, Hashable, Codable {
     let id: String
     let name: String
 
@@ -141,5 +141,48 @@ extension EditorTheme {
         case "github-light": return .githubLight
         default:             return .darcula
         }
+    }
+}
+
+// MARK: - Import support (plan.md item 27, "G4")
+
+extension EditorTheme {
+
+    /// Every color field a theme carries, keyed for à la carte overrides —
+    /// used by `VSCodeThemeImporter` so it never needs access to this type's
+    /// private hex storage directly; it only ever produces a
+    /// `[Field: UInt32]` dictionary of what it actually found in the
+    /// imported JSON.
+    enum Field: Sendable, Hashable, CaseIterable {
+        case background, foreground, cursor, selection, lineHighlight
+        case keyword, string, number, comment, type, function, annotation
+        case whitespace
+        case diagnosticError, diagnosticWarning, diagnosticInfo
+        case diffAdded, diffRemoved, diffModified
+    }
+
+    /// Builds a theme from `base`, overriding any fields present in
+    /// `overrides`. Every field the caller didn't supply falls back to
+    /// `base`'s value, so a partially-specified import (e.g. a VS Code
+    /// theme with `colors` but no usable `tokenColors`) still yields a
+    /// fully-defined theme instead of leaving fields undefined.
+    init(id: String, name: String, base: EditorTheme, overrides: [Field: UInt32]) {
+        func v(_ field: Field, _ fallback: UInt32) -> UInt32 { overrides[field] ?? fallback }
+        self.init(
+            id: id, name: name,
+            bg: v(.background, base.bgHex), fg: v(.foreground, base.fgHex),
+            cursor: v(.cursor, base.curHex), selection: v(.selection, base.selHex),
+            line: v(.lineHighlight, base.lineHex),
+            keyword: v(.keyword, base.kwHex), string: v(.string, base.strHex),
+            number: v(.number, base.numHex), comment: v(.comment, base.cmtHex),
+            type: v(.type, base.typHex), function: v(.function, base.fnHex),
+            annotation: v(.annotation, base.annHex), whitespace: v(.whitespace, base.wsHex),
+            diagnosticError: v(.diagnosticError, base.diagErrHex),
+            diagnosticWarning: v(.diagnosticWarning, base.diagWarnHex),
+            diagnosticInfo: v(.diagnosticInfo, base.diagInfoHex),
+            diffAdded: v(.diffAdded, base.diffAddHex),
+            diffRemoved: v(.diffRemoved, base.diffRemHex),
+            diffModified: v(.diffModified, base.diffModHex)
+        )
     }
 }

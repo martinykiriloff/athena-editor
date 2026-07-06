@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import AppKit
 @testable import Athena
 
 // MARK: - Language detection
@@ -1758,5 +1759,250 @@ struct MarkdownRendererTests {
         // than crashing.
         let attributed = MarkdownRenderer.render("Some ```unterminated fence and a stray ` backtick")
         #expect(!String(attributed.characters).isEmpty)
+    }
+}
+
+// MARK: - VS Code theme import (plan.md item 27, "G4")
+
+/// `EditorTheme`'s colors are stored as private hex and only exposed as
+/// `NSColor` — these two helpers round-trip through `NSColor`'s own RGB
+/// component accessors (safe here since every color is built via
+/// `NSColor(red:green:blue:alpha:)`, always RGB-model) so tests can assert
+/// on the original hex triples without needing access to the private
+/// storage.
+private func hexComponents(_ color: NSColor) -> (UInt8, UInt8, UInt8) {
+    (
+        UInt8((color.redComponent * 255).rounded()),
+        UInt8((color.greenComponent * 255).rounded()),
+        UInt8((color.blueComponent * 255).rounded())
+    )
+}
+
+private func components(ofHex hex: UInt32) -> (UInt8, UInt8, UInt8) {
+    (UInt8((hex >> 16) & 0xFF), UInt8((hex >> 8) & 0xFF), UInt8(hex & 0xFF))
+}
+
+@Suite("EditorTheme import-merge init")
+struct EditorThemeImportMergeTests {
+    @Test func overriddenFieldsWinAndUntouchedFieldsFallBackToBase() {
+        let theme = EditorTheme(
+            id: "merge-test", name: "Merge Test", base: .darcula,
+            overrides: [.background: 0x111111, .keyword: 0x222222]
+        )
+        #expect(hexComponents(theme.background) == components(ofHex: 0x111111))
+        #expect(hexComponents(theme.keyword) == components(ofHex: 0x222222))
+        // Every field not present in `overrides` falls back to `base`.
+        #expect(hexComponents(theme.foreground) == hexComponents(EditorTheme.darcula.foreground))
+        #expect(hexComponents(theme.comment) == hexComponents(EditorTheme.darcula.comment))
+        #expect(hexComponents(theme.annotation) == hexComponents(EditorTheme.darcula.annotation))
+    }
+
+    @Test func emptyOverridesReproducesBaseExactly() {
+        let theme = EditorTheme(id: "clone", name: "Clone", base: .githubLight, overrides: [:])
+        #expect(hexComponents(theme.background) == hexComponents(EditorTheme.githubLight.background))
+        #expect(hexComponents(theme.function) == hexComponents(EditorTheme.githubLight.function))
+    }
+}
+
+@Suite("VSCodeThemeImporter.stripJSONCArtifacts")
+struct VSCodeThemeImporterStripJSONCTests {
+    @Test func lineCommentIsRemoved() {
+        let cleaned = VSCodeThemeImporter.stripJSONCArtifacts("{\n  // a comment\n  \"a\": 1\n}")
+        #expect(!cleaned.contains("//"))
+        #expect(cleaned.contains("\"a\": 1"))
+    }
+
+    @Test func blockCommentIsRemoved() {
+        let cleaned = VSCodeThemeImporter.stripJSONCArtifacts("{ /* block */ \"a\": 1 }")
+        #expect(!cleaned.contains("/*"))
+        #expect(cleaned.contains("\"a\": 1"))
+    }
+
+    @Test func trailingCommaBeforeClosingBraceIsRemoved() {
+        let cleaned = VSCodeThemeImporter.stripJSONCArtifacts("{ \"a\": 1, }")
+        #expect(cleaned == "{ \"a\": 1 }")
+    }
+
+    @Test func trailingCommaBeforeClosingBracketIsRemoved() {
+        let cleaned = VSCodeThemeImporter.stripJSONCArtifacts("[1, 2, ]")
+        #expect(cleaned == "[1, 2 ]")
+    }
+
+    @Test func doubleSlashInsideAStringLiteralIsNotTreatedAsAComment() {
+        let cleaned = VSCodeThemeImporter.stripJSONCArtifacts(
+            "{ \"url\": \"https://example.com\", \"a\": 1 }"
+        )
+        #expect(cleaned.contains("https://example.com"))
+        #expect(cleaned.contains("\"a\": 1"))
+    }
+}
+
+@Suite("VSCodeThemeImporter.parse")
+struct VSCodeThemeImporterParseTests {
+
+    private static let sampleJSON = """
+    {
+      "name": "Sample Theme",
+      "type": "dark",
+      "colors": {
+        "editor.background": "#1E1E2E",
+        "editor.foreground": "#CDD6F4",
+        "editorCursor.foreground": "#F5E0DC",
+        "editor.selectionBackground": "#585B70",
+        "editorError.foreground": "#F38BA8"
+      },
+      "tokenColors": [
+        { "scope": "comment", "settings": { "foreground": "#6C7086", "fontStyle": "italic" } },
+        { "scope": ["string.quoted", "string.template"], "settings": { "foreground": "#A6E3A1" } },
+        { "scope": "keyword.control", "settings": { "foreground": "#CBA6F7" } },
+        { "scope": "entity.name.function", "settings": { "foreground": "#89B4FA" } },
+        { "scope": "entity.name.type.class", "settings": { "foreground": "#F9E2AF" } },
+        { "scope": "constant.numeric", "settings": { "foreground": "#FAB387" } }
+      ]
+    }
+    """
+
+    @Test func parsesNameAndTypeCorrectly() throws {
+        let theme = try VSCodeThemeImporter.parse(Self.sampleJSON, id: "sample-theme")
+        #expect(theme.id == "sample-theme")
+        #expect(theme.name == "Sample Theme")
+    }
+
+    @Test func mapsUIChromeColors() throws {
+        let theme = try VSCodeThemeImporter.parse(Self.sampleJSON, id: "sample-theme")
+        #expect(hexComponents(theme.background) == components(ofHex: 0x1E1E2E))
+        #expect(hexComponents(theme.foreground) == components(ofHex: 0xCDD6F4))
+        #expect(hexComponents(theme.cursor) == components(ofHex: 0xF5E0DC))
+        #expect(hexComponents(theme.selection) == components(ofHex: 0x585B70))
+        #expect(hexComponents(theme.diagnosticError) == components(ofHex: 0xF38BA8))
+    }
+
+    @Test func mapsTokenColorScopesToSyntaxCategories() throws {
+        let theme = try VSCodeThemeImporter.parse(Self.sampleJSON, id: "sample-theme")
+        #expect(hexComponents(theme.comment) == components(ofHex: 0x6C7086))
+        #expect(hexComponents(theme.string) == components(ofHex: 0xA6E3A1))
+        #expect(hexComponents(theme.keyword) == components(ofHex: 0xCBA6F7))
+        #expect(hexComponents(theme.function) == components(ofHex: 0x89B4FA))
+        #expect(hexComponents(theme.type) == components(ofHex: 0xF9E2AF))
+        #expect(hexComponents(theme.number) == components(ofHex: 0xFAB387))
+    }
+
+    @Test func fieldsMissingFromTheFileFallBackToTheDarkBaseTheme() throws {
+        // No "annotation"-mapping scope and no lineHighlight color in the
+        // sample — both must fall back to `.darcula` (chosen because
+        // `"type": "dark"`), never left undefined.
+        let theme = try VSCodeThemeImporter.parse(Self.sampleJSON, id: "sample-theme")
+        #expect(hexComponents(theme.annotation) == hexComponents(EditorTheme.darcula.annotation))
+        #expect(hexComponents(theme.lineHighlight) == hexComponents(EditorTheme.darcula.lineHighlight))
+    }
+
+    @Test func lightTypeFallsBackToGithubLightNotDarcula() throws {
+        let json = """
+        { "name": "Light Sample", "type": "light", "colors": { "editor.foreground": "#000000" } }
+        """
+        let theme = try VSCodeThemeImporter.parse(json, id: "light-sample")
+        #expect(hexComponents(theme.background) == hexComponents(EditorTheme.githubLight.background))
+        #expect(hexComponents(theme.foreground) == components(ofHex: 0x000000))
+    }
+
+    @Test func explicitFallbackOverridesTypeBasedDefault() throws {
+        let json = """
+        { "name": "No Type", "colors": {} }
+        """
+        let theme = try VSCodeThemeImporter.parse(json, id: "no-type", fallback: .oneDark)
+        #expect(hexComponents(theme.background) == hexComponents(EditorTheme.oneDark.background))
+    }
+
+    @Test func firstMatchingTokenColorEntryWinsForARepeatedCategory() throws {
+        let json = """
+        {
+          "name": "Order Test",
+          "tokenColors": [
+            { "scope": "comment.line", "settings": { "foreground": "#111111" } },
+            { "scope": "comment.block.documentation", "settings": { "foreground": "#222222" } }
+          ]
+        }
+        """
+        let theme = try VSCodeThemeImporter.parse(json, id: "order-test")
+        #expect(hexComponents(theme.comment) == components(ofHex: 0x111111))
+    }
+
+    @Test func shorthandThreeDigitHexExpandsEachDigit() throws {
+        let json = """
+        { "name": "Shorthand", "colors": { "editor.foreground": "#abc" } }
+        """
+        let theme = try VSCodeThemeImporter.parse(json, id: "shorthand")
+        #expect(hexComponents(theme.foreground) == components(ofHex: 0xAABBCC))
+    }
+
+    @Test func eightDigitHexDropsTheAlphaChannel() throws {
+        let json = """
+        { "name": "Alpha", "colors": { "editorCursor.foreground": "#11223344" } }
+        """
+        let theme = try VSCodeThemeImporter.parse(json, id: "alpha")
+        #expect(hexComponents(theme.cursor) == components(ofHex: 0x112233))
+    }
+
+    @Test func malformedColorValueFallsBackRatherThanBreakingTheParse() throws {
+        let json = """
+        { "name": "Bad Color", "type": "dark", "colors": { "editor.background": "not-a-color" } }
+        """
+        let theme = try VSCodeThemeImporter.parse(json, id: "bad-color")
+        #expect(hexComponents(theme.background) == hexComponents(EditorTheme.darcula.background))
+    }
+
+    @Test func doubleSlashInsideAStringValueSurvivesTheFullParse() throws {
+        // Regression guard for `stripJSONCArtifacts`: a URL-bearing string
+        // value elsewhere in the file must not be mistaken for a line
+        // comment and truncate the rest of the JSON.
+        let json = """
+        {
+          "name": "URL Theme",
+          "description": "See https://example.com/docs for more info",
+          "type": "dark",
+          "colors": { "editor.background": "#0A0A0A" }
+        }
+        """
+        let theme = try VSCodeThemeImporter.parse(json, id: "url-theme")
+        #expect(theme.name == "URL Theme")
+        #expect(hexComponents(theme.background) == components(ofHex: 0x0A0A0A))
+    }
+
+    @Test func trailingCommaJSONCFileStillParses() throws {
+        let jsonc = """
+        {
+          // theme metadata
+          "name": "Comment Theme",
+          "type": "dark",
+          "colors": {
+            "editor.background": "#101010",
+          },
+          "tokenColors": [
+            { "scope": "comment", "settings": { "foreground": "#222222" }, },
+          ],
+        }
+        """
+        let theme = try VSCodeThemeImporter.parse(jsonc, id: "jsonc-test")
+        #expect(theme.name == "Comment Theme")
+        #expect(hexComponents(theme.background) == components(ofHex: 0x101010))
+        #expect(hexComponents(theme.comment) == components(ofHex: 0x222222))
+    }
+
+    @Test func garbageInputThrowsInvalidJSON() {
+        #expect(throws: VSCodeThemeImportError.invalidJSON) {
+            try VSCodeThemeImporter.parse("not json at all {{{", id: "garbage")
+        }
+    }
+
+    @Test func nonObjectJSONThrowsInvalidJSON() {
+        #expect(throws: VSCodeThemeImportError.invalidJSON) {
+            try VSCodeThemeImporter.parse("[1, 2, 3]", id: "array")
+        }
+    }
+
+    @Test func validJSONWithNoThemeKeysThrowsEmptyTheme() {
+        #expect(throws: VSCodeThemeImportError.emptyTheme) {
+            try VSCodeThemeImporter.parse("{ \"unrelated\": true }", id: "unrelated")
+        }
     }
 }
