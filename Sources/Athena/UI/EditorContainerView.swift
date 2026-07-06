@@ -229,6 +229,15 @@ struct CodeEditorView: View {
         return appState.debugCurrentLine
     }
 
+    /// Gates the hover chain's third tier (plan.md item 25, "F4") — a plain
+    /// bool, not a closure, so `EditorView`/`Coordinator` can check it for
+    /// free on every hover before deciding whether the DAP `evaluate`
+    /// round-trip (`onRequestDebugHover` below) is even worth attempting.
+    private var isDebuggerPaused: Bool {
+        if case .paused = appState.debugState { return true }
+        return false
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             if tab.externallyModified {
@@ -287,6 +296,13 @@ struct CodeEditorView: View {
                     guard let fileURL = tab.fileURL else { return nil }
                     return try? await appState.lspManager.hover(
                         fileURL: fileURL, line: line - 1, character: col - 1
+                    )
+                },
+                isDebugPaused: isDebuggerPaused,
+                onRequestDebugHover: { expression in
+                    guard case .paused = appState.debugState else { return nil }
+                    return try? await appState.debugService.evaluate(
+                        expression: expression, frameId: appState.selectedFrameId, context: "hover"
                     )
                 },
                 onFindReferences: { line, col in

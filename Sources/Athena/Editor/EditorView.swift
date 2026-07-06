@@ -67,6 +67,22 @@ struct EditorView: NSViewRepresentable {
     /// Requests LSP hover text (markdown/plaintext, already flattened to a
     /// plain string) for the given 1-based line/column.
     var onRequestHover: (Int, Int) async -> String? = { _, _ in nil }
+    /// True while the debugger is paused (`AppState.debugState` is
+    /// `.paused`) — a plain value, not a closure, so checking it is free
+    /// (mirrors `breakpoints`/`debugLine` below). Gates the hover chain's
+    /// third tier (plan.md item 25, "F4"): only when this is `true` does
+    /// hovering a plain identifier attempt a DAP `evaluate` round-trip
+    /// instead of falling straight through to LSP hover.
+    var isDebugPaused: Bool = false
+    /// Requests a live debug-expression evaluation of `expression` (the
+    /// identifier text under the cursor) against the selected stack frame,
+    /// DAP `context: "hover"` — the standard convention for this exact
+    /// use case, distinct from watch expressions' `"watch"` and the debug
+    /// console's `"repl"` (plan.md item 24). Returns `nil` when evaluation
+    /// fails (out of scope, evaluation error) or no debug session is
+    /// active, which falls the hover chain through to LSP hover rather than
+    /// showing an error tooltip that could be mistaken for a real value.
+    var onRequestDebugHover: (String) async -> DAPEvaluateResult? = { _ in nil }
     /// Requests `textDocument/references` for the given 1-based line/column
     /// (⌥⇧F12, "Find All References") and hands the results off to
     /// `AppState` to populate the References panel.
@@ -464,6 +480,39 @@ struct EditorView: NSViewRepresentable {
     }
 }
 
+// MARK: - Hover chain priority (plan.md item 25, "F4")
+
+/// Which of the hover chain's three sources should win at a given hover
+/// position. Not declared inside `Coordinator` (an `@MainActor` type, whose
+/// `static` members would inherit that isolation) so it stays a plain,
+/// synchronously-testable function — the pure "which tier wins" seam,
+/// separate from the async I/O (`diagnostic(at:)`'s array scan, the DAP
+/// `evaluate` round-trip, the LSP hover round-trip) around it.
+enum HoverTier: Equatable {
+    case diagnostic
+    case debugValue
+    case lsp
+}
+
+/// Decides `Coordinator.triggerHover`'s tier ordering: a diagnostic squiggle
+/// right at the hovered position always wins first — it needs urgent
+/// attention regardless of debug state, and was already the top priority
+/// before item 25 (plan.md item 15, step 3). Otherwise, while the debugger
+/// is paused and the hovered position sits on a plain identifier, a live
+/// debug value wins over LSP hover — LSP would only show the identifier's
+/// static type/doc, not its current runtime value, which is almost always
+/// less useful mid-pause. Otherwise LSP hover is the fallback, same as
+/// before item 25 existed.
+func hoverTier(
+    hasDiagnosticAtPosition: Bool,
+    isDebuggerPaused: Bool,
+    isIdentifierAtPosition: Bool
+) -> HoverTier {
+    if hasDiagnosticAtPosition { return .diagnostic }
+    if isDebuggerPaused && isIdentifierAtPosition { return .debugValue }
+    return .lsp
+}
+
 // MARK: - Coordinator
 
 extension EditorView {
@@ -809,24 +858,75 @@ extension EditorView {
             hoverController.dismiss()
         }
 
+        /// Three-tier hover chain, in `hoverTier`'s priority order:
+        /// 1. A diagnostic squiggle at this exact position — a cheap local
+        ///    array lookup, checked first regardless of debug state since it
+        ///    needs urgent attention (plan.md item 15, step 3).
+        /// 2. A live debug value (plan.md item 25, "F4") — only attempted
+        ///    while paused (`parent.isDebugPaused`, a cheap bool, no I/O) and
+        ///    only over a plain identifier, so the DAP `evaluate` round-trip
+        ///    never fires while running/not debugging (step 3 of the task).
+        /// 3. LSP hover — the original, still-only tier before item 25, and
+        ///    also where tier 2 falls through to if the debug evaluation
+        ///    fails (out of scope, evaluation error) — an error tooltip
+        ///    there could be mistaken for a real value, so it's suppressed
+        ///    rather than shown (step 2 of the task).
         private func triggerHover(at charIndex: Int) async {
             guard let tv = textView else { return }
             let ns = tv.string as NSString
             guard charIndex >= 0, charIndex < ns.length else { return }
 
-            // A diagnostic squiggle at this position is a cheap local array
-            // lookup — check it first and prioritize it over an LSP hover
-            // round-trip (plan.md item 15, step 3).
-            if let diag = diagnostic(at: charIndex, in: ns) {
-                var actual = NSRange()
-                let rect = tv.firstRect(forCharacterRange: NSRange(location: charIndex, length: 1), actualRange: &actual)
-                hoverController.show(text: diag.message, near: rect)
-                return
-            }
+            let diag = diagnostic(at: charIndex, in: ns)
+            let wordRange = identifierWordRange(in: ns, around: charIndex)
 
+            switch hoverTier(
+                hasDiagnosticAtPosition: diag != nil,
+                isDebuggerPaused: parent.isDebugPaused,
+                isIdentifierAtPosition: wordRange != nil
+            ) {
+            case .diagnostic:
+                guard let diag else { return }
+                showHoverTooltip(diag.message, at: charIndex, in: tv)
+
+            case .debugValue:
+                guard let wordRange else { return }
+                let expression = ns.substring(with: wordRange)
+                guard let evaluated = await parent.onRequestDebugHover(expression),
+                      !evaluated.result.isEmpty
+                else {
+                    await showLSPHover(at: charIndex, in: tv)
+                    return
+                }
+                showHoverTooltip(debugHoverText(for: evaluated), at: charIndex, in: tv)
+
+            case .lsp:
+                await showLSPHover(at: charIndex, in: tv)
+            }
+        }
+
+        /// Tier 3 — the original (pre-item-25) LSP hover round-trip, also
+        /// reused as tier 2's fallback when a debug evaluation isn't
+        /// available.
+        private func showLSPHover(at charIndex: Int, in tv: NSTextView) async {
             let (line, col) = position(in: tv.string, at: charIndex)
             guard let text = await parent.onRequestHover(line, col), !text.isEmpty else { return }
+            showHoverTooltip(text, at: charIndex, in: tv)
+        }
 
+        /// Formats a DAP/CDP `evaluate` result for the hover tooltip —
+        /// `"value: Type"` when a type came back, else just the value.
+        /// `DAPEvaluateResult` and the evaluate round-trip itself are reused
+        /// as-is from `DebugService.evaluate`/watch expressions (plan.md
+        /// item 24) rather than re-derived; this is the one small piece of
+        /// display formatting item 24 didn't already need, since neither the
+        /// Watch row nor the console transcript shows `type` alongside the
+        /// value.
+        private func debugHoverText(for result: DAPEvaluateResult) -> String {
+            guard let type = result.type, !type.isEmpty else { return result.result }
+            return "\(result.result): \(type)"
+        }
+
+        private func showHoverTooltip(_ text: String, at charIndex: Int, in tv: NSTextView) {
             var actual = NSRange()
             let rect = tv.firstRect(forCharacterRange: NSRange(location: charIndex, length: 1), actualRange: &actual)
             hoverController.show(text: text, near: rect)

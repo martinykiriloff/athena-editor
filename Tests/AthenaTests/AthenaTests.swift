@@ -1605,3 +1605,38 @@ struct WatchExpressionTests {
         #expect(updated.first { $0.expression == "b" }?.lastValue == "5")
     }
 }
+
+// MARK: - Hover chain priority (plan.md item 25, "F4")
+
+@Suite("hoverTier")
+struct HoverTierTests {
+    @Test func diagnosticAlwaysWinsEvenWhilePausedOnAnIdentifier() {
+        let tier = hoverTier(hasDiagnosticAtPosition: true, isDebuggerPaused: true, isIdentifierAtPosition: true)
+        #expect(tier == .diagnostic)
+    }
+
+    @Test func diagnosticWinsOverLSPWhenNotPaused() {
+        let tier = hoverTier(hasDiagnosticAtPosition: true, isDebuggerPaused: false, isIdentifierAtPosition: true)
+        #expect(tier == .diagnostic)
+    }
+
+    @Test func debugValueWinsWhenPausedOnAnIdentifierWithNoDiagnostic() {
+        let tier = hoverTier(hasDiagnosticAtPosition: false, isDebuggerPaused: true, isIdentifierAtPosition: true)
+        #expect(tier == .debugValue)
+    }
+
+    @Test func lspWinsWhenPausedButNotOnAnIdentifier() {
+        let tier = hoverTier(hasDiagnosticAtPosition: false, isDebuggerPaused: true, isIdentifierAtPosition: false)
+        #expect(tier == .lsp)
+    }
+
+    @Test func lspWinsWhenNotPausedEvenOnAnIdentifier() {
+        let tier = hoverTier(hasDiagnosticAtPosition: false, isDebuggerPaused: false, isIdentifierAtPosition: true)
+        #expect(tier == .lsp)
+    }
+
+    @Test func lspWinsWhenNeitherDiagnosticNorPausedNorIdentifier() {
+        let tier = hoverTier(hasDiagnosticAtPosition: false, isDebuggerPaused: false, isIdentifierAtPosition: false)
+        #expect(tier == .lsp)
+    }
+}
