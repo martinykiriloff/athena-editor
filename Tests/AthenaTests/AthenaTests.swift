@@ -1478,3 +1478,130 @@ struct GitServiceParsePorcelainStatusTests {
         #expect(result.staged.count == 1)
     }
 }
+
+// MARK: - DebugService.evaluate response parsing (plan.md item 24)
+
+@Suite("DebugService evaluate parsing")
+struct DebugServiceEvaluateParsingTests {
+
+    @Test func parsesDAPEvaluateResponseWithAllFields() {
+        let json: [String: Any] = ["result": "42", "type": "Int", "variablesReference": 3]
+        let result = DebugService.parseDAPEvaluateResponse(json)
+        #expect(result.result == "42")
+        #expect(result.type == "Int")
+        #expect(result.variablesReference == 3)
+    }
+
+    @Test func parsesDAPEvaluateResponseWithMissingOptionalFields() {
+        let result = DebugService.parseDAPEvaluateResponse(["result": "nil"])
+        #expect(result.result == "nil")
+        #expect(result.type == nil)
+        #expect(result.variablesReference == 0)
+    }
+
+    @Test func parsesDAPEvaluateResponseWithNoResultDefaultsToEmptyString() {
+        let result = DebugService.parseDAPEvaluateResponse([:])
+        #expect(result.result == "")
+    }
+
+    @Test func parsesCDPEvaluateResponsePrefersDescriptionOverRawValue() {
+        let json: [String: Any] = ["result": ["type": "object", "description": "Array(3)", "value": "ignored"]]
+        let result = DebugService.parseCDPEvaluateResponse(json)
+        #expect(result.result == "Array(3)")
+        #expect(result.type == "object")
+    }
+
+    @Test func parsesCDPEvaluateResponseFallsBackToRawValueWhenNoDescription() {
+        let json: [String: Any] = ["result": ["type": "number", "value": 42]]
+        let result = DebugService.parseCDPEvaluateResponse(json)
+        #expect(result.result == "42")
+        #expect(result.type == "number")
+    }
+
+    @Test func parsesCDPEvaluateResponseWithNeitherDescriptionNorValueAsUndefined() {
+        let json: [String: Any] = ["result": ["type": "undefined"]]
+        let result = DebugService.parseCDPEvaluateResponse(json)
+        #expect(result.result == "undefined")
+    }
+
+    @Test func cdpExceptionMessageIsNilWhenThereWasNoException() {
+        let json: [String: Any] = ["result": ["type": "number", "value": 1]]
+        #expect(DebugService.cdpEvaluateExceptionMessage(json) == nil)
+    }
+
+    @Test func cdpExceptionMessagePrefersTheExceptionDescription() {
+        let json: [String: Any] = [
+            "exceptionDetails": [
+                "text": "Uncaught",
+                "exception": ["description": "ReferenceError: x is not defined"]
+            ]
+        ]
+        #expect(DebugService.cdpEvaluateExceptionMessage(json) == "ReferenceError: x is not defined")
+    }
+
+    @Test func cdpExceptionMessageFallsBackToTextWhenNoExceptionDescription() {
+        let json: [String: Any] = ["exceptionDetails": ["text": "Uncaught SyntaxError"]]
+        #expect(DebugService.cdpEvaluateExceptionMessage(json) == "Uncaught SyntaxError")
+    }
+}
+
+// MARK: - WatchExpression list logic (plan.md item 24)
+
+@Suite("WatchExpression")
+struct WatchExpressionTests {
+
+    @Test func appendingTrimsWhitespaceAndAddsToTheEnd() {
+        let list = WatchExpression.appending("  foo.bar  ", to: [])
+        #expect(list.count == 1)
+        #expect(list[0].expression == "foo.bar")
+    }
+
+    @Test func appendingABlankExpressionIsANoOp() {
+        let existing = [WatchExpression(expression: "a")]
+        let list = WatchExpression.appending("   ", to: existing)
+        #expect(list.count == 1)
+        #expect(list[0].expression == "a")
+    }
+
+    @Test func removingDropsOnlyTheMatchingExpression() {
+        let a = WatchExpression(expression: "a")
+        let b = WatchExpression(expression: "b")
+        let list = WatchExpression.removing(a.id, from: [a, b])
+        #expect(list.map(\.expression) == ["b"])
+    }
+
+    @Test func removingAnUnknownIdIsANoOp() {
+        let a = WatchExpression(expression: "a")
+        let list = WatchExpression.removing(UUID(), from: [a])
+        #expect(list.count == 1)
+    }
+
+    @Test func applyingSuccessSetsValueAndTypeAndClearsAnyPriorError() {
+        var expr = WatchExpression(expression: "x")
+        expr.lastError = "stale error"
+        let result = DAPEvaluateResult(result: "42", type: "Int", variablesReference: 0)
+        let updated = WatchExpression.applying([expr.id: .success(result)], to: [expr])
+        #expect(updated[0].lastValue == "42")
+        #expect(updated[0].lastType == "Int")
+        #expect(updated[0].lastError == nil)
+    }
+
+    @Test func applyingFailureSetsErrorAndClearsAnyPriorValue() {
+        var expr = WatchExpression(expression: "x")
+        expr.lastValue = "stale value"
+        expr.lastType  = "String"
+        let updated = WatchExpression.applying([expr.id: .failure("out of scope")], to: [expr])
+        #expect(updated[0].lastValue == nil)
+        #expect(updated[0].lastType == nil)
+        #expect(updated[0].lastError == "out of scope")
+    }
+
+    @Test func applyingLeavesExpressionsWithNoMatchingResultUntouched() {
+        let a = WatchExpression(expression: "a")
+        var b = WatchExpression(expression: "b")
+        b.lastValue = "5"
+        let outcome = WatchEvaluationOutcome.success(DAPEvaluateResult(result: "1", type: nil, variablesReference: 0))
+        let updated = WatchExpression.applying([a.id: outcome], to: [a, b])
+        #expect(updated.first { $0.expression == "b" }?.lastValue == "5")
+    }
+}

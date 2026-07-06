@@ -131,6 +131,18 @@ final class AppState {
     var selectedLaunchConfigId: UUID? = nil
     @ObservationIgnored let debugService: DebugService = DebugService()
 
+    /// The stack frame `DebugSidebarView`'s call-stack list has selected —
+    /// `nil` until a pause happens, then defaults to the top/innermost frame
+    /// (plan.md item 24). Both watch expressions and the debug console REPL
+    /// evaluate against this frame, not just "the debuggee" generically.
+    var selectedFrameId: Int? = nil
+    /// User-defined watch expressions (plan.md item 24) — persist across
+    /// debug steps and re-evaluate every time the debugger pauses.
+    var watchExpressions: [WatchExpression] = []
+    /// Debug console REPL transcript (plan.md item 24) — one entry per
+    /// evaluated expression, shown in `DebugConsoleView`.
+    var debugConsoleEntries: [DebugConsoleEntry] = []
+
     var activeClaudeAccount: ClaudeAccount = .personal
     var claudeMessages: [ClaudeMessage] = []
     var claudeIsStreaming: Bool = false
@@ -1317,6 +1329,8 @@ final class AppState {
         debugVariables = []
         debugCurrentFile = nil
         debugCurrentLine = nil
+        selectedFrameId = nil
+        debugConsoleEntries = []
         showBottomPanel = true
         activeBottomPanel = .output
 
@@ -1351,6 +1365,17 @@ final class AppState {
         debugCurrentLine = nil
         debugStackFrames = []
         debugVariables   = []
+        selectedFrameId  = nil
+        // Watch expressions themselves persist across sessions (they're
+        // user-authored, not session state) — only their last-evaluated
+        // values go stale once there's no debuggee to evaluate against.
+        watchExpressions = watchExpressions.map {
+            var expr = $0
+            expr.lastValue = nil
+            expr.lastType  = nil
+            expr.lastError = nil
+            return expr
+        }
     }
 
     func debugContinue() async {
@@ -1378,6 +1403,7 @@ final class AppState {
         guard case .paused = debugState else { return }
         do {
             debugStackFrames = try await debugService.fetchStackFrames()
+            selectedFrameId = debugStackFrames.first?.id
             if let topFrame = debugStackFrames.first {
                 debugVariables = try await debugService.fetchVariables(frameId: topFrame.id)
             }
@@ -1387,6 +1413,77 @@ final class AppState {
             }
         } catch {
             debugOutput += "[Athena] Error fetching debug state: \(error.localizedDescription)\n"
+        }
+        await reevaluateWatchExpressions()
+    }
+
+    // MARK: - Watch Expressions (plan.md item 24)
+
+    /// Selects a call-stack frame as the target for subsequent variable
+    /// fetches, watch-expression evaluation, and REPL evaluation —
+    /// `DebugSidebarView`'s call-stack rows call this on click.
+    func selectStackFrame(_ frameId: Int) async {
+        guard selectedFrameId != frameId else { return }
+        selectedFrameId = frameId
+        do {
+            debugVariables = try await debugService.fetchVariables(frameId: frameId)
+        } catch {
+            debugOutput += "[Athena] Error fetching variables: \(error.localizedDescription)\n"
+        }
+        await reevaluateWatchExpressions()
+    }
+
+    func addWatchExpression(_ expression: String) {
+        let updated = WatchExpression.appending(expression, to: watchExpressions)
+        guard updated.count != watchExpressions.count else { return }
+        watchExpressions = updated
+        Task { await reevaluateWatchExpressions() }
+    }
+
+    func removeWatchExpression(_ id: UUID) {
+        watchExpressions = WatchExpression.removing(id, from: watchExpressions)
+    }
+
+    /// Re-evaluates every watch expression against the currently selected
+    /// stack frame — called on every pause (via `refreshDebugState`) and
+    /// after adding a new expression or switching the selected frame. A
+    /// failing expression (e.g. an out-of-scope variable) records its error
+    /// inline on that row rather than throwing/crashing or touching
+    /// `statusMessage`.
+    func reevaluateWatchExpressions() async {
+        guard case .paused = debugState, !watchExpressions.isEmpty else { return }
+        let frameId = selectedFrameId ?? debugStackFrames.first?.id
+        var results: [UUID: WatchEvaluationOutcome] = [:]
+        for expr in watchExpressions {
+            do {
+                let evaluated = try await debugService.evaluate(
+                    expression: expr.expression, frameId: frameId, context: "watch")
+                results[expr.id] = .success(evaluated)
+            } catch {
+                results[expr.id] = .failure(error.localizedDescription)
+            }
+        }
+        watchExpressions = WatchExpression.applying(results, to: watchExpressions)
+    }
+
+    // MARK: - Debug Console REPL (plan.md item 24)
+
+    /// Evaluates a typed expression in the debug console against the
+    /// currently selected paused frame, appending it and its result (or
+    /// error) to the transcript. No-op while not paused — `DebugConsoleView`
+    /// also disables its input field in that state, this is the belt-and-
+    /// suspenders guard against a stale Enter keypress racing a resume.
+    func evaluateInConsole(_ expression: String) async {
+        let trimmed = expression.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, case .paused = debugState else { return }
+        let frameId = selectedFrameId ?? debugStackFrames.first?.id
+        do {
+            let evaluated = try await debugService.evaluate(
+                expression: trimmed, frameId: frameId, context: "repl")
+            debugConsoleEntries.append(DebugConsoleEntry(expression: trimmed, result: evaluated.result, isError: false))
+        } catch {
+            debugConsoleEntries.append(
+                DebugConsoleEntry(expression: trimmed, result: error.localizedDescription, isError: true))
         }
     }
 

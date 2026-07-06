@@ -76,6 +76,7 @@ struct BottomPanelView: View {
         case .chat:      return "Claude"
         case .sfcclogs:  return "SFCC Logs"
         case .references: return "References"
+        case .debugConsole: return "Debug Console"
         }
     }
 
@@ -91,6 +92,7 @@ struct BottomPanelView: View {
         case .chat:      ChatView()
         case .sfcclogs:  SFCCLogView()
         case .references: ReferencesPanelView()
+        case .debugConsole: DebugConsoleView()
         }
     }
 }

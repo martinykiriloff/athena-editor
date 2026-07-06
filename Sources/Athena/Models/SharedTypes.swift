@@ -44,6 +44,88 @@ struct DebugVariable: Identifiable, Sendable {
     let variablesReference: Int
 }
 
+/// Result of a DAP/CDP `evaluate` request (plan.md item 24) — shared by
+/// watch expressions and the debug console REPL, both of which just want
+/// "expression in, display string + type out" against a specific frame.
+struct DAPEvaluateResult: Sendable {
+    let result: String
+    let type: String?
+    let variablesReference: Int
+}
+
+/// A user-defined watch expression (plan.md item 24) that persists across
+/// debug steps and re-evaluates every time the debugger pauses. `lastError`
+/// is set (and `lastValue`/`lastType` cleared) when evaluation fails — e.g.
+/// the expression references a variable out of scope for the current frame
+/// — so the row can show an inline error instead of crashing or spamming
+/// `AppState.statusMessage`.
+struct WatchExpression: Identifiable, Sendable {
+    let id: UUID = UUID()
+    var expression: String
+    var lastValue: String? = nil
+    var lastType: String? = nil
+    var lastError: String? = nil
+
+    /// Pure "add" helper — trims whitespace, ignores a blank expression.
+    /// Extracted the same way `TabModel.nextActiveId`/`TerminalSession.nextActiveId`
+    /// pull their close-tab decision out into a testable free function, so the
+    /// list-mutation logic doesn't need a live `AppState`/`DebugService` to test.
+    static func appending(_ raw: String, to list: [WatchExpression]) -> [WatchExpression] {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return list }
+        var result = list
+        result.append(WatchExpression(expression: trimmed))
+        return result
+    }
+
+    /// Pure "remove" helper.
+    static func removing(_ id: UUID, from list: [WatchExpression]) -> [WatchExpression] {
+        list.filter { $0.id != id }
+    }
+
+    /// Applies a batch of freshly evaluated results (keyed by expression id)
+    /// back onto `list` in place — expressions with no entry in `results`
+    /// (shouldn't happen in practice, but keeps this total) pass through
+    /// untouched rather than losing their last-known value.
+    static func applying(
+        _ results: [UUID: WatchEvaluationOutcome],
+        to list: [WatchExpression]
+    ) -> [WatchExpression] {
+        list.map { expr in
+            guard let outcome = results[expr.id] else { return expr }
+            var updated = expr
+            switch outcome {
+            case .success(let r):
+                updated.lastValue = r.result
+                updated.lastType  = r.type
+                updated.lastError = nil
+            case .failure(let message):
+                updated.lastValue = nil
+                updated.lastType  = nil
+                updated.lastError = message
+            }
+            return updated
+        }
+    }
+}
+
+/// Outcome of evaluating one watch expression. A plain enum rather than
+/// Swift's `Result` — the failure case is just a display message, not an
+/// `Error`, so there's no reason to require `Error` conformance of it.
+enum WatchEvaluationOutcome: Sendable {
+    case success(DAPEvaluateResult)
+    case failure(String)
+}
+
+/// One transcript entry in the debug console REPL (plan.md item 24) —
+/// the expression the user typed and its evaluated result (or error text).
+struct DebugConsoleEntry: Identifiable, Sendable {
+    let id: UUID = UUID()
+    let expression: String
+    let result: String
+    let isError: Bool
+}
+
 struct LaunchConfig: Identifiable, Codable, Sendable {
     var id: UUID = UUID()
     var type: String       // "lldb", "python", "node-cdp", "chrome", "nextjs"
@@ -152,7 +234,7 @@ extension DBConnection {
 }
 
 enum BottomPanel: String, Sendable, CaseIterable {
-    case terminal, scripts, output, problems, chat, sfcclogs, references
+    case terminal, scripts, output, problems, chat, sfcclogs, references, debugConsole
 }
 
 // MARK: - Language

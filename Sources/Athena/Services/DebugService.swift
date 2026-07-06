@@ -330,6 +330,75 @@ actor DebugService {
         return result
     }
 
+    // MARK: - Evaluate (watch expressions + REPL console, plan.md item 24)
+
+    /// Evaluates an arbitrary expression against a stack frame, following the
+    /// standard DAP `evaluate` request (`{expression, frameId, context}` →
+    /// `{result, type, variablesReference}`) for DAP sessions, or the CDP
+    /// equivalent (`Debugger.evaluateOnCallFrame` when a paused call frame is
+    /// available, else `Runtime.evaluate`) for CDP sessions. `context` is
+    /// DAP's own vocabulary (`"watch"`, `"repl"`, `"hover"`…) — CDP doesn't
+    /// take one, so it's ignored on that path.
+    func evaluate(expression: String, frameId: Int?, context: String) async throws -> DAPEvaluateResult {
+        if isCDP {
+            guard let cdp = cdpClient else { throw DAPError.sessionEnded }
+            let resp: CDPClient.Response
+            if let frameId, frameId < cdpFrames.count,
+               let callFrameId = cdpFrames[frameId]["callFrameId"] as? String {
+                resp = try await cdp.send("Debugger.evaluateOnCallFrame", paramsJSON: cdpJSON([
+                    "callFrameId": callFrameId, "expression": expression, "returnByValue": false
+                ]))
+            } else {
+                resp = try await cdp.send("Runtime.evaluate", paramsJSON: cdpJSON([
+                    "expression": expression, "returnByValue": false
+                ]))
+            }
+            if let message = Self.cdpEvaluateExceptionMessage(resp.json) {
+                throw DAPError.requestFailed(message)
+            }
+            return Self.parseCDPEvaluateResponse(resp.json)
+        }
+        var args: [String: Any] = ["expression": expression, "context": context]
+        if let frameId { args["frameId"] = frameId }
+        let body = try await dapClient.request("evaluate", args: args)
+        return Self.parseDAPEvaluateResponse(body.json)
+    }
+
+    /// Parses a DAP `evaluate` response body. Pure and file-scope testable
+    /// (static members of an actor aren't isolated) without spinning up a
+    /// `DAPClient`/adapter process — mirrors `GitService.parsePorcelainStatus`'s
+    /// "extract the parsing seam" convention.
+    static func parseDAPEvaluateResponse(_ json: [String: Any]) -> DAPEvaluateResult {
+        DAPEvaluateResult(
+            result: json["result"] as? String ?? "",
+            type: json["type"] as? String,
+            variablesReference: json["variablesReference"] as? Int ?? 0
+        )
+    }
+
+    /// Parses a CDP `Debugger.evaluateOnCallFrame`/`Runtime.evaluate` response,
+    /// preferring `result.description` (present for objects/errors) then
+    /// falling back to the raw `value` — matching `fetchVariables`'s existing
+    /// CDP display-string convention.
+    static func parseCDPEvaluateResponse(_ json: [String: Any]) -> DAPEvaluateResult {
+        let result = json["result"] as? [String: Any] ?? [:]
+        let display: String
+        if let desc = result["description"] as? String { display = desc }
+        else if let v = result["value"] { display = "\(v)" }
+        else { display = "undefined" }
+        return DAPEvaluateResult(result: display, type: result["type"] as? String, variablesReference: 0)
+    }
+
+    /// Extracts a human-readable message from a CDP `exceptionDetails` payload,
+    /// or `nil` if the response didn't fail.
+    static func cdpEvaluateExceptionMessage(_ json: [String: Any]) -> String? {
+        guard let exceptionDetails = json["exceptionDetails"] as? [String: Any] else { return nil }
+        if let desc = (exceptionDetails["exception"] as? [String: Any])?["description"] as? String {
+            return desc
+        }
+        return (exceptionDetails["text"] as? String) ?? "Evaluation failed"
+    }
+
     // MARK: - DAP events
 
     private func handleDAPEvent(_ event: [String: Any]) async {

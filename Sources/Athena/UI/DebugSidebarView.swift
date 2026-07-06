@@ -8,6 +8,7 @@ import SwiftUI
 
 struct DebugSidebarView: View {
     @Environment(AppState.self) private var appState
+    @State private var newWatchExpression: String = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -115,6 +116,8 @@ struct DebugSidebarView: View {
                 Divider().padding(.vertical, 4)
                 variablesSection
                 Divider().padding(.vertical, 4)
+                watchSection
+                Divider().padding(.vertical, 4)
                 breakpointsSection
             }
         }
@@ -140,9 +143,14 @@ struct DebugSidebarView: View {
     }
 
     private func frameRow(_ frame: DebugStackFrame) -> some View {
-        let isActive = frame.id == appState.debugStackFrames.first?.id
+        // "Active" here means "topmost frame" (where execution actually
+        // paused, marked with the arrow glyph); "selected" is the frame
+        // watch expressions/the REPL evaluate against — clicking a row
+        // selects it without moving the arrow.
+        let isTop = frame.id == appState.debugStackFrames.first?.id
+        let isSelected = frame.id == (appState.selectedFrameId ?? appState.debugStackFrames.first?.id)
         return HStack(spacing: 6) {
-            if isActive {
+            if isTop {
                 Image(systemName: "arrow.right")
                     .font(.system(size: appState.sf(9)))
                     .foregroundColor(.orange)
@@ -152,7 +160,7 @@ struct DebugSidebarView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(frame.name)
                     .font(.system(size: appState.sf(12)))
-                    .foregroundColor(isActive ? .primary : .secondary)
+                    .foregroundColor(isTop ? .primary : .secondary)
                     .lineLimit(1)
                 if let url = frame.sourceURL {
                     Text("\(url.lastPathComponent):\(frame.line)")
@@ -164,6 +172,11 @@ struct DebugSidebarView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 3)
+        .background(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            Task { await appState.selectStackFrame(frame.id) }
+        }
     }
 
     // MARK: Variables
@@ -207,6 +220,42 @@ struct DebugSidebarView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 2)
+    }
+
+    // MARK: Watch Expressions
+
+    private var watchSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            sectionHeader("WATCH")
+
+            HStack(spacing: 6) {
+                Image(systemName: "plus")
+                    .font(.system(size: appState.sf(10)))
+                    .foregroundColor(.secondary)
+                TextField("Add expression…", text: $newWatchExpression)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: appState.sf(12), design: .monospaced))
+                    .onSubmit {
+                        appState.addWatchExpression(newWatchExpression)
+                        newWatchExpression = ""
+                    }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 3)
+
+            if appState.watchExpressions.isEmpty {
+                Text("No watch expressions.\nType above and press Return to add one.")
+                    .font(.system(size: appState.sf(11)))
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.leading)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 4)
+            } else {
+                ForEach(appState.watchExpressions) { watch in
+                    WatchExpressionRowView(watch: watch)
+                }
+            }
+        }
     }
 
     // MARK: Breakpoints list
@@ -297,5 +346,61 @@ struct DebugSidebarView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 5)
             .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+// MARK: - WatchExpressionRowView
+
+/// One row in the Watch section — expression + its last-evaluated value (or
+/// inline error), with a hover-reveal remove button mirroring `TabItemView`'s
+/// (`TabBarView.swift`) close-button convention.
+private struct WatchExpressionRowView: View {
+    let watch: WatchExpression
+
+    @Environment(AppState.self) private var appState
+    @State private var isHovering: Bool = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(watch.expression)
+                    .font(.system(size: appState.sf(12), design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                if let error = watch.lastError {
+                    Text(error)
+                        .font(.system(size: appState.sf(11)))
+                        .foregroundColor(.red)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                } else {
+                    Text(watch.lastValue ?? "—")
+                        .font(.system(size: appState.sf(12), design: .monospaced))
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+            }
+            Spacer()
+            if isHovering {
+                Button {
+                    appState.removeWatchExpression(watch.id)
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: appState.sf(9), weight: .medium))
+                        .foregroundColor(.secondary)
+                        .frame(width: 14, height: 14)
+                        .background(
+                            Circle()
+                                .fill(Color.primary.opacity(0.1))
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 3)
+        .contentShape(Rectangle())
+        .onHover { isHovering = $0 }
     }
 }
