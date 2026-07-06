@@ -122,7 +122,9 @@ dmg-pretty: bundle
 
 test:
 	@echo "🧪 Running tests…"
-	$(SWIFT_ENV) swift test $(TEST_FLAGS)
+	$(SWIFT_ENV) swift test $(TEST_FLAGS) --skip AthenaFileWatchTests
+	@echo "🧪 Running FileWatchService tests (own process — see AthenaFileWatchTests' header comment)…"
+	$(SWIFT_ENV) swift test $(TEST_FLAGS) --filter AthenaFileWatchTests
 
 # ── Open in Xcode (for GUI archive / notarisation) ────────────────────────────
 

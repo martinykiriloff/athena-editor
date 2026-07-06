@@ -32,5 +32,13 @@ let package = Package(
             name: "AthenaTests",
             dependencies: ["Athena"]
         ),
+        // Kept separate from AthenaTests: FileWatchServiceTests spins up real
+        // DispatchSource/kqueue watches and was flaky when sharing a process
+        // (and its concurrent Task scheduling) with ~200 unrelated tests —
+        // see that file's header comment.
+        .testTarget(
+            name: "AthenaFileWatchTests",
+            dependencies: ["Athena"]
+        ),
     ]
 )
