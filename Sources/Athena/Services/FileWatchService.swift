@@ -58,8 +58,24 @@ actor FileWatchService {
         stopWatchingFile(url)
         guard let watch = makeWatch(at: url, mask: [.write, .delete, .rename]) else { return }
 
-        watch.source.setEventHandler { [weak self] in
-            Task { await self?.handleFileEvent(url) }
+        // `nonisolated(unsafe)`: a stricter Swift 6 SDK's region-isolation
+        // checker flags this closure's `weak self` capture as a "sending"
+        // data-race risk, since `self` is still reachable from this method's
+        // remaining body (`fileWatches[url] = watch` below) after the
+        // closure escapes to `setEventHandler`. That's a false positive for
+        // this specific, well-established weak-self-then-optional-chain
+        // idiom — the actual runtime behavior (unchanged from before) is
+        // safe: the closure only ever touches `self` through `await` inside
+        // a `Task`, which performs a real actor hop. `nonisolated(unsafe)`
+        // is the documented escape hatch for exactly this "checker can't
+        // prove it, but it's manually verified safe" situation, without
+        // restructuring the closure/Task nesting itself (an earlier attempt
+        // to dodge this by moving the capture into the inner `Task` compiled
+        // fine but caused a real "Incorrect actor executor assumption"
+        // runtime crash — this fix deliberately keeps that shape unchanged).
+        nonisolated(unsafe) let watchSelf = self
+        watch.source.setEventHandler { [weak watchSelf] in
+            Task { await watchSelf?.handleFileEvent(url) }
         }
         watch.source.resume()
         fileWatches[url] = watch
@@ -78,8 +94,9 @@ actor FileWatchService {
         stopWatchingDirectory()
         guard let watch = makeWatch(at: url, mask: [.write]) else { return }
 
-        watch.source.setEventHandler { [weak self] in
-            Task { await self?.handleDirectoryEvent(url) }
+        nonisolated(unsafe) let watchSelf = self
+        watch.source.setEventHandler { [weak watchSelf] in
+            Task { await watchSelf?.handleDirectoryEvent(url) }
         }
         watch.source.resume()
         directoryWatch = watch
