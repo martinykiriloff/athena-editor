@@ -26,14 +26,38 @@ actor LSPManager {
     private var servers: [Language: LSPServerProcess] = [:]
     /// Continuation feeding `diagnosticsStream()`; nil until a consumer subscribes.
     private var diagnosticsContinuation: AsyncStream<(URL, [Diagnostic])>.Continuation?
+    /// Cached result of resolving the user's real login-shell `$PATH`; see
+    /// `resolvedUserPath()`. `nil` until first resolved.
+    private var cachedUserPath: String?
+    /// Languages currently mid-`startServer`, i.e. past the first `await` but
+    /// before `servers[language]` is set. `openFile` fires `startServer` from
+    /// an unstructured `Task` per opened file, so restoring several same-
+    /// language tabs on launch calls it concurrently — see `startServer`.
+    private var startingLanguages: Set<Language> = []
 
     // MARK: - Public API
 
     /// Starts a language server for `language` in `workspaceURL` if one is not
     /// already running.  Silently returns when no server executable can be found.
     func startServer(for language: Language, workspaceURL: URL) async throws {
-        guard servers[language] == nil else { return }
-        guard let exec = executablePath(for: language) else { return }
+        // Claiming `language` here, synchronously, before the first `await`,
+        // matters: `executablePath` used to be synchronous, so this whole
+        // prefix ran atomically on the actor with no suspension point before
+        // `servers[language]` was set, and a concurrent second call's
+        // `servers[language] == nil` check would always see the first call's
+        // write. Making `executablePath` async (to resolve the user's real
+        // `$PATH`) introduced a real suspension point *before* that write —
+        // without this guard, two concurrent calls for the same language (as
+        // above) could both pass the nil check, each spawn its own server
+        // process, and the second's `servers[language] = server` would
+        // silently overwrite the first's, orphaning its `initialize` request
+        // continuation forever (observed as a genuine "leaked continuation"
+        // runtime warning once the PATH fix made servers actually start).
+        guard servers[language] == nil, !startingLanguages.contains(language) else { return }
+        startingLanguages.insert(language)
+        defer { startingLanguages.remove(language) }
+
+        guard let exec = await executablePath(for: language) else { return }
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: exec)
@@ -338,22 +362,30 @@ actor LSPManager {
 
     // MARK: - Executable discovery
 
-    private func executablePath(for language: Language) -> String? {
+    /// Fixed install locations are checked first (cheap, no process spawn),
+    /// then the user's real login-shell `$PATH` (see `resolvedUserPath()`) —
+    /// this is what makes a version-manager-installed server (e.g.
+    /// `typescript-language-server` via nvm, living under
+    /// `~/.nvm/versions/node/<version>/bin`) discoverable at all: a
+    /// GUI-launched app only inherits a minimal `PATH`
+    /// (`/usr/bin:/bin:/usr/sbin:/sbin`), which none of nvm/pyenv/rbenv ever
+    /// touch — they only extend `PATH` via shell rc files.
+    private func executablePath(for language: Language) async -> String? {
         switch language {
         case .typescript, .javascript:
-            return firstExecutable(at: [
+            return await firstExecutable(named: "typescript-language-server") ?? firstExecutable(at: [
                 "/usr/local/bin/typescript-language-server",
                 "/opt/homebrew/bin/typescript-language-server",
             ])
         case .python:
-            return firstExecutable(at: ["/usr/local/bin/pylsp"])
+            return await firstExecutable(named: "pylsp") ?? firstExecutable(at: ["/usr/local/bin/pylsp"])
         case .rust:
-            return firstExecutable(at: [
+            return await firstExecutable(named: "rust-analyzer") ?? firstExecutable(at: [
                 "/usr/local/bin/rust-analyzer",
                 (NSHomeDirectory() as NSString).appendingPathComponent(".cargo/bin/rust-analyzer"),
             ])
         case .go:
-            return firstExecutable(at: [
+            return await firstExecutable(named: "gopls") ?? firstExecutable(at: [
                 "/usr/local/bin/gopls",
                 "/opt/homebrew/bin/gopls",
             ])
@@ -373,6 +405,68 @@ actor LSPManager {
 
     private func firstExecutable(at paths: [String]) -> String? {
         paths.first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    /// Searches every directory in the user's resolved `$PATH` for an
+    /// executable named `name`, in order (first match wins, matching shell
+    /// `PATH` lookup semantics).
+    private func firstExecutable(named name: String) async -> String? {
+        let path = await resolvedUserPath()
+        for directory in path.split(separator: ":") {
+            let candidate = (String(directory) as NSString).appendingPathComponent(name)
+            if FileManager.default.isExecutableFile(atPath: candidate) {
+                return candidate
+            }
+        }
+        return nil
+    }
+
+    /// Resolves (and caches for the rest of the app's run) `$PATH` by asking
+    /// the user's login shell for it directly, rather than trusting whatever
+    /// minimal environment this GUI process inherited. `-i -l` sources both
+    /// login startup files (`~/.zprofile`, where Homebrew's `shellenv` line
+    /// typically lives) and interactive ones (`~/.zshrc`, where nvm/pyenv/
+    /// rbenv-style shims are installed) — omitting either misses a whole
+    /// class of real-world installs. The echoed value is wrapped in unique
+    /// markers on their own line because noisy shell startup files (MOTD
+    /// banners, prompt-framework output) can print to stdout before it.
+    private func resolvedUserPath() async -> String {
+        if let cachedUserPath { return cachedUserPath }
+
+        let fallback = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
+        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+
+        let resolved: String? = await withCheckedContinuation { continuation in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: shell)
+            process.arguments = ["-i", "-l", "-c", #"echo "__ATHENA_PATH_START__"; echo "$PATH"; echo "__ATHENA_PATH_END__""#]
+            process.standardInput = FileHandle.nullDevice
+
+            let stdoutPipe = Pipe()
+            process.standardOutput = stdoutPipe
+            process.standardError = Pipe() // discard rc-file noise
+
+            process.terminationHandler = { _ in
+                let data = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+                let lines = String(data: data, encoding: .utf8)?.split(separator: "\n", omittingEmptySubsequences: false) ?? []
+                if let startIndex = lines.firstIndex(of: "__ATHENA_PATH_START__"),
+                   startIndex + 1 < lines.count {
+                    continuation.resume(returning: String(lines[startIndex + 1]))
+                } else {
+                    continuation.resume(returning: nil)
+                }
+            }
+
+            do {
+                try process.run()
+            } catch {
+                continuation.resume(returning: nil)
+            }
+        }
+
+        let path = (resolved?.isEmpty == false) ? resolved! : fallback
+        cachedUserPath = path
+        return path
     }
 
     // MARK: - JSON-RPC message construction
