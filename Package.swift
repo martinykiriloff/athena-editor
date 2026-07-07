@@ -15,6 +15,10 @@ let package = Package(
             url: "https://github.com/migueldeicaza/SwiftTerm",
             .upToNextMajor(from: "1.2.0")
         ),
+        .package(
+            url: "https://github.com/vapor/postgres-nio",
+            .upToNextMajor(from: "1.21.0")
+        ),
     ],
     targets: [
         .executableTarget(
@@ -22,6 +26,7 @@ let package = Package(
             dependencies: [
                 .product(name: "GRDB", package: "GRDB.swift"),
                 .product(name: "SwiftTerm", package: "SwiftTerm"),
+                .product(name: "PostgresNIO", package: "postgres-nio"),
             ],
             path: "Sources/Athena",
             swiftSettings: [

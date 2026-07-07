@@ -9,6 +9,7 @@ struct DBConnectionsView: View {
     @Environment(AppState.self) private var appState
     @State private var showAddSheet = false
     @State private var editingConnection: DBConnection? = nil
+    @State private var browsingConnection: DBConnection? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -33,6 +34,9 @@ struct DBConnectionsView: View {
                     persistConnections()
                 }
             }
+        }
+        .sheet(item: $browsingConnection) { conn in
+            DBDataBrowserView(connection: conn)
         }
         .task { await loadConnections() }
     }
@@ -87,8 +91,19 @@ struct DBConnectionsView: View {
                         Task { try? await appState.keychainService.delete(account: KeychainService.dbPassword(removedID)) }
                         persistConnections()
                     }, onToggle: {
-                        conn.isConnected.toggle()
-                        persistConnections()
+                        if conn.isConnected {
+                            Task { await appState.disconnectDatabase(conn) }
+                        } else {
+                            Task {
+                                await appState.connectAndBrowse(conn)
+                                if appState.dbBrowserConnectionId == conn.id {
+                                    browsingConnection = conn
+                                }
+                                persistConnections()
+                            }
+                        }
+                    }, onBrowse: {
+                        browsingConnection = conn
                     })
                     Divider()
                 }
@@ -136,6 +151,7 @@ private struct DBConnectionRow: View {
     let onEdit: () -> Void
     let onDelete: () -> Void
     let onToggle: () -> Void
+    let onBrowse: () -> Void
     @Environment(AppState.self) private var appState
 
     @State private var isHovered = false
@@ -174,6 +190,9 @@ private struct DBConnectionRow: View {
             if isHovered {
                 HStack(spacing: 2) {
                     IconButton("pencil", help: "Edit", action: onEdit)
+                    if connection.isConnected {
+                        IconButton("tablecells", help: "Browse Data", action: onBrowse)
+                    }
                     IconButton(
                         connection.isConnected ? "stop.fill" : "bolt.fill",
                         help: connection.isConnected ? "Disconnect" : "Connect",

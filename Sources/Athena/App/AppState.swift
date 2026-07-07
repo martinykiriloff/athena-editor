@@ -26,6 +26,7 @@ final class AppState {
     let sfccService: SFCCService
     let fileWatchService: FileWatchService
     let prettierService: PrettierService
+    let postgresService: PostgresService
 
     // MARK: - UI State
 
@@ -86,6 +87,18 @@ final class AppState {
     /// resolution (`EditorTheme.named(_:)`) stays a pure static lookup.
     var customThemes: [EditorTheme] = []
     var dbConnections: [DBConnection] = []
+
+    // MARK: - DB Data Browser
+
+    /// The connection currently shown in the data-browser sheet, `nil` when
+    /// it's closed.
+    var dbBrowserConnectionId: UUID?
+    var dbBrowserTables: [DBTableRef] = []
+    var dbBrowserSelectedTable: DBTableRef?
+    var dbBrowserTableData: DBTableData?
+    var dbBrowserIsLoading: Bool = false
+    var dbBrowserErrorMessage: String?
+
     var sfccConnections: [SFCCConnection] = []
     var sfccAvailableLogs: [String] = []
     var sfccSelectedLog: String = ""
@@ -440,7 +453,8 @@ final class AppState {
         importResolver: ImportResolver = ImportResolver(),
         sfccService: SFCCService = SFCCService(),
         fileWatchService: FileWatchService = FileWatchService(),
-        prettierService: PrettierService = PrettierService()
+        prettierService: PrettierService = PrettierService(),
+        postgresService: PostgresService = PostgresService()
     ) {
         self.fileService = fileService
         self.gitService = gitService
@@ -456,6 +470,7 @@ final class AppState {
         self.sfccService = sfccService
         self.fileWatchService = fileWatchService
         self.prettierService = prettierService
+        self.postgresService = postgresService
 
         // Default to one terminal session at launch — matches the
         // pre-multi-terminal behavior (plan.md item 21 point 4): a user who
@@ -1748,6 +1763,94 @@ final class AppState {
                 sfccLogOffset = next
             }
         } catch { }   // swallow poll errors silently
+    }
+
+    // MARK: - DB Data Browser
+
+    /// Connects to `connection` (PostgreSQL only, for now — `DBType` also
+    /// lists MySQL/MariaDB/Oracle/MongoDB, none of which `PostgresService`
+    /// speaks) and opens the data-browser sheet for it on success.
+    func connectAndBrowse(_ connection: DBConnection) async {
+        guard connection.type == .postgresql else {
+            statusMessage = "\(connection.type.rawValue) browsing isn't supported yet — PostgreSQL only."
+            return
+        }
+
+        dbBrowserErrorMessage = nil
+        dbBrowserIsLoading = true
+        defer { dbBrowserIsLoading = false }
+
+        do {
+            try await postgresService.connect(connection)
+            if let idx = dbConnections.firstIndex(where: { $0.id == connection.id }) {
+                dbConnections[idx].isConnected = true
+            }
+            dbBrowserConnectionId = connection.id
+            dbBrowserTables = try await postgresService.listTables(connection.id)
+            dbBrowserSelectedTable = nil
+            dbBrowserTableData = nil
+        } catch {
+            dbBrowserErrorMessage = error.localizedDescription
+        }
+    }
+
+    /// Disconnects `connection` and, if its data-browser sheet is open,
+    /// closes it.
+    func disconnectDatabase(_ connection: DBConnection) async {
+        await postgresService.disconnect(connection.id)
+        if let idx = dbConnections.firstIndex(where: { $0.id == connection.id }) {
+            dbConnections[idx].isConnected = false
+        }
+        if dbBrowserConnectionId == connection.id {
+            dbBrowserConnectionId = nil
+            dbBrowserTables = []
+            dbBrowserSelectedTable = nil
+            dbBrowserTableData = nil
+        }
+    }
+
+    /// Loads (or reloads) `table`'s rows into `dbBrowserTableData`.
+    func loadDBTableData(_ table: DBTableRef) async {
+        guard let connectionId = dbBrowserConnectionId else { return }
+        dbBrowserErrorMessage = nil
+        dbBrowserIsLoading = true
+        defer { dbBrowserIsLoading = false }
+
+        do {
+            dbBrowserSelectedTable = table
+            dbBrowserTableData = try await postgresService.fetchRows(connectionId, table: table)
+        } catch {
+            dbBrowserErrorMessage = error.localizedDescription
+        }
+    }
+
+    /// Writes one edited cell back to the database, then updates the
+    /// in-memory grid to match on success so the UI doesn't need a full
+    /// re-fetch for a single-cell edit.
+    func updateDBCell(rowId: Int, column: String, newValue: DBValue) async {
+        guard let connectionId = dbBrowserConnectionId,
+              var data = dbBrowserTableData,
+              let rowIndex = data.rows.firstIndex(where: { $0.id == rowId })
+        else { return }
+
+        let primaryKeyColumns = data.columns.filter(\.isPrimaryKey).map(\.name)
+        let primaryKeyValues = Dictionary(uniqueKeysWithValues: primaryKeyColumns.map {
+            ($0, data.rows[rowIndex].values[$0] ?? .null)
+        })
+
+        do {
+            try await postgresService.updateCell(
+                connectionId,
+                table: data.table,
+                column: column,
+                newValue: newValue,
+                primaryKeyValues: primaryKeyValues
+            )
+            data.rows[rowIndex].values[column] = newValue
+            dbBrowserTableData = data
+        } catch {
+            dbBrowserErrorMessage = error.localizedDescription
+        }
     }
 
     /// Refreshes the Git status for the current workspace. Also keeps

@@ -233,6 +233,101 @@ extension DBConnection {
     }
 }
 
+// MARK: - Database browsing
+
+/// A schema-qualified table reference (e.g. `public.users`).
+struct DBTableRef: Identifiable, Sendable, Hashable {
+    var id: String { "\(schema).\(name)" }
+    let schema: String
+    let name: String
+
+    /// Double-quoted, injection-safe form for interpolating into SQL —
+    /// identifiers can't be bound as query parameters, so this is the
+    /// standard SQL escape (embedded `"` doubled) instead.
+    var qualifiedSQL: String {
+        "\(DBTableRef.quoted(schema)).\(DBTableRef.quoted(name))"
+    }
+
+    static func quoted(_ identifier: String) -> String {
+        "\"\(identifier.replacingOccurrences(of: "\"", with: "\"\""))\""
+    }
+}
+
+/// One column's shape, as reported by `information_schema`.
+struct DBColumn: Sendable, Hashable, Identifiable {
+    var id: String { name }
+    let name: String
+    let dataTypeName: String
+    let isPrimaryKey: Bool
+}
+
+/// A single cell's value, decoded from whatever Postgres wire type it came
+/// in as. Kept to a small set of display-friendly cases rather than mirroring
+/// every Postgres type — anything not specifically handled decodes as `.text`
+/// via its string representation, which covers dates/UUIDs/JSON/etc. well
+/// enough for a browsing/editing grid without a type for each of them.
+enum DBValue: Sendable, Hashable {
+    case text(String)
+    case int(Int64)
+    case double(Double)
+    case bool(Bool)
+    case null
+
+    var displayString: String {
+        switch self {
+        case .text(let s):   return s
+        case .int(let i):    return String(i)
+        case .double(let d): return String(d)
+        case .bool(let b):   return b ? "true" : "false"
+        case .null:          return ""
+        }
+    }
+
+    /// Parses freeform edited text back into a `DBValue`, matching
+    /// `original`'s case so e.g. editing an int cell keeps producing `.int`
+    /// rather than silently turning the column into text server-side. Falls
+    /// back to `.text` when the typed value doesn't parse as the original
+    /// type — better to let the database reject an invalid edit than to
+    /// silently store something the user didn't type.
+    static func parsing(_ text: String, matching original: DBValue) -> DBValue {
+        if text.isEmpty { return .null }
+        switch original {
+        case .int:
+            return Int64(text).map(DBValue.int) ?? .text(text)
+        case .double:
+            return Double(text).map(DBValue.double) ?? .text(text)
+        case .bool:
+            switch text.lowercased() {
+            case "true", "t", "1", "yes": return .bool(true)
+            case "false", "f", "0", "no": return .bool(false)
+            default: return .text(text)
+            }
+        case .text, .null:
+            return .text(text)
+        }
+    }
+}
+
+/// One fetched row. `id` is its position in the fetched result set (stable
+/// for the lifetime of one fetch, which is all a `List`/`Table` selection
+/// needs) — not a database identity, since not every table has one.
+struct DBRow: Identifiable, Sendable {
+    let id: Int
+    var values: [String: DBValue]
+}
+
+/// The result of browsing one table: its columns (with primary-key flags,
+/// which gate whether a cell is editable) and the rows fetched for it.
+struct DBTableData: Sendable {
+    let table: DBTableRef
+    let columns: [DBColumn]
+    var rows: [DBRow]
+    /// True once every row of the table was fetched (fewer rows came back
+    /// than the fetch limit) — lets the UI show "showing first N of ..." only
+    /// when it's actually true.
+    let isComplete: Bool
+}
+
 enum BottomPanel: String, Sendable, CaseIterable {
     case terminal, scripts, output, problems, chat, sfcclogs, references, debugConsole
 }
