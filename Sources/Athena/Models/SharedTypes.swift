@@ -516,6 +516,9 @@ struct TerminalSession: Identifiable, Sendable {
     let id: UUID = UUID()
     var title: String
     let shell: String
+    /// The open workspace's root, or `nil` with no workspace open — the
+    /// shell then falls back to its own default (usually `$HOME`).
+    var currentDirectory: String? = nil
 }
 
 extension TerminalSession {

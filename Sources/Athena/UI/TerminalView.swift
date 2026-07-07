@@ -22,7 +22,21 @@ struct TerminalView: NSViewRepresentable {
 
         tv.processDelegate = context.coordinator
 
-        tv.startProcess(executable: session.shell, args: [], environment: nil, execName: nil)
+        // `-i -l`: SwiftTerm's default environment (`Terminal.getEnvironmentVariables`)
+        // deliberately excludes `PATH`, and without `-l` (login) the shell never
+        // sources `~/.zprofile` (where Homebrew's `shellenv` typically lives) or,
+        // without `-i` (interactive), `~/.zshrc` (where nvm/rbenv/pyenv-style
+        // version managers install their shims) — so previously every non-builtin
+        // command failed with "command not found". Passing both makes the shell
+        // resolve its own PATH exactly as a real Terminal.app window would,
+        // independent of whatever minimal environment this process inherited.
+        tv.startProcess(
+            executable: session.shell,
+            args: ["-i", "-l"],
+            environment: nil,
+            execName: nil,
+            currentDirectory: session.currentDirectory
+        )
 
         return tv
     }
@@ -50,14 +64,25 @@ struct TerminalView: NSViewRepresentable {
         nsView.terminate()
     }
 
-    func makeCoordinator() -> Coordinator { Coordinator(shell: session.shell) }
+    func makeCoordinator() -> Coordinator {
+        Coordinator(shell: session.shell, currentDirectory: session.currentDirectory)
+    }
 
     // LocalProcessTerminalViewDelegate predates Swift concurrency — all four methods are nonisolated.
     final class Coordinator: NSObject, LocalProcessTerminalViewDelegate {
         let shell: String
+        let currentDirectory: String?
+        /// Consecutive exec failures (exit code 127 — "command not found",
+        /// what the forked child reports when `execve` itself fails). A
+        /// normal user-initiated `exit` doesn't produce 127, so this only
+        /// trips for a shell that can't launch at all; without it, that case
+        /// retried unconditionally every 0.3s forever with no visible error.
+        private var consecutiveExecFailures = 0
+        private static let maxConsecutiveExecFailures = 3
 
-        init(shell: String) {
+        init(shell: String, currentDirectory: String?) {
             self.shell = shell
+            self.currentDirectory = currentDirectory
         }
 
         func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
@@ -67,10 +92,29 @@ struct TerminalView: NSViewRepresentable {
         func hostCurrentDirectoryUpdate(source: SwiftTerm.TerminalView, directory: String?) {}
 
         func processTerminated(source: SwiftTerm.TerminalView, exitCode: Int32?) {
+            consecutiveExecFailures = exitCode == 127 ? consecutiveExecFailures + 1 : 0
+
+            guard consecutiveExecFailures <= Self.maxConsecutiveExecFailures else {
+                let shell = shell
+                DispatchQueue.main.async {
+                    source.feed(text: "\r\n\u{1b}[31m[Athena] '\(shell)' couldn't be started after "
+                        + "\(Self.maxConsecutiveExecFailures) attempts — check that it's a valid, "
+                        + "executable shell path.\u{1b}[0m\r\n")
+                }
+                return
+            }
+
             let shell = shell
+            let currentDirectory = currentDirectory
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 guard let tv = source as? LocalProcessTerminalView else { return }
-                tv.startProcess(executable: shell, args: [], environment: nil, execName: nil)
+                tv.startProcess(
+                    executable: shell,
+                    args: ["-i", "-l"],
+                    environment: nil,
+                    execName: nil,
+                    currentDirectory: currentDirectory
+                )
             }
         }
     }

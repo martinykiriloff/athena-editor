@@ -2716,7 +2716,7 @@ final class AppState {
         let shellPath = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         let shellName = URL(fileURLWithPath: shellPath).lastPathComponent
         let title = terminalSessionSequence == 1 ? shellName : "\(shellName) \(terminalSessionSequence)"
-        let session = TerminalSession(title: title, shell: shellPath)
+        let session = TerminalSession(title: title, shell: shellPath, currentDirectory: workspace?.rootURL.path)
         terminalSessions.append(session)
         activeTerminalSessionId = session.id
     }
