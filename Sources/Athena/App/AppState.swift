@@ -1065,6 +1065,17 @@ final class AppState {
         do {
             (respData, response) = try await Self.dataWithConnectionRetry(for: req)
         } catch {
+            // Every keystroke cancels the in-flight request and schedules a
+            // new one for the updated cursor position (see EditorView's
+            // ghostDebounce). If a request was already waiting on Ollama's
+            // reply when the next keystroke landed, Swift's URLSession
+            // async/await bridge cancels that in-flight task automatically,
+            // surfacing as URLError.cancelled — routine debounce behavior,
+            // not a connectivity failure. Don't scare the user with
+            // "unreachable" for a request Athena itself tore down.
+            if let urlError = error as? URLError, urlError.code == .cancelled {
+                return nil
+            }
             statusMessage = "Ollama unreachable at \(base): \(error.localizedDescription)"
             return nil
         }
