@@ -590,9 +590,20 @@ actor LSPManager {
     /// unblocks the read with EOF, exactly as it did when this loop ran
     /// inside a `Task`.
     private func startReadingLoop(for language: Language, process: Process, stdoutHandle: FileHandle) {
-        let thread = Thread { [weak self] in
+        // Captures `self` strongly, not weakly: LSPManager is a permanent
+        // singleton owned by AppState for the app's entire lifetime (never
+        // deallocated before process exit — same reasoning already applied
+        // to the actor self-captures in ClaudeCLIService/ClaudeService), so
+        // there's no dangling-self risk to guard against. A `weak self`
+        // capture here is also what a stricter toolchain flags as "passing
+        // closure as a 'sending' parameter risks causing data races" — the
+        // weak reference's synthesized mutable backing storage, threaded
+        // through the nested `onMessage` closure into a `Task`, reads as a
+        // shared mutable capture crossing an isolation boundary. A plain
+        // strong capture of an actor (inherently Sendable) sidesteps that.
+        let thread = Thread { [self] in
             Self.readFramedMessages(from: stdoutHandle) { bodyData in
-                Task { await self?.handleIncomingMessage(bodyData, language: language, process: process) }
+                Task { await self.handleIncomingMessage(bodyData, language: language, process: process) }
             }
         }
         thread.name = "LSPManager.readLoop.\(language.rawValue)"
