@@ -30,6 +30,8 @@ final class UpdateService {
     /// The version string being downloaded / installed, for UI display.
     private(set) var pendingVersion: String?
 
+    @ObservationIgnored private var autoCheckTask: Task<Void, Never>?
+
     var updateAvailable: Bool {
         switch state {
         case .available, .downloading, .readyToInstall: return true
@@ -38,6 +40,21 @@ final class UpdateService {
     }
 
     // MARK: - Public API
+
+    /// Schedules a one-time, delayed update check owned by this service —
+    /// not by any SwiftUI view's `.task`, whose lifetime is tied to that
+    /// view's identity/presence and can cancel + deallocate the task out
+    /// from under a suspended continuation (observed as a `swift_task_dealloc`
+    /// abort when a window's own state changed mid-sleep). Idempotent —
+    /// call once at app launch.
+    func scheduleAutoCheck(after delay: Duration = .seconds(5)) {
+        guard autoCheckTask == nil else { return }
+        autoCheckTask = Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled else { return }
+            await self?.checkForUpdates()
+        }
+    }
 
     func checkForUpdates() async {
         state = .checking

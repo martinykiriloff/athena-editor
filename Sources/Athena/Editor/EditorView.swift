@@ -162,6 +162,7 @@ struct EditorView: NSViewRepresentable {
         gutter.diagnostics = Self.gutterDiagnosticSeverities(from: diagnostics)
         gutter.gitLineChanges = gitLineChanges
         gutter.theme = theme
+        gutter.fontSize = fontSize
         scrollView.verticalRulerView = gutter
         scrollView.hasVerticalRuler  = true
         scrollView.rulersVisible     = true
@@ -318,6 +319,7 @@ struct EditorView: NSViewRepresentable {
             coord.currentFontFamily    = fontFamily
             coord.currentFontLigatures = fontLigatures
             coord.currentLineHeight    = lineHeight
+            coord.gutterView?.fontSize = fontSize
         }
 
         if themeChanged || langChanged || fontChanged {

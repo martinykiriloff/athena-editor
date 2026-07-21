@@ -43,16 +43,33 @@ final class GutterView: NSRulerView {
     private var pendingConflictRegion: ConflictRegion?
 
     // Visual constants
-    private let gutterWidth:    CGFloat = 52
+    private let baseGutterWidth: CGFloat = 52
+    private let baseFontSize:    CGFloat = 11
     private let dotRadius:      CGFloat = 5
     private let changeBarWidth: CGFloat = 3    // git change bar — absolute left edge
     private let diagDotRadius:  CGFloat = 2.5  // small, left-edge — clear of the change bar
     private let numberRightPad: CGFloat = 22  // space for the dot column
 
-    private let numberAttrs: [NSAttributedString.Key: Any] = [
-        .font:            NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular),
-        .foregroundColor: NSColor(white: 0.45, alpha: 1)
-    ]
+    /// Mirrors the editor's own zoom level (`AppState.editorFontSize`) so the
+    /// line numbers scale with the code instead of staying a fixed tiny size
+    /// next to zoomed-in text. Set by `EditorView` alongside `theme`.
+    var fontSize: CGFloat = 11 {
+        didSet {
+            guard fontSize != oldValue else { return }
+            ruleThickness = gutterWidth
+            scrollView?.tile()
+            needsDisplay = true
+        }
+    }
+
+    private var gutterWidth: CGFloat { (baseGutterWidth * fontSize / baseFontSize).rounded() }
+
+    private var numberAttrs: [NSAttributedString.Key: Any] {
+        [
+            .font:            NSFont.monospacedDigitSystemFont(ofSize: fontSize, weight: .regular),
+            .foregroundColor: NSColor(white: 0.45, alpha: 1)
+        ]
+    }
 
     // MARK: - Init
 

@@ -28,9 +28,9 @@ struct AthenaApp: App {
                     appState.startFileWatchConsumer()
                     await appState.restoreLastWorkspace()
                     await appState.installKeyMonitor()
-                    // Auto-check for updates a few seconds after launch.
-                    try? await Task.sleep(for: .seconds(5))
-                    await updateService.checkForUpdates()
+                    // Owned by updateService, not this view's .task — see
+                    // scheduleAutoCheck's doc comment.
+                    updateService.scheduleAutoCheck()
                 }
         }
         .windowStyle(.hiddenTitleBar)
