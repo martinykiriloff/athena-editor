@@ -308,7 +308,7 @@ struct SettingsView: View {
                     HStack {
                         Text("Endpoint")
                         Spacer()
-                        TextField("http://localhost:11434", text: Bindable(appState).ollamaEndpoint)
+                        TextField("http://127.0.0.1:11434", text: Bindable(appState).ollamaEndpoint)
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 220)
                             .onChange(of: appState.ollamaEndpoint) { _, v in

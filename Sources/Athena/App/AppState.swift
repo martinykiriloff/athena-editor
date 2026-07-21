@@ -122,7 +122,12 @@ final class AppState {
     let drizzleService: DrizzleCompletionService = DrizzleCompletionService()
     var claudeAPIKey: String = ""
     var ghostTextProvider: GhostTextProvider = .none
-    static let defaultOllamaEndpoint = "http://localhost:11434"
+    // 127.0.0.1, not "localhost": Ollama binds IPv4 only, but "localhost"
+    // resolves to the IPv6 loopback (::1) first on many Macs — URLSession
+    // hard-fails on that refused IPv6 attempt instead of falling back to
+    // IPv4 the way curl does, surfacing as "Ollama unreachable" even though
+    // the server is healthy and reachable. Skipping DNS entirely avoids it.
+    static let defaultOllamaEndpoint = "http://127.0.0.1:11434"
     static let defaultOllamaModel    = "qwen2.5-coder:7b"
     var ollamaEndpoint:    String = defaultOllamaEndpoint
     var ollamaModel:       String = defaultOllamaModel
