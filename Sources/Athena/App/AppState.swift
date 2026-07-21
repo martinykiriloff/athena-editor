@@ -555,7 +555,16 @@ final class AppState {
             // opening itself stays instant.
             if let workspace {
                 Task {
-                    try? await self.lspManager.startServer(for: language, workspaceURL: workspace.rootURL)
+                    do {
+                        try await self.lspManager.startServer(for: language, workspaceURL: workspace.rootURL)
+                    } catch {
+                        // A silently-swallowed failure here is exactly how a
+                        // real regression (a missing `process.run()` in
+                        // LSPManager.startServer) shipped across several
+                        // releases with completions/hover/etc. completely
+                        // dead and nothing to show for it — surface it.
+                        self.statusMessage = "Couldn't start \(language.rawValue) language server: \(error.localizedDescription)"
+                    }
                     await self.lspManager.didOpen(fileURL: url, content: content)
                 }
             }

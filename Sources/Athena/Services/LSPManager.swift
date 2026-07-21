@@ -81,6 +81,8 @@ actor LSPManager {
             Task { await self?.handleServerTermination(for: language, process: terminatedProcess) }
         }
 
+        try process.run()
+
         let server = LSPServerProcess(
             process: process,
             stdinHandle: stdinPipe.fileHandleForWriting,
