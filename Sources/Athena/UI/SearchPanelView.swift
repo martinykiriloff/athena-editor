@@ -319,7 +319,8 @@ struct SearchPanelView: View {
     private func scheduleDebounce() {
         debounceTask?.cancel()
         debounceTask = Task {
-            try? await Task.sleep(for: .milliseconds(300))
+            let clock = ContinuousClock()
+            try? await clock.sleep(until: clock.now.advanced(by: .milliseconds(300)))
             guard !Task.isCancelled else { return }
             triggerSearch()
         }

@@ -854,7 +854,8 @@ extension EditorView {
             hoverController.dismiss()
             hoverPendingCharIndex = charIndex
             hoverDebounce = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 500_000_000)  // 500 ms
+                let clock = ContinuousClock()
+                try? await clock.sleep(until: clock.now.advanced(by: .milliseconds(500)))
                 guard !Task.isCancelled, let self else { return }
                 await self.triggerHover(at: charIndex)
             }
@@ -1508,12 +1509,14 @@ extension EditorView {
             cancelHover()
 
             completionDebounce = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 150_000_000)  // 150 ms
+                let clock = ContinuousClock()
+                try? await clock.sleep(until: clock.now.advanced(by: .milliseconds(150)))
                 guard !Task.isCancelled, let self else { return }
                 await self.triggerCompletion()
             }
             ghostDebounce = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 700_000_000)  // 700 ms
+                let clock = ContinuousClock()
+                try? await clock.sleep(until: clock.now.advanced(by: .milliseconds(700)))
                 guard !Task.isCancelled, let self else { return }
                 await self.triggerGhostText()
             }

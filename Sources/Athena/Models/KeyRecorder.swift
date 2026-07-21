@@ -2,10 +2,9 @@
 
 @preconcurrency import AppKit
 
-// @unchecked Sendable is safe: all access happens on the main thread.
 @Observable
 @MainActor
-final class KeyRecorder: @unchecked Sendable {
+final class KeyRecorder {
 
     var recordingFor: KeyAction? = nil
 

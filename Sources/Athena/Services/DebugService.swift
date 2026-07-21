@@ -8,11 +8,14 @@ import Foundation
 
 actor DebugService {
 
-    // Callbacks stored as nonisolated(unsafe) so they can be called without
-    // crossing actor isolation into a MainActor.run {} closure.
-    nonisolated(unsafe) private var cbStateChange: ((DebugState) -> Void)?
-    nonisolated(unsafe) private var cbOutput:      ((String) -> Void)?
-    nonisolated(unsafe) private var cbStopped:     ((DebugStop) -> Void)?
+    // Every read/write of these three happens from DebugService's own
+    // actor-isolated methods (the MainActor hop already happens inside the
+    // wrapped closure itself, via `Task { @MainActor in ... }` in
+    // `setCallbacks` below) — plain actor-isolated storage, no
+    // `nonisolated(unsafe)` needed.
+    private var cbStateChange: ((DebugState) -> Void)?
+    private var cbOutput:      ((String) -> Void)?
+    private var cbStopped:     ((DebugStop) -> Void)?
 
     // DAP session (Swift / Python)
     private let dapClient = DAPClient()

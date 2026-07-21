@@ -6,6 +6,7 @@
 import SwiftUI
 import AppKit
 import SwiftTerm
+import Synchronization
 
 struct TerminalView: NSViewRepresentable {
     let session: TerminalSession
@@ -58,8 +59,11 @@ struct TerminalView: NSViewRepresentable {
     /// orphaned background process for the rest of the app's run. Detaching
     /// the delegate first ensures the resulting exit event can't reach
     /// `Coordinator.processTerminated` and auto-restart a shell for a tab
-    /// that's already gone.
+    /// that's already gone. Also cancels any exec-failure retry already
+    /// scheduled by a previous `processTerminated` call — see
+    /// `Coordinator.pendingRetry`.
     static func dismantleNSView(_ nsView: LocalProcessTerminalView, coordinator: Coordinator) {
+        coordinator.cancelPendingRetry()
         nsView.processDelegate = nil
         nsView.terminate()
     }
@@ -79,10 +83,33 @@ struct TerminalView: NSViewRepresentable {
         /// retried unconditionally every 0.3s forever with no visible error.
         private var consecutiveExecFailures = 0
         private static let maxConsecutiveExecFailures = 3
+        /// Advanced by `cancelPendingRetry()` and by every `processTerminated`
+        /// call. A scheduled retry/feed closure captures the generation it
+        /// was created under and compares against the current value when it
+        /// finally runs; a mismatch means the coordinator moved on (the tab
+        /// was closed, or another failure superseded it) since it was
+        /// scheduled, so it no-ops instead of touching a torn-down view.
+        /// `dismantleNSView` runs synchronously (nils the delegate, then
+        /// calls `terminate()`) but neither of those cancels an
+        /// already-scheduled `asyncAfter` block — without this, closing a
+        /// tab within 0.3s of its shell failing to exec let the retry fire
+        /// afterward and call `startProcess` on a `LocalProcessTerminalView`
+        /// that had already been torn down. A dedicated `Sendable` token
+        /// (rather than a plain `var` read through `self`) because SwiftTerm
+        /// calls `processTerminated` from an undocumented, possibly
+        /// background thread — `Coordinator` itself is neither `Sendable`
+        /// nor actor-isolated, so Swift 6 correctly refuses to let it be
+        /// captured into the `DispatchQueue.main` closures below, which run
+        /// in an inferred main-actor context.
+        private let retryGeneration = RetryGeneration()
 
         init(shell: String, currentDirectory: String?) {
             self.shell = shell
             self.currentDirectory = currentDirectory
+        }
+
+        func cancelPendingRetry() {
+            retryGeneration.advance()
         }
 
         func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
@@ -93,11 +120,14 @@ struct TerminalView: NSViewRepresentable {
 
         func processTerminated(source: SwiftTerm.TerminalView, exitCode: Int32?) {
             consecutiveExecFailures = exitCode == 127 ? consecutiveExecFailures + 1 : 0
+            let generation = retryGeneration.advance()
+            let token = retryGeneration
 
             guard consecutiveExecFailures <= Self.maxConsecutiveExecFailures else {
                 let shell = shell
-                DispatchQueue.main.async {
-                    source.feed(text: "\r\n\u{1b}[31m[Athena] '\(shell)' couldn't be started after "
+                DispatchQueue.main.async { [weak source] in
+                    guard token.isCurrent(generation) else { return }
+                    source?.feed(text: "\r\n\u{1b}[31m[Athena] '\(shell)' couldn't be started after "
                         + "\(Self.maxConsecutiveExecFailures) attempts — check that it's a valid, "
                         + "executable shell path.\u{1b}[0m\r\n")
                 }
@@ -106,7 +136,8 @@ struct TerminalView: NSViewRepresentable {
 
             let shell = shell
             let currentDirectory = currentDirectory
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak source] in
+                guard token.isCurrent(generation) else { return }
                 guard let tv = source as? LocalProcessTerminalView else { return }
                 tv.startProcess(
                     executable: shell,
@@ -117,5 +148,27 @@ struct TerminalView: NSViewRepresentable {
                 )
             }
         }
+    }
+}
+
+/// Thread-safe generation counter shared between a `TerminalView.Coordinator`
+/// and its scheduled exec-failure retry/feed closures — see
+/// `Coordinator.retryGeneration`. Genuinely `Sendable` (no `@unchecked`
+/// needed): its only state is an `Atomic<Int>`, which is safe to mutate
+/// concurrently by construction.
+private final class RetryGeneration: Sendable {
+    private let value = Atomic<Int>(0)
+
+    /// Invalidates any generation captured before this call and returns the
+    /// new current generation.
+    @discardableResult
+    func advance() -> Int {
+        let next = value.load(ordering: .relaxed) + 1
+        value.store(next, ordering: .relaxed)
+        return next
+    }
+
+    func isCurrent(_ generation: Int) -> Bool {
+        value.load(ordering: .relaxed) == generation
     }
 }

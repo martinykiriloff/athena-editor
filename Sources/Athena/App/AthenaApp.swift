@@ -11,6 +11,19 @@ struct AthenaApp: App {
     @State private var appState     = AppState()
     @State private var updateService = UpdateService()
 
+    init() {
+        // Athena writes to the stdin pipe of several subprocesses it owns
+        // (language servers in LSPManager, the debug adapter in DAPClient,
+        // prettier in PrettierService). If one of those dies while a write
+        // is still queued, the kernel delivers SIGPIPE — whose default
+        // disposition terminates this process outright, bypassing Swift
+        // error handling entirely (`try?` around the write can't catch a
+        // signal). Every other Process/Pipe-heavy tool (Node.js included)
+        // ignores SIGPIPE globally for exactly this reason; the write call
+        // still surfaces a normal EPIPE error instead of killing the app.
+        signal(SIGPIPE, SIG_IGN)
+    }
+
     var body: some Scene {
         // MARK: - Main editor window
 

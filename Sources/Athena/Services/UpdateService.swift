@@ -43,14 +43,19 @@ final class UpdateService {
 
     /// Schedules a one-time, delayed update check owned by this service —
     /// not by any SwiftUI view's `.task`, whose lifetime is tied to that
-    /// view's identity/presence and can cancel + deallocate the task out
-    /// from under a suspended continuation (observed as a `swift_task_dealloc`
-    /// abort when a window's own state changed mid-sleep). Idempotent —
-    /// call once at app launch.
+    /// view's identity/presence. Idempotent — call once at app launch.
+    ///
+    /// Sleeps via a `ContinuousClock` instance rather than `Task.sleep(for:)`:
+    /// the latter is generic over `Clock`, and on non-assertions release
+    /// toolchains (Swift 6.2–6.2.3, exactly what ships in a notarized build)
+    /// colliding specializations of it across modules corrupt the task
+    /// allocator on deallocation, aborting with `swift_task_dealloc`
+    /// (see https://github.com/swiftlang/swift/issues/86204).
     func scheduleAutoCheck(after delay: Duration = .seconds(5)) {
         guard autoCheckTask == nil else { return }
         autoCheckTask = Task { [weak self] in
-            try? await Task.sleep(for: delay)
+            let clock = ContinuousClock()
+            try? await clock.sleep(until: clock.now.advanced(by: delay))
             guard !Task.isCancelled else { return }
             await self?.checkForUpdates()
         }
@@ -91,7 +96,9 @@ final class UpdateService {
             // Save all open files before we quit.
             NotificationCenter.default.post(name: .athenaSaveAll, object: nil)
             // Give saves a moment to flush, then replace and relaunch.
-            try? await Task.sleep(for: .seconds(2))
+            // ContinuousClock, not Task.sleep(for:) — see scheduleAutoCheck's doc comment.
+            let clock = ContinuousClock()
+            try? await clock.sleep(until: clock.now.advanced(by: .seconds(2)))
             installAndRelaunch(newAppURL: appURL)
         } catch {
             state = .error(error.localizedDescription)

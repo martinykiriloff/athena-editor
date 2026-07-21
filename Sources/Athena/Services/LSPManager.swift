@@ -69,7 +69,17 @@ actor LSPManager {
         process.standardOutput = stdoutPipe
         process.standardError  = Pipe() // discard stderr
 
-        try process.run()
+        // Without this, a crashed/killed server (or one that never replies to
+        // `shutdown`) leaves `servers[language]` pointing at a dead process
+        // forever: every in-flight request's continuation leaks (never
+        // resumes — the caller hangs), and every future `sendRequest` call
+        // writes to a closed pipe and then hangs the same way waiting for a
+        // reply that will never come. `handleServerTermination` drains
+        // `pending` with an error and clears the entry so callers fail fast
+        // instead of hanging, and a later `startServer` can restart cleanly.
+        process.terminationHandler = { [weak self] terminatedProcess in
+            Task { await self?.handleServerTermination(for: language, process: terminatedProcess) }
+        }
 
         let server = LSPServerProcess(
             process: process,
@@ -101,7 +111,7 @@ actor LSPManager {
         sendNotification(method: "initialized", params: [:], language: language)
 
         // Start background reader
-        startReadingLoop(for: language)
+        startReadingLoop(for: language, process: process, stdoutHandle: server.stdoutHandle)
     }
 
     /// Shuts down and terminates the language server for `language`.
@@ -113,6 +123,23 @@ actor LSPManager {
         sendNotification(method: "exit", params: [:], language: language)
 
         servers[language]?.process.terminate()
+        servers[language] = nil
+    }
+
+    /// Cleans up after `process` (the language server for `language`) exits —
+    /// whether it crashed, was killed externally, or was terminated by
+    /// `stopServer` itself — draining any still-pending request
+    /// continuations with an error instead of leaking them, so a caller
+    /// awaiting `hover`/`complete`/`rename`/etc. never hangs forever on a
+    /// server that will never reply. Only touches `servers[language]` if it
+    /// still refers to this exact process — guards against clobbering a
+    /// newer server already restarted for the same language in the window
+    /// between this process dying and this handler running on the actor.
+    private func handleServerTermination(for language: Language, process: Process) {
+        guard let server = servers[language], server.process === process else { return }
+        for continuation in server.pending.values {
+            continuation.resume(throwing: LSPError.serverTerminated(language))
+        }
         servers[language] = nil
     }
 
@@ -544,45 +571,74 @@ actor LSPManager {
 
     // MARK: - Background response reading
 
-    /// Spawns an unstructured Task that continuously reads LSP framed messages
-    /// from the server's stdout and fulfils pending continuations.
-    private func startReadingLoop(for language: Language) {
-        // Capture only what we need as value types so the closure is Sendable.
-        Task {
-            await self.readLoop(language: language)
+    /// Starts a dedicated background `Thread` that continuously reads LSP
+    /// framed messages from the server's stdout and hands each one back to
+    /// the actor to fulfil pending continuations.
+    ///
+    /// This runs on a plain `Thread`, not a `Task` on Swift's shared
+    /// cooperative thread pool, because `readFramedMessages` blocks on
+    /// `FileHandle.readData(ofLength:)` — every other Process-based service
+    /// in this codebase (`DAPClient`, `CDPClient`, `DebugService`'s CDP
+    /// path) instead uses a non-blocking `readabilityHandler` precisely to
+    /// avoid tying up a cooperative-pool worker for the process's entire
+    /// lifetime. With several language servers running at once, blocking
+    /// reads directly inside a `Task` could starve that shared, size-limited
+    /// pool for every other actor/Task in the process; a dedicated thread
+    /// blocks only itself. The thread exits naturally once `readData`
+    /// returns empty — when the process dies (crash, external kill, or
+    /// `stopServer`'s own `.terminate()`) its stdout write end closes and
+    /// unblocks the read with EOF, exactly as it did when this loop ran
+    /// inside a `Task`.
+    private func startReadingLoop(for language: Language, process: Process, stdoutHandle: FileHandle) {
+        let thread = Thread { [weak self] in
+            Self.readFramedMessages(from: stdoutHandle) { bodyData in
+                Task { await self?.handleIncomingMessage(bodyData, language: language, process: process) }
+            }
+        }
+        thread.name = "LSPManager.readLoop.\(language.rawValue)"
+        thread.stackSize = 256 * 1024
+        thread.start()
+    }
+
+    /// Parses one complete JSON-RPC message and dispatches it — resolves the
+    /// matching pending continuation for a response, or hands a
+    /// server-initiated notification to `handleNotification`. Only touches
+    /// `servers[language]` if it still refers to `process` — guards against
+    /// a stray trailing message from an old, already-replaced server
+    /// generation being misdelivered to a newer one restarted for the same
+    /// language (both would otherwise share the same `id` numbering, since
+    /// each `LSPServerProcess.nextId` restarts at 1).
+    private func handleIncomingMessage(_ bodyData: Data, language: Language, process: Process) {
+        guard let server = servers[language], server.process === process else { return }
+        guard let json = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any] else { return }
+
+        if let id = json["id"] as? Int {
+            // Resolve the pending continuation for a request response.
+            server.pending[id]?.resume(returning: bodyData)
+            servers[language]?.pending.removeValue(forKey: id)
+        } else if let method = json["method"] as? String {
+            // Server-initiated notification (no "id" field).
+            handleNotification(method: method, params: json["params"] as? [String: Any])
         }
     }
 
-    private func readLoop(language: Language) async {
-        while !Task.isCancelled {
-            guard let server = servers[language] else { break }
-
-            // Read the header line(s) — "Content-Length: N\r\n\r\n"
-            guard let length = readContentLength(from: server.stdoutHandle) else { break }
-
-            // Read exactly `length` bytes of JSON body
-            let bodyData = server.stdoutHandle.readData(ofLength: length)
+    /// Reads LSP-framed (`"Content-Length: N\r\n\r\n"` + body) messages from
+    /// `handle` until EOF — the process died or its stdout closed — invoking
+    /// `onMessage` with each message's raw JSON body. Blocks the calling
+    /// thread for as long as the server runs; callers must invoke this from
+    /// a dedicated background `Thread`, never from Swift's cooperative pool.
+    private static func readFramedMessages(from handle: FileHandle, onMessage: (Data) -> Void) {
+        while true {
+            guard let length = readContentLength(from: handle) else { break }
+            let bodyData = handle.readData(ofLength: length)
             guard !bodyData.isEmpty else { break }
-
-            if let json = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any] {
-                if let id = json["id"] as? Int {
-                    // Resolve the pending continuation for a request response.
-                    servers[language]?.pending[id]?.resume(returning: bodyData)
-                    servers[language]?.pending.removeValue(forKey: id)
-                } else if let method = json["method"] as? String {
-                    // Server-initiated notification (no "id" field).
-                    handleNotification(method: method, params: json["params"] as? [String: Any])
-                }
-            }
-
-            // Yield to avoid starving other tasks on the cooperative executor
-            await Task.yield()
+            onMessage(bodyData)
         }
     }
 
     /// Reads bytes from `handle` until the blank line terminating LSP headers is
     /// found, then parses and returns the `Content-Length` value.
-    private func readContentLength(from handle: FileHandle) -> Int? {
+    private static func readContentLength(from handle: FileHandle) -> Int? {
         var headerData = Data()
         // Read byte-by-byte until we see \r\n\r\n
         while true {
@@ -914,6 +970,7 @@ actor LSPManager {
 
 private enum LSPError: Error {
     case serverNotRunning(Language)
+    case serverTerminated(Language)
 }
 
 // MARK: - Data convenience

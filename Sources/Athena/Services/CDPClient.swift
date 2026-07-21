@@ -160,7 +160,8 @@ actor CDPClient {
                    let wsStr = t["webSocketDebuggerUrl"] as? String,
                    let wsURL = URL(string: wsStr) { return wsURL }
             }
-            try await Task.sleep(nanoseconds: 500_000_000)
+            let clock = ContinuousClock()
+            try await clock.sleep(until: clock.now.advanced(by: .milliseconds(500)))
         }
         throw CDPError.noTarget(port: port)
     }

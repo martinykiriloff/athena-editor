@@ -122,8 +122,10 @@ final class AppState {
     let drizzleService: DrizzleCompletionService = DrizzleCompletionService()
     var claudeAPIKey: String = ""
     var ghostTextProvider: GhostTextProvider = .none
-    var ollamaEndpoint:    String = "http://localhost:11434"
-    var ollamaModel:       String = "qwen2.5-coder:7b"
+    static let defaultOllamaEndpoint = "http://localhost:11434"
+    static let defaultOllamaModel    = "qwen2.5-coder:7b"
+    var ollamaEndpoint:    String = defaultOllamaEndpoint
+    var ollamaModel:       String = defaultOllamaModel
 
     // MARK: - NPM Scripts
     var npmPackages: [NPMPackageInfo] = []
@@ -723,7 +725,8 @@ final class AppState {
     private func scheduleDocumentSymbolsRefresh(tabId: UUID, fileURL: URL) {
         documentSymbolsRefreshTask?.cancel()
         documentSymbolsRefreshTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 800_000_000)
+            let clock = ContinuousClock()
+            try? await clock.sleep(until: clock.now.advanced(by: .nanoseconds(800_000_000)))
             guard !Task.isCancelled, let self else { return }
             guard let symbols = try? await self.lspManager.documentSymbols(fileURL: fileURL) else { return }
             guard !Task.isCancelled, self.focusedTab?.id == tabId else { return }
@@ -756,7 +759,8 @@ final class AppState {
     private func scheduleGitLineChangesRefresh(tabId: UUID, fileURL: URL) {
         gitLineChangesRefreshTask?.cancel()
         gitLineChangesRefreshTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 800_000_000)
+            let clock = ContinuousClock()
+            try? await clock.sleep(until: clock.now.advanced(by: .nanoseconds(800_000_000)))
             guard !Task.isCancelled, let self else { return }
             guard let changes = await self.computeGitLineChanges(for: fileURL) else { return }
             guard !Task.isCancelled,
@@ -873,11 +877,20 @@ final class AppState {
 
         // Ghost text / predictive completion provider
         async let gtp = settingsService.value(for: "ghostTextProvider", default: "none")
-        async let oep = settingsService.value(for: "ollamaEndpoint",    default: "http://localhost:11434")
-        async let om  = settingsService.value(for: "ollamaModel",       default: "qwen2.5-coder:7b")
+        async let oep = settingsService.value(for: "ollamaEndpoint",    default: Self.defaultOllamaEndpoint)
+        async let om  = settingsService.value(for: "ollamaModel",       default: Self.defaultOllamaModel)
         ghostTextProvider = GhostTextProvider(rawValue: await gtp) ?? .none
-        ollamaEndpoint    = await oep
-        ollamaModel       = await om
+        // An empty string is a valid `Codable` decode, not a missing key, so
+        // a field a user cleared in Settings (the placeholder text is only a
+        // visual hint — SwiftUI doesn't fall back to it) persists as `""`
+        // rather than falling through to `settingsService`'s `default:`.
+        // Treat it the same as "unset" here so Settings displays, and
+        // `requestOllamaInlineCompletion` sends, the real default instead of
+        // building a host-less URL that fails as "unsupported URL".
+        let loadedEndpoint = await oep
+        let loadedModel    = await om
+        ollamaEndpoint = loadedEndpoint.isEmpty ? Self.defaultOllamaEndpoint : loadedEndpoint
+        ollamaModel    = loadedModel.isEmpty    ? Self.defaultOllamaModel    : loadedModel
 
         // Claude API key (shared with chat) — stored in the Keychain
         await loadClaudeAPIKey()
@@ -1010,7 +1023,14 @@ final class AppState {
     }
 
     private func requestOllamaInlineCompletion(prefix: String, suffix: String) async -> String? {
-        let base = ollamaEndpoint.hasSuffix("/") ? String(ollamaEndpoint.dropLast()) : ollamaEndpoint
+        // A field cleared in Settings persists as `""`, not "unset" (see
+        // `loadSettings`'s doc comment) — fall back to the real default here
+        // too, so a value that somehow ends up empty mid-session (without a
+        // relaunch to re-trigger that self-heal) still resolves to a usable
+        // endpoint instead of building a host-less URL.
+        let endpoint = ollamaEndpoint.isEmpty ? Self.defaultOllamaEndpoint : ollamaEndpoint
+        let model    = ollamaModel.isEmpty    ? Self.defaultOllamaModel    : ollamaModel
+        let base = endpoint.hasSuffix("/") ? String(endpoint.dropLast()) : endpoint
         // Use the native generate endpoint with fill-in-middle: it returns ONLY the
         // continuation rather than echoing the prompt back (which chat models do).
         guard let url = URL(string: "\(base)/api/generate") else { return nil }
@@ -1019,7 +1039,7 @@ final class AppState {
         // support insert"), so we send prompt-only and strip the echoed prefix below.
         let promptHead = String(prefix.suffix(2000))
         let body: [String: Any] = [
-            "model":  ollamaModel,
+            "model":  model,
             "prompt": promptHead,
             "stream": false,
             "options": [
@@ -1046,7 +1066,7 @@ final class AppState {
 
         if let http = response as? HTTPURLResponse, http.statusCode != 200 {
             let detail = String(data: respData, encoding: .utf8)?.prefix(200) ?? ""
-            statusMessage = "Ollama error \(http.statusCode) (model \(ollamaModel)): \(detail)"
+            statusMessage = "Ollama error \(http.statusCode) (model \(model)): \(detail)"
             return nil
         }
 
@@ -1072,7 +1092,12 @@ final class AppState {
             do {
                 return try await URLSession.shared.data(for: req)
             } catch let error as URLError where Self.isTransientConnectionError(error) {
-                try await Task.sleep(for: delay)
+                // ContinuousClock, not Task.sleep(for:) — avoids a Swift 6.2
+                // release-toolchain crash in swift_task_dealloc from colliding
+                // cross-module Task.sleep(for:) specializations
+                // (https://github.com/swiftlang/swift/issues/86204).
+                let clock = ContinuousClock()
+                try await clock.sleep(until: clock.now.advanced(by: delay))
                 delay *= 2
             }
         }
@@ -1739,9 +1764,10 @@ final class AppState {
         if sfccAvailableLogs.isEmpty { await refreshSFCCLogs(for: conn) }
         sfccLogTask?.cancel()
         sfccLogTask = Task { [weak self] in
+            let clock = ContinuousClock()
             while !Task.isCancelled {
                 await self?.pollLogOnce()
-                try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 s
+                try? await clock.sleep(until: clock.now.advanced(by: .seconds(3)))
             }
         }
     }
@@ -2101,7 +2127,8 @@ final class AppState {
         if UserDefaults.standard.bool(forKey: "athenaAutoSave") {
             autoSaveTask?.cancel()
             autoSaveTask = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                let clock = ContinuousClock()
+                try? await clock.sleep(until: clock.now.advanced(by: .seconds(1)))
                 guard !Task.isCancelled else { return }
                 await self?.saveTab(id: id, in: side)
             }
@@ -2508,7 +2535,8 @@ final class AppState {
     private func scheduleFileTreeRebuild() {
         fileTreeRebuildTask?.cancel()
         fileTreeRebuildTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(300))
+            let clock = ContinuousClock()
+            try? await clock.sleep(until: clock.now.advanced(by: .milliseconds(300)))
             guard !Task.isCancelled else { return }
             await self?.refreshFileTree()
         }
