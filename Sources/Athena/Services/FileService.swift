@@ -22,7 +22,27 @@ actor FileService {
 
     // MARK: - File Tree
 
-    func buildFileTree(_ url: URL, depth: Int = 0) async throws -> [FileNode] {
+    /// `.isDirectoryKey` reports on the item itself, not its target — a
+    /// symlink pointing at a directory (common for shared/linked cartridges)
+    /// otherwise reads as `false` and never gets recursed into. Resolve the
+    /// symlink first so directory-ness reflects what it actually points to.
+    private func isDirectory(_ url: URL) -> Bool {
+        let resolved = url.resolvingSymlinksInPath()
+        return (try? resolved.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+    }
+
+    /// `ancestorRealPaths` is the resolved (symlink-free) path of `url` itself
+    /// plus every directory above it in this traversal — not a global
+    /// "already visited" set, so two sibling symlinks pointing at the same
+    /// shared cartridge still each get listed. Only recursing into a
+    /// directory whose real path is already an ancestor would be an actual
+    /// cycle, which is what this guards against now that depth is unbounded.
+    func buildFileTree(_ url: URL, depth: Int = 0, ancestorRealPaths: Set<String> = []) async throws -> [FileNode] {
+        // Resolve up front: listing a symlink URL directly throws ENOTDIR
+        // (see below), and a caller could hand in a symlinked workspace root
+        // just as easily as recursion hands in a symlinked subdirectory.
+        let url = url.resolvingSymlinksInPath()
+
         let excludedDirectories: Set<String> = [
             ".git", "node_modules", ".build", "DerivedData",
             "__pycache__", ".swiftpm", "Pods"
@@ -36,19 +56,15 @@ actor FileService {
 
         let filtered = contents.filter { item in
             let name = item.lastPathComponent
-            let values = try? item.resourceValues(forKeys: [.isDirectoryKey])
-            let isDir = values?.isDirectory ?? false
-            if isDir && excludedDirectories.contains(name) {
+            if isDirectory(item) && excludedDirectories.contains(name) {
                 return false
             }
             return true
         }
 
         let sorted = filtered.sorted { lhs, rhs in
-            let lhsValues = try? lhs.resourceValues(forKeys: [.isDirectoryKey])
-            let rhsValues = try? rhs.resourceValues(forKeys: [.isDirectoryKey])
-            let lhsIsDir = lhsValues?.isDirectory ?? false
-            let rhsIsDir = rhsValues?.isDirectory ?? false
+            let lhsIsDir = isDirectory(lhs)
+            let rhsIsDir = isDirectory(rhs)
 
             if lhsIsDir != rhsIsDir {
                 return lhsIsDir
@@ -57,16 +73,28 @@ actor FileService {
         }
 
         var nodes: [FileNode] = []
+        var ancestors = ancestorRealPaths
+        ancestors.insert(url.resolvingSymlinksInPath().path)
 
         for item in sorted {
-            let resourceValues = try item.resourceValues(forKeys: [.isDirectoryKey])
-            let isDir = resourceValues.isDirectory ?? false
+            let isDir = isDirectory(item)
 
             var node = FileNode(url: item, isDirectory: isDir, depth: depth)
 
-            if isDir && depth < 4 {
-                let children = try await buildFileTree(item, depth: depth + 1)
-                node.children = children
+            if isDir {
+                let resolved = item.resolvingSymlinksInPath()
+                if !ancestors.contains(resolved.path) {
+                    // Listing via `item` directly fails with ENOTDIR when it's a
+                    // symlink — its URL carries a directory-hint from the
+                    // original dirent (a symlink, not a directory), not from
+                    // the target. Recurse on the resolved URL instead.
+                    //
+                    // `try?`, not `try`: one unreadable subtree (permission-
+                    // denied, a dangling symlink target, a volume that went
+                    // away) must not throw away the entire workspace's file
+                    // tree — that single bad directory just shows as empty.
+                    node.children = try? await buildFileTree(resolved, depth: depth + 1, ancestorRealPaths: ancestors)
+                }
             }
 
             nodes.append(node)

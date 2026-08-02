@@ -7,6 +7,46 @@
 import SwiftUI
 import AppKit
 
+// MARK: - Fuzzy matching
+
+/// VS Code–style fuzzy match: every character of `query` must appear in
+/// order (not necessarily contiguously) in `target`, case-insensitive.
+/// Returns `nil` on no match; otherwise a score where higher is better, so
+/// e.g. "sfcclv" ranks "SFCCLogView.swift" above a file that merely
+/// contains those letters scattered apart. Matches right after a path/word
+/// boundary, or in an unbroken run, score highest.
+private func fuzzyScore(query: String, target: String) -> Int? {
+    guard !query.isEmpty else { return 0 }
+    let queryChars = Array(query.lowercased())
+    let targetChars = Array(target)
+    var qi = 0
+    var score = 0
+    var consecutiveRun = 0
+
+    for (ti, ch) in targetChars.enumerated() {
+        guard qi < queryChars.count else { break }
+        guard Character(ch.lowercased()) == queryChars[qi] else {
+            consecutiveRun = 0
+            continue
+        }
+        var bonus = 1
+        if ti == 0 {
+            bonus += 8
+        } else {
+            let prev = targetChars[ti - 1]
+            if "/_-. ".contains(prev) || (prev.isLowercase && ch.isUppercase) {
+                bonus += 6
+            }
+        }
+        consecutiveRun += 1
+        bonus += min(consecutiveRun, 5)
+        score += bonus
+        qi += 1
+    }
+
+    return qi == queryChars.count ? score : nil
+}
+
 // MARK: - QuickOpenView
 
 struct QuickOpenView: View {
@@ -43,19 +83,21 @@ struct QuickOpenView: View {
     // MARK: - Filtered results
 
     private var commandResults: [KeyBinding] {
-        let q = commandQuery.lowercased()
+        let q = commandQuery
         let all = appState.keyBindings
         guard !q.isEmpty else {
             return all.sorted { $0.action.displayName.localizedCompare($1.action.displayName) == .orderedAscending }
         }
         return all
-            .filter { $0.action.displayName.lowercased().contains(q) }
-            .sorted { a, b in
-                let aPrefix = a.action.displayName.lowercased().hasPrefix(q)
-                let bPrefix = b.action.displayName.lowercased().hasPrefix(q)
-                if aPrefix != bPrefix { return aPrefix }
-                return a.action.displayName.localizedCompare(b.action.displayName) == .orderedAscending
+            .compactMap { binding -> (KeyBinding, Int)? in
+                guard let score = fuzzyScore(query: q, target: binding.action.displayName) else { return nil }
+                return (binding, score)
             }
+            .sorted { a, b in
+                if a.1 != b.1 { return a.1 > b.1 }
+                return a.0.action.displayName.localizedCompare(b.0.action.displayName) == .orderedAscending
+            }
+            .map(\.0)
     }
 
     /// The active tab's document symbols, flattened depth-first (see
@@ -64,33 +106,33 @@ struct QuickOpenView: View {
     /// `SymbolPaletteRow`) keeps the hierarchy visible.
     private var symbolResults: [(symbol: DocumentSymbol, depth: Int)] {
         let flattened = flattenDocumentSymbols(appState.documentSymbols)
-        let q = symbolQuery.lowercased()
+        let q = symbolQuery
         guard !q.isEmpty else { return flattened }
         return flattened
-            .filter { $0.symbol.name.lowercased().contains(q) }
-            .sorted { a, b in
-                let aPrefix = a.symbol.name.lowercased().hasPrefix(q)
-                let bPrefix = b.symbol.name.lowercased().hasPrefix(q)
-                if aPrefix != bPrefix { return aPrefix }
-                return a.symbol.name.localizedCompare(b.symbol.name) == .orderedAscending
+            .compactMap { entry -> ((symbol: DocumentSymbol, depth: Int), Int)? in
+                guard let score = fuzzyScore(query: q, target: entry.symbol.name) else { return nil }
+                return (entry, score)
             }
+            .sorted { a, b in
+                if a.1 != b.1 { return a.1 > b.1 }
+                return a.0.symbol.name.localizedCompare(b.0.symbol.name) == .orderedAscending
+            }
+            .map(\.0)
     }
 
     private var results: [FileNode] {
         let all = appState.allFiles
         guard !query.isEmpty else { return Array(all.prefix(200)) }
-        let q = query.lowercased()
         return all
-            .filter { $0.url.path.lowercased().contains(q) }
-            .sorted { a, b in
-                let aPrefix = a.name.lowercased().hasPrefix(q)
-                let bPrefix = b.name.lowercased().hasPrefix(q)
-                if aPrefix != bPrefix { return aPrefix }
-                let aName = a.name.lowercased().contains(q)
-                let bName = b.name.lowercased().contains(q)
-                if aName != bName { return aName }
-                return a.name.localizedCompare(b.name) == .orderedAscending
+            .compactMap { file -> (FileNode, Int)? in
+                guard let score = fuzzyScore(query: query, target: file.url.path) else { return nil }
+                return (file, score)
             }
+            .sorted { a, b in
+                if a.1 != b.1 { return a.1 > b.1 }
+                return a.0.name.localizedCompare(b.0.name) == .orderedAscending
+            }
+            .map(\.0)
     }
 
     // MARK: - Body
@@ -125,9 +167,14 @@ struct QuickOpenView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
 
-                // Results or empty state
+                // Results or empty state — each mode's filtered list is computed
+                // once into `matches` and reused for the empty-check and the
+                // ForEach; the naive version called the filtering computed
+                // property up to 3x per render, which visibly lagged behind
+                // typing on large workspaces (SFCC checkouts especially).
                 if isCommandMode {
-                    if commandResults.isEmpty {
+                    let matches = commandResults
+                    if matches.isEmpty {
                         Divider()
                         Text("No matching commands")
                             .foregroundStyle(.secondary)
@@ -139,7 +186,7 @@ struct QuickOpenView: View {
                             ScrollView {
                                 LazyVStack(spacing: 0) {
                                     ForEach(
-                                        Array(commandResults.prefix(200).enumerated()),
+                                        Array(matches.prefix(200).enumerated()),
                                         id: \.element.id
                                     ) { i, binding in
                                         CommandPaletteRow(
@@ -158,7 +205,8 @@ struct QuickOpenView: View {
                         }
                     }
                 } else if isSymbolMode {
-                    if symbolResults.isEmpty {
+                    let matches = symbolResults
+                    if matches.isEmpty {
                         Divider()
                         Text("No matching symbols")
                             .foregroundStyle(.secondary)
@@ -170,7 +218,7 @@ struct QuickOpenView: View {
                             ScrollView {
                                 LazyVStack(spacing: 0) {
                                     ForEach(
-                                        Array(symbolResults.prefix(200).enumerated()),
+                                        Array(matches.prefix(200).enumerated()),
                                         id: \.element.symbol.id
                                     ) { i, entry in
                                         SymbolPaletteRow(
@@ -189,19 +237,21 @@ struct QuickOpenView: View {
                             }
                         }
                     }
-                } else if results.isEmpty && !query.isEmpty {
-                    Divider()
-                    Text("No results for \"\(query)\"")
-                        .foregroundStyle(.secondary)
-                        .font(.system(size: appState.sf(12)))
-                        .padding(20)
-                } else if !results.isEmpty {
+                } else {
+                    let matches = results
+                    if matches.isEmpty && !query.isEmpty {
+                        Divider()
+                        Text("No results for \"\(query)\"")
+                            .foregroundStyle(.secondary)
+                            .font(.system(size: appState.sf(12)))
+                            .padding(20)
+                    } else if !matches.isEmpty {
                     Divider()
                     ScrollViewReader { proxy in
                         ScrollView {
                             LazyVStack(spacing: 0) {
                                 ForEach(
-                                    Array(results.prefix(200).enumerated()),
+                                    Array(matches.prefix(200).enumerated()),
                                     id: \.element.id
                                 ) { i, file in
                                     QuickOpenRow(
@@ -218,6 +268,7 @@ struct QuickOpenView: View {
                         .onChange(of: selectedIndex) { _, idx in
                             proxy.scrollTo(idx, anchor: .center)
                         }
+                    }
                     }
                 }
             }

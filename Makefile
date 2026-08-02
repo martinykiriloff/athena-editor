@@ -54,11 +54,31 @@ endif
 
 all: bundle
 
-# ── Run (debug build, launch app directly) ────────────────────────────────────
+# ── Run (debug build, bundle for a stable code identity, launch) ─────────────
+# macOS privacy grants (Full Disk Access, per-folder prompts, etc.) are keyed
+# to the app's code identity. Launching the loose .build/debug/Athena binary
+# directly gives it no bundle identity at all, and its ad-hoc signature hash
+# changes on every rebuild — so macOS treats it as a brand-new, unapproved
+# binary each time and re-prompts for every protected folder. Bundling it as
+# Athena.app (same steps as `bundle`, same signing identity) before launch
+# keeps that identity stable across debug rebuilds. Run the binary in place
+# (not `open`) so stdout/stderr stay attached to this terminal.
 
 run: build-debug
+	@echo "📦 Assembling $(APP_BUNDLE) (debug)…"
+	@rm -rf "$(APP_BUNDLE)"
+	@mkdir -p "$(APP_BUNDLE)/Contents/MacOS"
+	@mkdir -p "$(APP_BUNDLE)/Contents/Resources"
+	@cp "$(DEBUG_BIN)"                        "$(APP_BUNDLE)/Contents/MacOS/"
+	@cp XcodeConfig/Info.plist                "$(APP_BUNDLE)/Contents/"
+	@cp XcodeConfig/AppIcon.icns              "$(APP_BUNDLE)/Contents/Resources/"
+	@cp XcodeConfig/Athena.entitlements       "$(APP_BUNDLE)/Contents/Resources/"
+	@printf 'APPL????'                      > "$(APP_BUNDLE)/Contents/PkgInfo"
+	@codesign --force --deep --sign "$(SIGN_ID)" \
+	    --entitlements XcodeConfig/Athena.entitlements \
+	    "$(APP_BUNDLE)"
 	@echo "▶  Launching $(APP_NAME) (debug)…"
-	$(DEBUG_BIN)
+	@"$(APP_BUNDLE)/Contents/MacOS/$(APP_NAME)"
 
 # ── Builds ────────────────────────────────────────────────────────────────────
 
