@@ -24,6 +24,7 @@ final class AppState {
     let blameService: GitBlameService
     let importResolver: ImportResolver
     let sfccService: SFCCService
+    let sfccWatchService: SFCCWatchService
     let fileWatchService: FileWatchService
     let prettierService: PrettierService
     let postgresService: PostgresService
@@ -105,6 +106,15 @@ final class AppState {
     var sfccLogContent: String = ""
     var sfccLogOffset: Int = 0
     @ObservationIgnored private var sfccLogTask: Task<Void, Never>?
+    /// Upload activity feed (bottom panel → SFCC Logs → "Uploads"), newest
+    /// first, capped at 500. Every entry is also appended to the durable
+    /// on-disk log at `SFCCService.uploadLogFileURL`.
+    var sfccUploadLog: [SFCCUploadRecord] = []
+    @ObservationIgnored private var sfccWatchTask: Task<Void, Never>?
+    /// The cartridges root the FSEvents watch currently covers — lets
+    /// `restartSFCCAutoUpload()` no-op when nothing relevant changed instead
+    /// of dropping and re-arming the stream (and its event window) each time.
+    @ObservationIgnored private var sfccWatchRoot: URL?
 
     // MARK: - Terminal Sessions
 
@@ -459,6 +469,7 @@ final class AppState {
         blameService: GitBlameService = GitBlameService(),
         importResolver: ImportResolver = ImportResolver(),
         sfccService: SFCCService = SFCCService(),
+        sfccWatchService: SFCCWatchService = SFCCWatchService(),
         fileWatchService: FileWatchService = FileWatchService(),
         prettierService: PrettierService = PrettierService(),
         postgresService: PostgresService = PostgresService()
@@ -475,6 +486,7 @@ final class AppState {
         self.blameService = blameService
         self.importResolver = importResolver
         self.sfccService = sfccService
+        self.sfccWatchService = sfccWatchService
         self.fileWatchService = fileWatchService
         self.prettierService = prettierService
         self.postgresService = postgresService
@@ -683,6 +695,10 @@ final class AppState {
         AppState.registerRecentPath(url)
 
         await discoverNPMPackages()
+        // Load SFCC connections here, not (only) in the SFCC sidebar's
+        // `.task` — otherwise auto-upload silently does nothing until the
+        // panel is first opened in a launch.
+        await loadSFCCConnections()
         await restoreSession(for: url)
     }
 
@@ -1329,24 +1345,10 @@ final class AppState {
         // debounced edit or tab switch.
         await refreshGitLineChanges(for: tab)
 
-        // Upload to active SFCC sandbox if one is configured.
-        if let conn = sfccConnections.first(where: { $0.isActive }),
-           let ws = workspace {
-            let savedURL = url
-            let workspaceURL = ws.rootURL
-            Task {
-                do {
-                    let msg = try await sfccService.upload(
-                        fileURL: savedURL, connection: conn, workspaceURL: workspaceURL
-                    )
-                    statusMessage = msg
-                } catch SFCCError.notInCartridge {
-                    // File is outside cartridges root — silently skip
-                } catch {
-                    statusMessage = "SFCC: \(error.localizedDescription)"
-                }
-            }
-        }
+        // SFCC upload is NOT triggered here: the disk write above fires the
+        // cartridges FSEvents watch (`restartSFCCAutoUpload`), so editor
+        // saves, git operations, and build output all take the same logged
+        // upload path instead of saves having a private unlogged one.
     }
 
     // MARK: - Save As / Revert / Close Folder
@@ -1425,6 +1427,7 @@ final class AppState {
         // stale, wrong-rootUri server keep serving the next-opened workspace.
         await lspManager.stopAllServers()
         await fileWatchService.stopAll()
+        stopSFCCAutoUpload()
         diagnostics  = [:]
         gitLineChanges = [:]
 
@@ -1764,6 +1767,170 @@ final class AppState {
                          program: "", debugPort: 9222, url: "http://localhost:3000"),
         ]
         return configs
+    }
+
+    // MARK: - SFCC connections & auto-upload
+
+    /// Loads connections from settings (passwords from the Keychain) and
+    /// starts auto-upload if one is active. Called from `openWorkspace(_:)`
+    /// and from the SFCC sidebar's `.task`; idempotent.
+    func loadSFCCConnections() async {
+        var decoded = await settingsService.value(for: "sfccConnections", default: [SFCCConnection]())
+        var didMigrate = false
+        for i in decoded.indices {
+            let account = KeychainService.sfccPassword(decoded[i].id)
+            if let pw = await keychainService.get(account: account), !pw.isEmpty {
+                decoded[i].password = pw
+            } else if !decoded[i].password.isEmpty {
+                // Legacy plaintext password from an older settings file — move it to the Keychain.
+                try? await keychainService.set(decoded[i].password, account: account)
+                didMigrate = true
+            }
+        }
+        sfccConnections = decoded
+        if didMigrate { persistSFCCConnections() }  // rewrites the JSON without passwords
+        restartSFCCAutoUpload()
+    }
+
+    /// Writes the current connections to settings (passwords to the Keychain).
+    func persistSFCCConnections() {
+        let snapshot = sfccConnections
+        Task {
+            for conn in snapshot {
+                try? await keychainService.set(conn.password, account: KeychainService.sfccPassword(conn.id))
+            }
+            try? await settingsService.setValue(snapshot, for: "sfccConnections")
+        }
+    }
+
+    /// Makes `id` the single active connection (or deactivates everything
+    /// when `active` is false), persists, and re-aims auto-upload.
+    func setSFCCConnectionActive(_ id: UUID, active: Bool) {
+        for i in sfccConnections.indices {
+            sfccConnections[i].isActive = active && sfccConnections[i].id == id
+        }
+        persistSFCCConnections()
+        restartSFCCAutoUpload()
+    }
+
+    /// (Re)starts the recursive FSEvents watch over the active connection's
+    /// cartridges root. While it runs, every file created/changed under the
+    /// root uploads to the sandbox and every file removed is deleted from it
+    /// — editor saves included (see the note at the end of `saveTab`). With
+    /// no active connection or no workspace the watch stops. No-ops when
+    /// already watching the right root; connection details (hostname, code
+    /// version, credentials) are re-read per event, so editing those needs
+    /// no restart.
+    func restartSFCCAutoUpload() {
+        guard let conn = sfccConnections.first(where: { $0.isActive }),
+              let ws = workspace else {
+            stopSFCCAutoUpload()
+            return
+        }
+        let root = SFCCService.cartridgesRoot(connection: conn, workspaceURL: ws.rootURL)
+        if sfccWatchTask != nil, sfccWatchRoot == root { return }
+
+        sfccWatchTask?.cancel()
+        sfccWatchRoot = root
+        sfccWatchTask = Task { [weak self] in
+            guard let self else { return }
+            let events = await self.sfccWatchService.start(watching: root)
+            for await batch in events {
+                await self.handleSFCCFileEvents(batch)
+            }
+        }
+        statusMessage = "SFCC auto-upload on: \(root.lastPathComponent)/ → \(conn.hostname)"
+    }
+
+    func stopSFCCAutoUpload() {
+        sfccWatchTask?.cancel()
+        sfccWatchTask = nil
+        sfccWatchRoot = nil
+        Task { await sfccWatchService.stop() }
+    }
+
+    func clearSFCCUploadLog() {
+        sfccUploadLog = []
+    }
+
+    /// Fans a change batch out to uploads/deletes, bounded so a 200-file git
+    /// branch switch doesn't open 200 simultaneous connections. Existence at
+    /// event time decides the direction — FSEvents flags coalesce and can't
+    /// be trusted for it.
+    private func handleSFCCFileEvents(_ urls: [URL]) async {
+        await withTaskGroup(of: Void.self) { group in
+            var remaining = urls.makeIterator()
+            var started = 0
+            while started < 6, let url = remaining.next() {
+                group.addTask { await self.handleSFCCFileEvent(url) }
+                started += 1
+            }
+            while await group.next() != nil {
+                if let url = remaining.next() {
+                    group.addTask { await self.handleSFCCFileEvent(url) }
+                }
+            }
+        }
+    }
+
+    private func handleSFCCFileEvent(_ url: URL) async {
+        if FileManager.default.fileExists(atPath: url.path) {
+            await sfccUpload(fileURL: url)
+        } else {
+            await sfccDeleteRemote(fileURL: url)
+        }
+    }
+
+    /// Uploads `fileURL` to the active sandbox and records the outcome in the
+    /// upload log. Silently no-ops for files outside the cartridges root —
+    /// those aren't deployable.
+    private func sfccUpload(fileURL: URL) async {
+        guard let (conn, ws, rel) = sfccUploadContext(for: fileURL) else { return }
+        do {
+            statusMessage = try await sfccService.upload(
+                fileURL: fileURL, connection: conn, workspaceURL: ws
+            )
+            appendSFCCUploadRecord(conn, rel, kind: .upload, status: .success)
+        } catch {
+            statusMessage = "SFCC: \(error.localizedDescription)"
+            appendSFCCUploadRecord(conn, rel, kind: .upload, status: .failure(error.localizedDescription))
+        }
+    }
+
+    /// Mirrors a local delete to the sandbox, recording the outcome.
+    private func sfccDeleteRemote(fileURL: URL) async {
+        guard let (conn, ws, rel) = sfccUploadContext(for: fileURL) else { return }
+        do {
+            statusMessage = try await sfccService.deleteRemote(
+                fileURL: fileURL, connection: conn, workspaceURL: ws
+            )
+            appendSFCCUploadRecord(conn, rel, kind: .delete, status: .success)
+        } catch {
+            statusMessage = "SFCC: \(error.localizedDescription)"
+            appendSFCCUploadRecord(conn, rel, kind: .delete, status: .failure(error.localizedDescription))
+        }
+    }
+
+    private func sfccUploadContext(for fileURL: URL) -> (SFCCConnection, URL, String)? {
+        guard let conn = sfccConnections.first(where: { $0.isActive }),
+              let ws = workspace,
+              let rel = try? SFCCService.cartridgeRelativePath(
+                  for: fileURL, connection: conn, workspaceURL: ws.rootURL
+              )
+        else { return nil }
+        return (conn, ws.rootURL, rel)
+    }
+
+    private func appendSFCCUploadRecord(_ conn: SFCCConnection, _ relativePath: String,
+                                        kind: SFCCUploadKind, status: SFCCUploadStatus) {
+        let record = SFCCUploadRecord(
+            date: Date(), relativePath: relativePath,
+            connectionName: conn.name, codeVersion: conn.codeVersion,
+            kind: kind, status: status
+        )
+        sfccUploadLog.insert(record, at: 0)
+        if sfccUploadLog.count > 500 { sfccUploadLog.removeLast(sfccUploadLog.count - 500) }
+        Task { await sfccService.appendToUploadLogFile(record) }
     }
 
     // MARK: - SFCC log viewer

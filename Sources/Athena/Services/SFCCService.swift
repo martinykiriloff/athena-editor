@@ -13,9 +13,8 @@ actor SFCCService {
     /// Uploads `fileURL` to the active SFCC sandbox via WebDAV PUT.
     /// Returns a short status string suitable for the status bar.
     func upload(fileURL: URL, connection: SFCCConnection, workspaceURL: URL) async throws -> String {
-        let rel  = try relativePath(for: fileURL, connection: connection, workspaceURL: workspaceURL)
-        let dest = "https://\(connection.hostname)/on/demandware.servlet/webdav/Sites/Cartridges/\(connection.codeVersion)/\(rel)"
-        guard let url = URL(string: dest) else { throw SFCCError.badURL(dest) }
+        let rel = try Self.cartridgeRelativePath(for: fileURL, connection: connection, workspaceURL: workspaceURL)
+        let url = try remoteURL(for: rel, connection: connection)
 
         let data = try Data(contentsOf: fileURL)
         var req  = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData)
@@ -29,6 +28,24 @@ actor SFCCService {
         guard (200...299).contains(code) else { throw SFCCError.httpError(code) }
 
         return "↑ SFCC \(fileURL.lastPathComponent)"
+    }
+
+    /// Removes the sandbox copy of `fileURL` (already deleted locally) via
+    /// WebDAV DELETE. A 404 counts as success — the remote file is gone
+    /// either way.
+    func deleteRemote(fileURL: URL, connection: SFCCConnection, workspaceURL: URL) async throws -> String {
+        let rel = try Self.cartridgeRelativePath(for: fileURL, connection: connection, workspaceURL: workspaceURL)
+        let url = try remoteURL(for: rel, connection: connection)
+
+        var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData)
+        req.httpMethod = "DELETE"
+        req.addBasicAuth(user: connection.username, password: connection.password)
+
+        let (_, response) = try await URLSession.shared.data(for: req)
+        let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+        guard (200...299).contains(code) || code == 404 else { throw SFCCError.httpError(code) }
+
+        return "✕ SFCC \(fileURL.lastPathComponent)"
     }
 
     // MARK: Log listing
@@ -76,25 +93,79 @@ actor SFCCService {
         return (text, fromByte + data.count)
     }
 
-    // MARK: Private helpers
+    // MARK: Upload audit log (on disk)
 
-    private func relativePath(for fileURL: URL,
-                              connection: SFCCConnection,
-                              workspaceURL: URL) throws -> String {
-        let cartRoot: URL = connection.cartridgesPath.hasPrefix("/")
+    /// Persistent, append-only record of every upload/delete attempt — one
+    /// line per `SFCCUploadRecord`. The in-memory feed on `AppState` dies
+    /// with the process; this file is the durable answer to "what exactly
+    /// did Athena push to the sandbox, and when".
+    nonisolated static var uploadLogFileURL: URL {
+        let base = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first?
+            .appendingPathComponent("Athena/logs")
+            ?? URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("Athena/logs")
+        return base.appendingPathComponent("sfcc-uploads.log")
+    }
+
+    /// Appends `record` to `uploadLogFileURL`, creating the directory/file on
+    /// first use. Failures are swallowed — the audit log must never break an
+    /// upload.
+    func appendToUploadLogFile(_ record: SFCCUploadRecord) {
+        let url = Self.uploadLogFileURL
+        let fm  = FileManager.default
+        try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if !fm.fileExists(atPath: url.path) { fm.createFile(atPath: url.path, contents: nil) }
+
+        let outcome: String
+        switch record.status {
+        case .success:              outcome = "ok"
+        case .failure(let message): outcome = "FAILED — \(message)"
+        }
+        let line = "\(record.date.formatted(.iso8601)) \(record.kind.rawValue.uppercased()) "
+                 + "\(record.relativePath) → \(record.connectionName)/\(record.codeVersion): \(outcome)\n"
+
+        guard let handle = try? FileHandle(forWritingTo: url) else { return }
+        defer { try? handle.close() }
+        _ = try? handle.seekToEnd()
+        try? handle.write(contentsOf: Data(line.utf8))
+    }
+
+    // MARK: Path helpers
+
+    /// Resolves the local cartridges root for `connection` — absolute paths
+    /// are used as-is, anything else is relative to the workspace root.
+    nonisolated static func cartridgesRoot(connection: SFCCConnection, workspaceURL: URL) -> URL {
+        connection.cartridgesPath.hasPrefix("/")
             ? URL(fileURLWithPath: connection.cartridgesPath)
             : workspaceURL.appendingPathComponent(connection.cartridgesPath)
+    }
 
-        let rootPath = cartRoot.standardized.path
+    /// The path of `fileURL` relative to the cartridges root — the tail of
+    /// its WebDAV destination URL. Throws `.notInCartridge` for files outside
+    /// the root (not deployable, callers skip those silently).
+    nonisolated static func cartridgeRelativePath(for fileURL: URL,
+                                                  connection: SFCCConnection,
+                                                  workspaceURL: URL) throws -> String {
+        let rootPath = cartridgesRoot(connection: connection, workspaceURL: workspaceURL).standardized.path
         let filePath = fileURL.standardized.path
 
-        guard filePath.hasPrefix(rootPath) else {
+        guard filePath.hasPrefix(rootPath + "/") else {
             throw SFCCError.notInCartridge(fileURL.path)
         }
-        // Drop the root prefix and any leading slash
-        var rel = String(filePath.dropFirst(rootPath.count))
-        if rel.hasPrefix("/") { rel = String(rel.dropFirst()) }
-        return rel
+        return String(filePath.dropFirst(rootPath.count + 1))
+    }
+
+    // MARK: Private helpers
+
+    /// Builds the WebDAV destination URL for a cartridge-relative path,
+    /// percent-encoding each component (spaces in content-asset names would
+    /// otherwise make `URL(string:)` reject the whole thing).
+    private func remoteURL(for relativePath: String, connection: SFCCConnection) throws -> URL {
+        let encoded = relativePath.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? relativePath
+        let dest = "https://\(connection.hostname)/on/demandware.servlet/webdav/Sites/Cartridges/\(connection.codeVersion)/\(encoded)"
+        guard let url = URL(string: dest) else { throw SFCCError.badURL(dest) }
+        return url
     }
 
     private func parseLogNames(from data: Data) -> [String] {

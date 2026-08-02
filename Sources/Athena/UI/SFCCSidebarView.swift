@@ -24,18 +24,20 @@ struct SFCCSidebarView: View {
         .sheet(isPresented: $showAddSheet) {
             SFCCConnectionFormView(connection: nil) { saved in
                 appState.sfccConnections.append(saved)
-                persistConnections()
+                appState.persistSFCCConnections()
             }
         }
         .sheet(item: $editingConn) { conn in
             SFCCConnectionFormView(connection: conn) { updated in
                 if let idx = appState.sfccConnections.firstIndex(where: { $0.id == updated.id }) {
                     appState.sfccConnections[idx] = updated
-                    persistConnections()
+                    appState.persistSFCCConnections()
+                    // A cartridges-path edit moves the auto-upload watch root.
+                    appState.restartSFCCAutoUpload()
                 }
             }
         }
-        .task { await loadConnections() }
+        .task { await appState.loadSFCCConnections() }
     }
 
     // MARK: Subviews
@@ -84,16 +86,12 @@ struct SFCCSidebarView: View {
                             let removedID = conn.id
                             appState.sfccConnections.removeAll { $0.id == removedID }
                             Task { try? await appState.keychainService.delete(account: KeychainService.sfccPassword(removedID)) }
-                            persistConnections()
+                            appState.persistSFCCConnections()
+                            // Deleting the active connection must stop auto-upload.
+                            appState.restartSFCCAutoUpload()
                         },
                         onToggle: {
-                            let targetID = conn.id
-                            let newActive = !conn.isActive
-                            for i in appState.sfccConnections.indices {
-                                appState.sfccConnections[i].isActive =
-                                    appState.sfccConnections[i].id == targetID ? newActive : false
-                            }
-                            persistConnections()
+                            appState.setSFCCConnectionActive(conn.id, active: !conn.isActive)
                         }
                     )
                     Divider()
@@ -102,37 +100,9 @@ struct SFCCSidebarView: View {
         }
     }
 
-    // MARK: Persistence
-
-    private func loadConnections() async {
-        var decoded = await appState.settingsService.value(
-            for: "sfccConnections",
-            default: [SFCCConnection]()
-        )
-        var didMigrate = false
-        for i in decoded.indices {
-            let account = KeychainService.sfccPassword(decoded[i].id)
-            if let pw = await appState.keychainService.get(account: account), !pw.isEmpty {
-                decoded[i].password = pw
-            } else if !decoded[i].password.isEmpty {
-                // Legacy plaintext password from an older settings file — move it to the Keychain.
-                try? await appState.keychainService.set(decoded[i].password, account: account)
-                didMigrate = true
-            }
-        }
-        appState.sfccConnections = decoded
-        if didMigrate { persistConnections() }  // rewrites the JSON without passwords
-    }
-
-    private func persistConnections() {
-        let snapshot = appState.sfccConnections
-        Task {
-            for conn in snapshot {
-                try? await appState.keychainService.set(conn.password, account: KeychainService.sfccPassword(conn.id))
-            }
-            try? await appState.settingsService.setValue(snapshot, for: "sfccConnections")
-        }
-    }
+    // Persistence lives on AppState (`loadSFCCConnections` /
+    // `persistSFCCConnections`) so connections exist — and auto-upload runs —
+    // without this panel ever being opened.
 }
 
 // MARK: - SFCCConnectionRow

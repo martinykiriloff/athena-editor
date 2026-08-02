@@ -432,6 +432,36 @@ extension SFCCConnection {
     }
 }
 
+/// What an upload-log entry did to the sandbox: pushed a file or removed one.
+enum SFCCUploadKind: String, Codable, Sendable {
+    case upload, delete
+}
+
+enum SFCCUploadStatus: Codable, Sendable, Equatable {
+    case success
+    case failure(String)
+}
+
+/// One WebDAV upload/delete attempt against the active sandbox — the rows of
+/// the "Uploads" pane in the SFCC bottom panel and of the on-disk audit log
+/// (`SFCCService.uploadLogFileURL`).
+struct SFCCUploadRecord: Identifiable, Codable, Sendable, Equatable {
+    var id: UUID = UUID()
+    var date: Date
+    var relativePath: String     // cartridge-relative, e.g. "app_custom/cartridge/templates/…"
+    var connectionName: String
+    var codeVersion: String
+    var kind: SFCCUploadKind
+    var status: SFCCUploadStatus
+
+    var fileName: String { relativePath.components(separatedBy: "/").last ?? relativePath }
+
+    var failureMessage: String? {
+        if case .failure(let message) = status { return message }
+        return nil
+    }
+}
+
 // MARK: - Diagnostics
 
 enum DiagnosticSeverity: Sendable, Equatable {

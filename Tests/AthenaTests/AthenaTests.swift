@@ -264,6 +264,117 @@ struct ConnectionCodableTests {
     }
 }
 
+// MARK: - SFCC upload paths + log records
+
+@Suite("SFCC upload")
+struct SFCCUploadTests {
+
+    private let workspace = URL(fileURLWithPath: "/Users/dev/shop")
+
+    private func conn(cartridgesPath: String = "cartridges") -> SFCCConnection {
+        var c = SFCCConnection(name: "dev01", hostname: "dev01.demandware.net")
+        c.cartridgesPath = cartridgesPath
+        return c
+    }
+
+    @Test func relativePathInsideRelativeRoot() throws {
+        let file = URL(fileURLWithPath: "/Users/dev/shop/cartridges/app_custom/cartridge/templates/default/home.isml")
+        let rel = try SFCCService.cartridgeRelativePath(for: file, connection: conn(), workspaceURL: workspace)
+        #expect(rel == "app_custom/cartridge/templates/default/home.isml")
+    }
+
+    @Test func relativePathInsideAbsoluteRoot() throws {
+        let file = URL(fileURLWithPath: "/opt/carts/app_custom/x.js")
+        let rel = try SFCCService.cartridgeRelativePath(
+            for: file, connection: conn(cartridgesPath: "/opt/carts"), workspaceURL: workspace)
+        #expect(rel == "app_custom/x.js")
+    }
+
+    @Test func fileOutsideRootThrows() {
+        let file = URL(fileURLWithPath: "/Users/dev/shop/package.json")
+        #expect(throws: SFCCError.self) {
+            try SFCCService.cartridgeRelativePath(for: file, connection: conn(), workspaceURL: workspace)
+        }
+    }
+
+    // A sibling directory sharing the root's name as a prefix must not match —
+    // `hasPrefix` on the bare root path used to accept "cartridges-backup".
+    @Test func siblingPrefixDirectoryDoesNotMatch() {
+        let file = URL(fileURLWithPath: "/Users/dev/shop/cartridges-backup/app_custom/x.js")
+        #expect(throws: SFCCError.self) {
+            try SFCCService.cartridgeRelativePath(for: file, connection: conn(), workspaceURL: workspace)
+        }
+    }
+
+    @Test func uploadRecordRoundTripsFailureMessage() throws {
+        let record = SFCCUploadRecord(
+            date: Date(), relativePath: "app_custom/cartridge/scripts/cart.js",
+            connectionName: "dev01", codeVersion: "version1",
+            kind: .upload, status: .failure("SFCC HTTP 401")
+        )
+        let decoded = try JSONDecoder().decode(
+            SFCCUploadRecord.self, from: try JSONEncoder().encode(record))
+        #expect(decoded.status == .failure("SFCC HTTP 401"))
+        #expect(decoded.failureMessage == "SFCC HTTP 401")
+        #expect(decoded.fileName == "cart.js")
+        #expect(decoded.kind == .upload)
+    }
+}
+
+// MARK: - SFCC cartridge watch (FSEvents)
+
+@Suite("SFCCWatchService")
+struct SFCCWatchTests {
+
+    @Test func transientSaveArtifactsAreFiltered() {
+        // macOS safe-save temp from an atomic write (seen uploading in the wild).
+        #expect(SFCCWatchService.isTransientArtifact("Account.js.sb-7d048152-kraYKs"))
+        #expect(SFCCWatchService.isTransientArtifact("Account.js.tmp"))
+        #expect(SFCCWatchService.isTransientArtifact("Account.js~"))
+
+        #expect(!SFCCWatchService.isTransientArtifact("Account.js"))
+        #expect(!SFCCWatchService.isTransientArtifact("home.isml"))
+        // ".sb-" mid-name without the temp shape is a real file.
+        #expect(!SFCCWatchService.isTransientArtifact("logo.sb-header.svg"))
+    }
+
+    @Test func detectsFileCreationRecursively() async throws {
+        let fm  = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("athena-sfcc-watch-\(UUID().uuidString)")
+        let sub = dir.appendingPathComponent("app_custom/cartridge/templates")
+        try fm.createDirectory(at: sub, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+
+        let service = SFCCWatchService()
+        let events  = await service.start(watching: dir)
+
+        // Give FSEvents a beat to arm before the write it must observe.
+        let clock = ContinuousClock()
+        try await clock.sleep(until: clock.now.advanced(by: .milliseconds(300)))
+        try Data("<iscontent/>".utf8).write(to: sub.appendingPathComponent("home.isml"))
+
+        // First batch vs. 10 s timeout, whichever wins. Compare only the last
+        // path component: /var/folders/… symlinks to /private/var/… and
+        // FSEvents reports the resolved path.
+        let batch = await withTaskGroup(of: [URL]?.self) { group -> [URL]? in
+            group.addTask {
+                for await batch in events { return batch }
+                return nil
+            }
+            group.addTask {
+                try? await clock.sleep(until: clock.now.advanced(by: .seconds(10)))
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
+        }
+        await service.stop()
+
+        #expect(batch?.contains { $0.lastPathComponent == "home.isml" } == true)
+    }
+}
+
 // MARK: - Drizzle completions
 
 @Suite("DrizzleCompletionService")
