@@ -9,6 +9,7 @@ import SwiftUI
 struct SFCCSidebarView: View {
     @Environment(AppState.self) private var appState
     @State private var showAddSheet   = false
+    @State private var showUploadAllConfirmation = false
     @State private var editingConn: SFCCConnection? = nil
 
     var body: some View {
@@ -20,6 +21,12 @@ struct SFCCSidebarView: View {
             } else {
                 connectionList
             }
+        }
+        .alert("Upload all cartridges?", isPresented: $showUploadAllConfirmation) {
+            Button("Upload All") { Task { await appState.uploadAllCartridges() } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Every cartridge is re-uploaded as one archive and replaces the sandbox copy. Files deleted locally are removed from the sandbox too.")
         }
         .sheet(isPresented: $showAddSheet) {
             SFCCConnectionFormView(connection: nil) { saved in
@@ -45,6 +52,20 @@ struct SFCCSidebarView: View {
     private var toolbar: some View {
         HStack {
             Spacer()
+            if appState.isUploadingCartridges {
+                ProgressView().controlSize(.mini).padding(.trailing, 6)
+            } else {
+                Button { showUploadAllConfirmation = true } label: {
+                    Image(systemName: "arrow.up.doc.on.clipboard")
+                        .font(.system(size: appState.sf(12)))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Upload all cartridges to the active sandbox")
+                .disabled(!appState.sfccConnections.contains(where: \.isActive))
+                .padding(.trailing, 6)
+            }
+
             Button { showAddSheet = true } label: {
                 Image(systemName: "plus")
                     .font(.system(size: appState.sf(13)))

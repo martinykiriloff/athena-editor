@@ -14,37 +14,229 @@ import AppKit
 /// Returns `nil` on no match; otherwise a score where higher is better, so
 /// e.g. "sfcclv" ranks "SFCCLogView.swift" above a file that merely
 /// contains those letters scattered apart. Matches right after a path/word
-/// boundary, or in an unbroken run, score highest.
-private func fuzzyScore(query: String, target: String) -> Int? {
-    guard !query.isEmpty else { return 0 }
-    let queryChars = Array(query.lowercased())
-    let targetChars = Array(target)
+/// boundary, or in an unbroken run, score highest. For ranked lists of
+/// names prefer `fuzzyNameScore`, which adds the prefix/substring bonuses.
+///
+/// Matching is greedy (each query character binds to its first eligible
+/// occurrence), so callers must not hand it a long shared prefix — see
+/// `quickOpenScore` for why ⌘P scores the filename before the path.
+func fuzzyScore(query: String, target: String) -> Int? {
+    fuzzyScore(loweredQuery: FuzzyQuery(query).scalars, target: target)
+}
+
+/// A query lowercased once, so ⌘P doesn't re-lowercase it per candidate
+/// (that alone was 60k allocations per keystroke on a large workspace).
+struct FuzzyQuery {
+    let raw: String
+    let lowered: String
+    let scalars: [Unicode.Scalar]
+    let containsSlash: Bool
+
+    init(_ query: String) {
+        raw = query
+        lowered = query.lowercased()
+        scalars = Array(lowered.unicodeScalars)
+        containsSlash = query.contains("/")
+    }
+}
+
+private let fuzzyBoundaryScalars: Set<Unicode.Scalar> = Set("/_-. ".unicodeScalars)
+
+/// ASCII fast path; anything else goes through the String machinery, which
+/// only happens for non-ASCII path segments.
+@inline(__always)
+private func fuzzyLowercased(_ scalar: Unicode.Scalar) -> Unicode.Scalar {
+    if scalar.value >= 65 && scalar.value <= 90 { return Unicode.Scalar(scalar.value + 32)! }
+    if scalar.value < 128 { return scalar }
+    return String(scalar).lowercased().unicodeScalars.first ?? scalar
+}
+
+/// Core matcher over `target.unicodeScalars` — no per-call arrays, so
+/// scoring every file in a workspace on each keystroke stays allocation-free.
+func fuzzyScore(loweredQuery: [Unicode.Scalar], target: String) -> Int? {
+    guard !loweredQuery.isEmpty else { return 0 }
     var qi = 0
     var score = 0
     var consecutiveRun = 0
+    var prev: Unicode.Scalar? = nil
 
-    for (ti, ch) in targetChars.enumerated() {
-        guard qi < queryChars.count else { break }
-        guard Character(ch.lowercased()) == queryChars[qi] else {
-            consecutiveRun = 0
-            continue
-        }
-        var bonus = 1
-        if ti == 0 {
-            bonus += 8
-        } else {
-            let prev = targetChars[ti - 1]
-            if "/_-. ".contains(prev) || (prev.isLowercase && ch.isUppercase) {
-                bonus += 6
+    for ch in target.unicodeScalars {
+        if qi == loweredQuery.count { break }
+        if fuzzyLowercased(ch) == loweredQuery[qi] {
+            var bonus = 1
+            if let prev {
+                if fuzzyBoundaryScalars.contains(prev)
+                    || (prev.properties.isLowercase && ch.properties.isUppercase) {
+                    bonus += 6
+                }
+            } else {
+                bonus += 8
             }
+            consecutiveRun += 1
+            bonus += min(consecutiveRun, 5)
+            score += bonus
+            qi += 1
+        } else {
+            consecutiveRun = 0
         }
-        consecutiveRun += 1
-        bonus += min(consecutiveRun, 5)
-        score += bonus
-        qi += 1
+        prev = ch
     }
 
-    return qi == queryChars.count ? score : nil
+    return qi == loweredQuery.count ? score : nil
+}
+
+/// ⌘P ranking for one workspace file. `relativePath` is the path below the
+/// workspace root (e.g. "cartridges/app_ana/cartridge/controllers/Cart.js"),
+/// never an absolute path: `fuzzyScore` is greedy, so given absolute paths
+/// the query letters get consumed by the shared "/Users/…/Sites/…" prefix
+/// and by directory names, and every file in the workspace ties (typing
+/// "cart" scored Cart.js, cart.isml and base.js identically, leaving the
+/// list in alphabetical order — i.e. not matching by filename at all).
+///
+/// Filename first, path second, mirroring VS Code: a query without "/" is
+/// scored against the file's name and, on a hit, gets a flat bonus that no
+/// path-only match can reach, plus extra for an exact / prefix / contiguous
+/// name match. Only if the name doesn't match (or the query contains "/")
+/// does the full relative path get scored, so "anacart" can still reach
+/// app_ana/…/Cart.js through its directories.
+func quickOpenScore(_ query: FuzzyQuery, entry: QuickOpenEntry) -> Int? {
+    guard !query.scalars.isEmpty else { return 0 }
+
+    if !query.containsSlash, let nameScore = fuzzyScore(loweredQuery: query.scalars, target: entry.name) {
+        return 1_000 + nameScore * 4 + nameMatchBonus(loweredName: entry.loweredName, loweredQuery: query.lowered)
+    }
+
+    return fuzzyScore(loweredQuery: query.scalars, target: entry.relativePath)
+}
+
+/// Exact > prefix > contiguous substring. Without this, `fuzzyScore`'s
+/// boundary bonuses rank a camel-case scatter ("toString" for "st") above a
+/// plain prefix ("startsWith") — wrong for filenames, commands, symbols and
+/// completion items alike.
+func nameMatchBonus(loweredName: String, loweredQuery: String) -> Int {
+    if loweredName == loweredQuery { return 400 }
+    if loweredName.hasPrefix(loweredQuery) { return 200 }
+    if loweredName.contains(loweredQuery) { return 100 }
+    return 0
+}
+
+/// `fuzzyScore` for a short name (command title, symbol, completion label)
+/// with the prefix/substring bonuses folded in. Use this, not bare
+/// `fuzzyScore`, whenever the results are shown ranked.
+func fuzzyNameScore(query: String, target: String) -> Int? {
+    let fuzzy = FuzzyQuery(query)
+    guard let base = fuzzyScore(loweredQuery: fuzzy.scalars, target: target) else { return nil }
+    return base + nameMatchBonus(loweredName: target.lowercased(), loweredQuery: fuzzy.lowered)
+}
+
+/// One ⌘P candidate: the file plus its workspace-relative path and the
+/// name-derived fields the ranker needs, all computed once when the index
+/// is built (`AppState.quickOpenIndex`) rather than per keystroke per file
+/// (`FileNode.name` re-parses the URL on every access, which dominated the
+/// sort).
+struct QuickOpenEntry: Identifiable, Sendable {
+    let file: FileNode
+    let relativePath: String
+    let name: String
+    let loweredName: String
+    let nameLength: Int
+    var id: String { file.id }
+
+    init(file: FileNode, relativePath: String) {
+        self.file = file
+        self.relativePath = relativePath
+        let nameStart = relativePath.lastIndex(of: "/")
+            .map { relativePath.index(after: $0) } ?? relativePath.startIndex
+        name = String(relativePath[nameStart...])
+        loweredName = name.lowercased()
+        nameLength = name.unicodeScalars.count
+    }
+
+    /// Directory part of `relativePath` for the row's secondary line; `nil`
+    /// for files directly under the workspace root.
+    var relativeDirectory: String? {
+        guard let slash = relativePath.lastIndex(of: "/") else { return nil }
+        let dir = relativePath[..<slash]
+        return dir.isEmpty ? nil : String(dir)
+    }
+}
+
+/// Flattens the workspace tree into ⌘P candidates, sorted by relative path
+/// so the empty-query listing and tie-breaking are just array order (no
+/// per-keystroke string sorts). URLs in the tree come from listing the
+/// symlink-resolved root (see `FileService.buildFileTree`), so the root is
+/// matched both as given and resolved (`/tmp` vs `/private/tmp`, a
+/// symlinked checkout); a file under neither keeps its absolute path rather
+/// than being dropped from the index. Pure and `Sendable`-only, so
+/// `AppState` runs it off the main thread.
+func makeQuickOpenIndex(fileTree: [FileNode], workspaceRootURL: URL?) -> [QuickOpenEntry] {
+    var prefixes: [String] = []
+    if let root = workspaceRootURL {
+        let given = root.standardizedFileURL.path
+        let resolved = root.resolvingSymlinksInPath().path
+        prefixes = [given + "/", resolved + "/"]
+    }
+
+    var result: [QuickOpenEntry] = []
+    func collect(_ nodes: [FileNode]) {
+        for node in nodes {
+            if !node.isDirectory {
+                let path = node.url.path
+                let relative = prefixes.first { path.hasPrefix($0) }
+                    .map { String(path.dropFirst($0.count)) } ?? path
+                result.append(QuickOpenEntry(file: node, relativePath: relative))
+            }
+            if let children = node.children { collect(children) }
+        }
+    }
+    collect(fileTree)
+    result.sort { $0.relativePath < $1.relativePath }
+    return result
+}
+
+/// Filters and ranks `index` (as produced by `makeQuickOpenIndex`, i.e.
+/// path-sorted) for `query`, returning at most `limit` entries. An empty
+/// query lists the index in path order; otherwise higher `quickOpenScore`
+/// first, then the shorter filename (the more specific hit), then index
+/// order for stability. The comparator is integer-only on purpose: with a
+/// short query most of a large workspace ties on score, and breaking those
+/// ties by comparing long path strings was the bulk of each keystroke.
+func rankQuickOpenEntries(_ index: [QuickOpenEntry], query: String, limit: Int = 200) -> [QuickOpenEntry] {
+    guard !query.isEmpty else { return Array(index.prefix(limit)) }
+    let fuzzyQuery = FuzzyQuery(query)
+    var scored: [(position: Int, nameLength: Int, score: Int)] = []
+    scored.reserveCapacity(index.count / 4)
+    for (position, entry) in index.enumerated() {
+        if let score = quickOpenScore(fuzzyQuery, entry: entry) {
+            scored.append((position, entry.nameLength, score))
+        }
+    }
+    scored.sort { a, b in
+        if a.score != b.score { return a.score > b.score }
+        if a.nameLength != b.nameLength { return a.nameLength < b.nameLength }
+        return a.position < b.position
+    }
+    return scored.prefix(limit).map { index[$0.position] }
+}
+
+/// Memoizes one ranked list for a `(query, index version)` pair.
+///
+/// A reference type deliberately: the view's body, its key handlers and its
+/// row taps must all agree on exactly what is on screen, and mutating a
+/// class held in `@State` doesn't invalidate the view (so it is safe to
+/// call while the body is being evaluated). Ranking used to be cached in a
+/// `@State` array refreshed from `onChange(of: query)`, which left the
+/// list one keystroke behind the field.
+@MainActor final class QuickOpenMatchCache {
+    private var key: (query: String, version: Int)?
+    private var cached: [QuickOpenEntry] = []
+
+    func matches(query: String, index: [QuickOpenEntry], version: Int) -> [QuickOpenEntry] {
+        if let key, key.query == query, key.version == version { return cached }
+        cached = rankQuickOpenEntries(index, query: query)
+        key = (query, version)
+        return cached
+    }
 }
 
 // MARK: - QuickOpenView
@@ -53,6 +245,7 @@ struct QuickOpenView: View {
     @Environment(AppState.self) private var appState
     @State private var query: String = ""
     @State private var selectedIndex: Int = 0
+    @State private var matchCache = QuickOpenMatchCache()
     @FocusState private var searchFocused: Bool
 
     // MARK: - Mode
@@ -90,7 +283,7 @@ struct QuickOpenView: View {
         }
         return all
             .compactMap { binding -> (KeyBinding, Int)? in
-                guard let score = fuzzyScore(query: q, target: binding.action.displayName) else { return nil }
+                guard let score = fuzzyNameScore(query: q, target: binding.action.displayName) else { return nil }
                 return (binding, score)
             }
             .sorted { a, b in
@@ -110,7 +303,7 @@ struct QuickOpenView: View {
         guard !q.isEmpty else { return flattened }
         return flattened
             .compactMap { entry -> ((symbol: DocumentSymbol, depth: Int), Int)? in
-                guard let score = fuzzyScore(query: q, target: entry.symbol.name) else { return nil }
+                guard let score = fuzzyNameScore(query: q, target: entry.symbol.name) else { return nil }
                 return (entry, score)
             }
             .sorted { a, b in
@@ -120,19 +313,17 @@ struct QuickOpenView: View {
             .map(\.0)
     }
 
-    private var results: [FileNode] {
-        let all = appState.allFiles
-        guard !query.isEmpty else { return Array(all.prefix(200)) }
-        return all
-            .compactMap { file -> (FileNode, Int)? in
-                guard let score = fuzzyScore(query: query, target: file.url.path) else { return nil }
-                return (file, score)
-            }
-            .sorted { a, b in
-                if a.1 != b.1 { return a.1 > b.1 }
-                return a.0.name.localizedCompare(b.0.name) == .orderedAscending
-            }
-            .map(\.0)
+    /// Ranked files for the current query. Reading `quickOpenIndex` and
+    /// `quickOpenIndexVersion` here is what subscribes the body to a
+    /// finished index rebuild; `matchCache` keeps that to one ranking pass
+    /// per keystroke rather than one per render.
+    private var fileMatches: [QuickOpenEntry] {
+        guard !isCommandMode, !isSymbolMode else { return [] }
+        return matchCache.matches(
+            query: query,
+            index: appState.quickOpenIndex,
+            version: appState.quickOpenIndexVersion
+        )
     }
 
     // MARK: - Body
@@ -193,14 +384,22 @@ struct QuickOpenView: View {
                                             binding: binding,
                                             isSelected: i == selectedIndex
                                         )
-                                        .id(i)
+                                        // Identity must match the ForEach's
+                                        // own `id:`. An `.id(i)` here
+                                        // overrode it with the row's index,
+                                        // and a LazyVStack then reused the
+                                        // already-realized rows and never
+                                        // refreshed their content — the list
+                                        // stayed on the previous query.
+                                        .id(binding.id)
                                         .onTapGesture { invoke(binding.action) }
                                     }
                                 }
                             }
                             .frame(maxHeight: 360)
                             .onChange(of: selectedIndex) { _, idx in
-                                proxy.scrollTo(idx, anchor: .center)
+                                guard matches.indices.contains(idx) else { return }
+                                proxy.scrollTo(matches[idx].id, anchor: .center)
                             }
                         }
                     }
@@ -226,19 +425,20 @@ struct QuickOpenView: View {
                                             depth: entry.depth,
                                             isSelected: i == selectedIndex
                                         )
-                                        .id(i)
+                                        .id(entry.symbol.id)
                                         .onTapGesture { selectSymbol(entry.symbol) }
                                     }
                                 }
                             }
                             .frame(maxHeight: 360)
                             .onChange(of: selectedIndex) { _, idx in
-                                proxy.scrollTo(idx, anchor: .center)
+                                guard matches.indices.contains(idx) else { return }
+                                proxy.scrollTo(matches[idx].symbol.id, anchor: .center)
                             }
                         }
                     }
                 } else {
-                    let matches = results
+                    let matches = fileMatches
                     if matches.isEmpty && !query.isEmpty {
                         Divider()
                         Text("No results for \"\(query)\"")
@@ -251,22 +451,23 @@ struct QuickOpenView: View {
                         ScrollView {
                             LazyVStack(spacing: 0) {
                                 ForEach(
-                                    Array(matches.prefix(200).enumerated()),
+                                    Array(matches.enumerated()),
                                     id: \.element.id
-                                ) { i, file in
+                                ) { i, entry in
                                     QuickOpenRow(
-                                        file: file,
-                                        isSelected: i == selectedIndex,
-                                        workspaceURL: appState.workspace?.rootURL
+                                        name: entry.name,
+                                        relativeDirectory: entry.relativeDirectory,
+                                        isSelected: i == selectedIndex
                                     )
-                                    .id(i)
-                                    .onTapGesture { open(file) }
+                                    .id(entry.id)
+                                    .onTapGesture { open(entry) }
                                 }
                             }
                         }
                         .frame(maxHeight: 360)
                         .onChange(of: selectedIndex) { _, idx in
-                            proxy.scrollTo(idx, anchor: .center)
+                            guard matches.indices.contains(idx) else { return }
+                            proxy.scrollTo(matches[idx].id, anchor: .center)
                         }
                     }
                     }
@@ -290,7 +491,7 @@ struct QuickOpenView: View {
     private var currentResultCount: Int {
         if isCommandMode { return min(commandResults.count, 200) }
         if isSymbolMode  { return min(symbolResults.count, 200) }
-        return min(results.count, 200)
+        return fileMatches.count
     }
 
     private func move(_ delta: Int) {
@@ -307,13 +508,13 @@ struct QuickOpenView: View {
             guard selectedIndex < symbolResults.count else { return }
             selectSymbol(symbolResults[selectedIndex].symbol)
         } else {
-            guard selectedIndex < results.count else { return }
-            open(results[selectedIndex])
+            guard selectedIndex < fileMatches.count else { return }
+            open(fileMatches[selectedIndex])
         }
     }
 
-    private func open(_ file: FileNode) {
-        Task { await appState.openFile(file.url) }
+    private func open(_ entry: QuickOpenEntry) {
+        Task { await appState.openFile(entry.file.url) }
         close()
     }
 
@@ -345,9 +546,10 @@ struct QuickOpenView: View {
 // MARK: - Row
 
 private struct QuickOpenRow: View {
-    let file: FileNode
+    let name: String
+    /// Workspace-relative directory, precomputed by `QuickOpenEntry`.
+    let relativeDirectory: String?
     let isSelected: Bool
-    let workspaceURL: URL?
     @Environment(AppState.self) private var appState
 
     var body: some View {
@@ -358,16 +560,17 @@ private struct QuickOpenRow: View {
                 .frame(width: 14)
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(file.name)
+                Text(name)
                     .font(.system(size: appState.sf(13)))
                     .foregroundStyle(isSelected ? .white : .primary)
                     .lineLimit(1)
 
-                if let rel = relativePath {
+                if let rel = relativeDirectory {
                     Text(rel)
                         .font(.system(size: appState.sf(11)))
                         .foregroundStyle(isSelected ? .white.opacity(0.65) : .secondary)
                         .lineLimit(1)
+                        .truncationMode(.head)
                 }
             }
 
@@ -377,15 +580,6 @@ private struct QuickOpenRow: View {
         .padding(.vertical, 6)
         .background(isSelected ? Color.accentColor : Color.clear)
         .contentShape(Rectangle())
-    }
-
-    private var relativePath: String? {
-        guard let root = workspaceURL else { return nil }
-        let dir = file.url.deletingLastPathComponent().path
-        guard dir.hasPrefix(root.path) else { return nil }
-        let rel = String(dir.dropFirst(root.path.count))
-        let trimmed = rel.hasPrefix("/") ? String(rel.dropFirst()) : rel
-        return trimmed.isEmpty ? nil : trimmed
     }
 }
 

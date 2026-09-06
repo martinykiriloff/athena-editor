@@ -41,6 +41,8 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
     case copyLineUp          = "editor.action.copyLinesUpAction"
     case copyLineDown        = "editor.action.copyLinesDownAction"
     case deleteLine          = "editor.action.deleteLines"
+    // SFCC
+    case sfccUploadAllCartridges = "athena.sfcc.uploadAllCartridges"
     // Zoom
     case zoomIn             = "workbench.action.zoomIn"
     case zoomOut            = "workbench.action.zoomOut"
@@ -58,6 +60,7 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
         case .showSearch:        return "Show Search"
         case .showDatabase:      return "Show DB Connections"
         case .showClaude:        return "Show Claude"
+        case .sfccUploadAllCartridges: return "Upload All Cartridges"
         case .quickOpen:         return "Quick Open"
         case .commandPalette:    return "Command Palette"
         case .nextTab:           return "Next Editor"
@@ -95,6 +98,8 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
             return "View"
         case .quickOpen, .commandPalette, .nextTab, .previousTab, .goToLine, .goToSymbol:
             return "Navigation"
+        case .sfccUploadAllCartridges:
+            return "SFCC"
         case .findInFile, .findAndReplace, .toggleComment, .indentLine, .outdentLine,
              .selectNextOccurrence, .findReferences, .renameSymbol,
              .moveLineUp, .moveLineDown, .copyLineUp, .copyLineDown, .deleteLine:
@@ -271,6 +276,10 @@ struct KeyBinding: Identifiable, Codable, Sendable {
         KeyBinding(action: .copyLineUp,         combo: KeyCombo(key: "up",   shift: true, option: true)),
         KeyBinding(action: .copyLineDown,       combo: KeyCombo(key: "down", shift: true, option: true)),
         KeyBinding(action: .deleteLine,         combo: KeyCombo(key: "k",    command: true, shift: true)),
+        // SFCC — no default shortcut: it replaces every cartridge on the
+        // sandbox, so it is reached deliberately from the palette or the
+        // menu rather than by a key that could be hit by accident.
+        KeyBinding(action: .sfccUploadAllCartridges, combo: nil),
         // Zoom — default binding is Cmd+= (no shift); Cmd++ also triggers it (see dispatchKeyInfo)
         KeyBinding(action: .zoomIn,            combo: KeyCombo(key: "=",   command: true)),
         KeyBinding(action: .zoomOut,           combo: KeyCombo(key: "-",   command: true)),

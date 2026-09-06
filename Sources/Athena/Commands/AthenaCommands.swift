@@ -330,5 +330,11 @@ struct AthenaCommands: Commands {
                 NotificationCenter.default.post(name: .athenaGitCommit, object: nil)
             }
         }
+
+        CommandMenu("SFCC") {
+            Button("Upload All Cartridges") {
+                performAction(.sfccUploadAllCartridges)
+            }
+        }
     }
 }

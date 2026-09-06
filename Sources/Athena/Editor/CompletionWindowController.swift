@@ -12,7 +12,17 @@ final class CompletionWindowController: NSObject {
     // MARK: Public
 
     var isVisible: Bool { panel.isVisible }
+    /// The popup's current on-screen frame — lets a caller (the completion
+    /// documentation panel) position itself relative to it.
+    var screenFrame: NSRect { panel.frame }
     var onAccept: ((CompletionItem, NSRange) -> Void)?
+    /// Fired whenever the highlighted row changes — from `show`'s initial
+    /// selection, `moveUp`/`moveDown`, or a mouse click on a row. Used to
+    /// lazily resolve/display documentation for just the highlighted item.
+    var onSelectionChange: ((CompletionItem) -> Void)?
+    /// Fired from `dismiss()` — lets a caller tear down anything anchored to
+    /// the popup's lifetime (the completion documentation panel).
+    var onDismiss: (() -> Void)?
 
     // MARK: Private state
 
@@ -64,6 +74,7 @@ final class CompletionWindowController: NSObject {
     func dismiss() {
         panel.orderOut(nil)
         items = []
+        onDismiss?()
     }
 
     func moveDown() {
@@ -231,5 +242,11 @@ extension CompletionWindowController: NSTableViewDelegate {
 
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
         NSTableRowView()
+    }
+
+    func tableViewSelectionDidChange(_ notification: Notification) {
+        let row = tableView.selectedRow
+        guard row >= 0, row < items.count else { return }
+        onSelectionChange?(items[row])
     }
 }

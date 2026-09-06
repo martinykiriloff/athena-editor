@@ -12,8 +12,9 @@ struct GitPanelView: View {
     /// Toggles the panel between the Changes view (default) and
     /// `CommitHistoryView` — the smallest clean integration of the commit
     /// history browser into the existing Source Control panel (plan.md item
-    /// 20 point 2) rather than a new top-level sidebar panel.
-    @State private var showHistory: Bool = false
+    /// 20 point 2) rather than a new top-level sidebar panel. Backed by
+    /// `AppState.gitPanelShowsHistory` so "File History" on a row can flip it.
+    private var showHistory: Bool { appState.gitPanelShowsHistory }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -35,6 +36,10 @@ struct GitPanelView: View {
                 ScrollView {
                     if appState.gitStatus.isClean {
                         emptyState
+                        if !appState.gitStashes.isEmpty {
+                            StashSection(stashes: appState.gitStashes)
+                                .padding(.vertical, 4)
+                        }
                     } else {
                         changeSections
                     }
@@ -68,15 +73,7 @@ struct GitPanelView: View {
             // Commit-all shortcut (only when staged changes exist, Changes view only)
             if !showHistory, !appState.gitStatus.staged.isEmpty {
                 Button {
-                    guard let workspace = appState.workspace else { return }
-                    Task {
-                        try? await appState.gitService.commit(
-                            message: appState.commitMessage,
-                            at: workspace.rootURL
-                        )
-                        appState.commitMessage = ""
-                        await appState.refreshGitStatus()
-                    }
+                    Task { await appState.commitStaged() }
                 } label: {
                     Image(systemName: "checkmark.circle")
                         .font(.system(size: appState.sf(13)))
@@ -87,10 +84,29 @@ struct GitPanelView: View {
                 .disabled(appState.commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
 
+            // Fetch / Pull / Push — the remote half of source control.
+            if !showHistory, !appState.gitStatus.branch.isEmpty {
+                if appState.isGitSyncing {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    headerButton("arrow.triangle.2.circlepath", help: "Fetch") {
+                        Task { await appState.gitFetch() }
+                    }
+                    headerButton("arrow.down.circle", help: appState.gitStatus.behind > 0
+                                 ? "Pull (\(appState.gitStatus.behind) behind)" : "Pull") {
+                        Task { await appState.gitPull() }
+                    }
+                    headerButton("arrow.up.circle", help: appState.gitStatus.ahead > 0
+                                 ? "Push (\(appState.gitStatus.ahead) ahead)" : "Push") {
+                        Task { await appState.gitPush() }
+                    }
+                }
+            }
+
             // History / Changes toggle
             Button {
-                showHistory.toggle()
-                if showHistory {
+                appState.gitPanelShowsHistory.toggle()
+                if appState.gitPanelShowsHistory {
                     Task { await appState.refreshCommitHistory() }
                 }
             } label: {
@@ -121,6 +137,16 @@ struct GitPanelView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .frame(height: 32)
+    }
+
+    private func headerButton(_ systemImage: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: appState.sf(12)))
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .help(help)
     }
 
     // MARK: - Commit Section
@@ -154,29 +180,41 @@ struct GitPanelView: View {
                 }
             }
 
-            // Commit button
-            Button {
-                guard let workspace = appState.workspace else { return }
-                Task {
-                    try? await appState.gitService.commit(
-                        message: appState.commitMessage,
-                        at: workspace.rootURL
-                    )
-                    appState.commitMessage = ""
-                    await appState.refreshGitStatus()
+            HStack(spacing: 6) {
+                // Commit button
+                Button {
+                    Task { await appState.commitStaged() }
+                } label: {
+                    Text("Commit")
+                        .font(.system(size: appState.sf(12), weight: .semibold))
+                        .frame(maxWidth: .infinity)
                 }
-            } label: {
-                Text("Commit")
-                    .font(.system(size: appState.sf(12), weight: .semibold))
-                    .frame(maxWidth: .infinity)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(
+                    appState.commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || appState.gitStatus.staged.isEmpty
+                )
+                .keyboardShortcut(.return, modifiers: .command)
+
+                // Stash — the message box doubles as the stash message.
+                Menu {
+                    Button("Stash Changes") {
+                        Task { await appState.stashChanges(includeUntracked: false) }
+                    }
+                    Button("Stash Including Untracked") {
+                        Task { await appState.stashChanges(includeUntracked: true) }
+                    }
+                } label: {
+                    Image(systemName: "tray.and.arrow.down")
+                        .font(.system(size: appState.sf(12)))
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .controlSize(.small)
+                .help("Stash working-tree changes")
+                .disabled(appState.gitStatus.isClean)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
-            .disabled(
-                appState.commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || appState.gitStatus.staged.isEmpty
-            )
-            .keyboardShortcut(.return, modifiers: .command)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
@@ -219,6 +257,10 @@ struct GitPanelView: View {
                     changes: appState.gitStatus.untracked,
                     isStaged: false
                 )
+            }
+
+            if !appState.gitStashes.isEmpty {
+                StashSection(stashes: appState.gitStashes)
             }
         }
         .padding(.vertical, 4)
@@ -302,6 +344,83 @@ private struct ChangeSection: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 2)
+    }
+}
+
+// MARK: - StashSection
+
+private struct StashSection: View {
+    @Environment(AppState.self) private var appState
+    let stashes: [GitStash]
+    @State private var isExpanded: Bool = true
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $isExpanded) {
+            ForEach(stashes) { stash in
+                StashRow(stash: stash)
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text("Stashes")
+                    .font(.system(size: appState.sf(11), weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Text("(\(stashes.count))")
+                    .font(.system(size: appState.sf(11)))
+                    .foregroundStyle(.tertiary)
+                Spacer()
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 2)
+    }
+}
+
+private struct StashRow: View {
+    @Environment(AppState.self) private var appState
+    let stash: GitStash
+    @State private var isHovering = false
+    @State private var showDropConfirmation = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "tray.full")
+                .font(.system(size: appState.sf(10)))
+                .foregroundStyle(.secondary)
+            Text(stash.message)
+                .font(.system(size: appState.sf(12)))
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 0)
+            if isHovering {
+                Button {
+                    Task { await appState.applyStash(stash, pop: true) }
+                } label: {
+                    Image(systemName: "arrow.uturn.backward.circle")
+                        .font(.system(size: appState.sf(12)))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Pop (apply and remove)")
+            }
+        }
+        .padding(.leading, 12)
+        .padding(.vertical, 3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(isHovering ? Color.primary.opacity(0.07) : Color.clear)
+        .contentShape(Rectangle())
+        .onHover { isHovering = $0 }
+        .contextMenu {
+            Button("Apply") { Task { await appState.applyStash(stash, pop: false) } }
+            Button("Pop")   { Task { await appState.applyStash(stash, pop: true) } }
+            Divider()
+            Button("Drop", role: .destructive) { showDropConfirmation = true }
+        }
+        .alert("Drop stash \"\(stash.message)\"?", isPresented: $showDropConfirmation) {
+            Button("Drop", role: .destructive) { Task { await appState.dropStash(stash) } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The stashed changes will be lost.")
+        }
     }
 }
 
@@ -420,6 +539,10 @@ private struct GitFileRow: View {
             Button("Open File") {
                 let url = ws.rootURL.appendingPathComponent(change.path)
                 Task { await appState.openFile(url) }
+            }
+
+            Button("File History") {
+                Task { await appState.showFileHistory(path: change.path) }
             }
 
             Divider()

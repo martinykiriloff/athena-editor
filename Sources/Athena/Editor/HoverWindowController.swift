@@ -43,11 +43,18 @@ final class HoverWindowController: NSObject {
 
     // MARK: Public methods
 
-    /// Shows `text` in a floating panel positioned just above `screenRect`
-    /// (the glyph rect of the hovered character, in screen coordinates) —
-    /// mirrors `CompletionWindowController.show`'s "below/above the anchor"
-    /// placement.
-    func show(text: String, near screenRect: NSRect) {
+    /// Where `show` anchors its panel relative to `screenRect`.
+    enum Placement {
+        /// Just above `screenRect` — the mouse-hover tooltip's placement.
+        case above
+        /// To the right of `screenRect`, top-aligned — used for the
+        /// completion-item documentation panel beside the completion popup.
+        case rightOf
+    }
+
+    /// Shows `text` in a floating panel anchored to `screenRect` (screen
+    /// coordinates) per `placement`.
+    func show(text: String, near screenRect: NSRect, placement: Placement = .above) {
         let innerWidth = maxWidth - padding * 2
         let measured    = measure(text, maxWidth: innerWidth)
         let width  = min(maxWidth,  measured.width  + padding * 2)
@@ -56,8 +63,16 @@ final class HoverWindowController: NSObject {
         textField.stringValue = text
         textField.frame = NSRect(x: padding, y: padding, width: width - padding * 2, height: height - padding * 2)
 
-        let x = screenRect.minX
-        let y = screenRect.minY - height - 4  // show below the hovered glyph
+        let x: CGFloat
+        let y: CGFloat
+        switch placement {
+        case .above:
+            x = screenRect.minX
+            y = screenRect.minY - height - 4  // show below the hovered glyph
+        case .rightOf:
+            x = screenRect.maxX + 6
+            y = screenRect.maxY - height
+        }
         panel.setFrame(NSRect(x: x, y: y, width: width, height: height), display: false)
         panel.orderFront(nil)
     }

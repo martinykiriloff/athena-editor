@@ -28,6 +28,8 @@ final class AppState {
     let fileWatchService: FileWatchService
     let prettierService: PrettierService
     let postgresService: PostgresService
+    let sqliteService: SQLiteService
+    let inlineCompletionService: InlineCompletionService
 
     // MARK: - UI State
 
@@ -52,7 +54,21 @@ final class AppState {
     /// `secondaryGroup == nil`, so single-pane behavior is unaffected.
     var focusedGroup: EditorGroupSide = .primary
 
-    var fileTree: [FileNode] = []
+    /// Every assignment (workspace open/close, file-watcher rebuild, the
+    /// sidebar's create/rename/delete/expand paths) re-derives the cached
+    /// ⌘P index — the sidebar mutates this directly, so `didSet` is the one
+    /// place that sees all of them.
+    var fileTree: [FileNode] = [] {
+        didSet { scheduleQuickOpenIndexRebuild() }
+    }
+
+    /// Prebuilt, path-sorted ⌘P candidates for `fileTree` (see
+    /// `makeQuickOpenIndex`). Built off the main thread when the tree
+    /// changes so opening the palette and every keystroke only rank
+    /// precomputed entries. `quickOpenIndexVersion` bumps on each rebuild so
+    /// an open palette can re-rank (`QuickOpenEntry` isn't `Equatable`).
+    private(set) var quickOpenIndex: [QuickOpenEntry] = []
+    private(set) var quickOpenIndexVersion: Int = 0
     var gitStatus: GitStatus = GitStatus()
     /// All local + remote-tracking branches for the current workspace, kept
     /// fresh opportunistically by `refreshGitStatus()`. Powers the
@@ -80,6 +96,15 @@ final class AppState {
     var statusMessage: String = ""
     var searchQuery: String = ""
     var commitMessage: String = ""
+    /// `git stash list`, refreshed with status. Shown as a section in the
+    /// Source Control panel.
+    var gitStashes: [GitStash] = []
+    /// True while a push/pull/fetch runs, so the panel can disable the
+    /// buttons and show progress instead of letting a second sync start.
+    var isGitSyncing: Bool = false
+    /// Source Control panel toggle between Changes and History — lives here
+    /// (not in the view) so "File History" from a file row can switch it.
+    var gitPanelShowsHistory: Bool = false
     var currentTheme: EditorTheme = .darcula
     /// User-imported VS Code themes (plan.md item 27, "G4"), persisted via
     /// `settingsService` under the `"customThemes"` key alongside every
@@ -99,6 +124,10 @@ final class AppState {
     var dbBrowserTableData: DBTableData?
     var dbBrowserIsLoading: Bool = false
     var dbBrowserErrorMessage: String?
+    /// Query console state for the open browser sheet.
+    var dbQueryResult: DBQueryResult?
+    var dbQueryIsRunning: Bool = false
+    var dbQueryErrorMessage: String?
 
     var sfccConnections: [SFCCConnection] = []
     var sfccAvailableLogs: [String] = []
@@ -141,6 +170,24 @@ final class AppState {
     static let defaultOllamaModel    = "qwen2.5-coder:7b"
     var ollamaEndpoint:    String = defaultOllamaEndpoint
     var ollamaModel:       String = defaultOllamaModel
+    /// A second local provider — any server speaking the OpenAI
+    /// `/v1/completions` shape (LM Studio, llama.cpp `server`, vLLM, …).
+    /// `localOAIEndpoint` is expected to include the `/v1` prefix those
+    /// servers use, e.g. `http://127.0.0.1:1234/v1`.
+    var localOAIEndpoint: String = ""
+    var localOAIModel:    String = ""
+    var localOAIAPIKey:   String = ""
+    /// Tunables that used to be hardcoded in `requestOllamaInlineCompletion`
+    /// / `GhostTextController` — surfaced in Settings once there was a
+    /// second local provider to share them with.
+    var ghostTextTemperature: Double = 0.1
+    var ghostTextMaxTokens:   Int    = 96
+    var ghostTextDebounceMs:  Int    = 700
+    /// Prepends a compact "imports + enclosing symbol" block to local-LLM
+    /// prompts (see `buildGhostTextContext()`) — off skips that work
+    /// entirely, useful if it hurts latency more than it helps quality on a
+    /// slow/CPU-only local model.
+    var includeGhostTextContext: Bool = true
 
     // MARK: - NPM Scripts
     var npmPackages: [NPMPackageInfo] = []
@@ -191,6 +238,9 @@ final class AppState {
     var activeClaudeAccount: ClaudeAccount = .personal
     var claudeMessages: [ClaudeMessage] = []
     var claudeIsStreaming: Bool = false
+    /// Files staged via the paperclip button or drag-and-drop, attached to
+    /// the next outgoing message then cleared.
+    var claudePendingAttachments: [ClaudeAttachment] = []
     var showClaudePanel: Bool = false
     var claudePanelWidth: CGFloat = 340
     var keyBindings: [KeyBinding] = KeyBinding.vscodeDefaults
@@ -435,19 +485,6 @@ final class AppState {
         focusedGroup = side
     }
 
-    /// Flat, sorted list of every non-directory file in the workspace tree.
-    var allFiles: [FileNode] {
-        var result: [FileNode] = []
-        func collect(_ nodes: [FileNode]) {
-            for node in nodes {
-                if !node.isDirectory { result.append(node) }
-                if let children = node.children { collect(children) }
-            }
-        }
-        collect(fileTree)
-        return result.sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
-    }
-
     // MARK: - Init
 
     @ObservationIgnored private var keyEventMonitor: Any? = nil
@@ -455,6 +492,7 @@ final class AppState {
     @ObservationIgnored private var diagnosticsTask: Task<Void, Never>? = nil
     @ObservationIgnored private var fileWatchTask:   Task<Void, Never>? = nil
     @ObservationIgnored private var fileTreeRebuildTask: Task<Void, Never>? = nil
+    @ObservationIgnored private var quickOpenIndexTask: Task<Void, Never>? = nil
 
     init(
         fileService: FileService = FileService(),
@@ -472,7 +510,9 @@ final class AppState {
         sfccWatchService: SFCCWatchService = SFCCWatchService(),
         fileWatchService: FileWatchService = FileWatchService(),
         prettierService: PrettierService = PrettierService(),
-        postgresService: PostgresService = PostgresService()
+        postgresService: PostgresService = PostgresService(),
+        sqliteService: SQLiteService = SQLiteService(),
+        inlineCompletionService: InlineCompletionService = InlineCompletionService()
     ) {
         self.fileService = fileService
         self.gitService = gitService
@@ -490,6 +530,8 @@ final class AppState {
         self.fileWatchService = fileWatchService
         self.prettierService = prettierService
         self.postgresService = postgresService
+        self.sqliteService = sqliteService
+        self.inlineCompletionService = inlineCompletionService
 
         // Default to one terminal session at launch — matches the
         // pre-multi-terminal behavior (plan.md item 21 point 4): a user who
@@ -675,6 +717,17 @@ final class AppState {
         // still registered and skip starting a correctly-rooted one.
         await lspManager.stopAllServers()
         diagnostics = [:]
+
+        // Source Control state is per-repository; a File History filter,
+        // stash list or half-typed commit message from the previous
+        // workspace must not act on the next one.
+        gitStatus = GitStatus()
+        branches = []
+        gitStashes = []
+        commitHistory = []
+        commitHistoryPath = nil
+        gitPanelShowsHistory = false
+        commitMessage = ""
 
         workspace = WorkspaceModel(rootURL: url)
         statusMessage = "Opening workspace \(url.lastPathComponent)…"
@@ -909,18 +962,32 @@ final class AppState {
         async let gtp = settingsService.value(for: "ghostTextProvider", default: "none")
         async let oep = settingsService.value(for: "ollamaEndpoint",    default: Self.defaultOllamaEndpoint)
         async let om  = settingsService.value(for: "ollamaModel",       default: Self.defaultOllamaModel)
+        async let loep = settingsService.value(for: "localOAIEndpoint", default: "")
+        async let lom  = settingsService.value(for: "localOAIModel",    default: "")
+        async let loak = settingsService.value(for: "localOAIAPIKey",   default: "")
+        async let gtt  = settingsService.value(for: "ghostTextTemperature",   default: 0.1)
+        async let gtm  = settingsService.value(for: "ghostTextMaxTokens",     default: 96)
+        async let gtd  = settingsService.value(for: "ghostTextDebounceMs",    default: 700)
+        async let gtc  = settingsService.value(for: "includeGhostTextContext", default: true)
         ghostTextProvider = GhostTextProvider(rawValue: await gtp) ?? .none
         // An empty string is a valid `Codable` decode, not a missing key, so
         // a field a user cleared in Settings (the placeholder text is only a
         // visual hint — SwiftUI doesn't fall back to it) persists as `""`
         // rather than falling through to `settingsService`'s `default:`.
         // Treat it the same as "unset" here so Settings displays, and
-        // `requestOllamaInlineCompletion` sends, the real default instead of
-        // building a host-less URL that fails as "unsupported URL".
+        // `InlineCompletionService.requestOllama` sends, the real default
+        // instead of building a host-less URL that fails as "unsupported URL".
         let loadedEndpoint = await oep
         let loadedModel    = await om
         ollamaEndpoint = loadedEndpoint.isEmpty ? Self.defaultOllamaEndpoint : loadedEndpoint
         ollamaModel    = loadedModel.isEmpty    ? Self.defaultOllamaModel    : loadedModel
+        localOAIEndpoint = await loep
+        localOAIModel    = await lom
+        localOAIAPIKey   = await loak
+        ghostTextTemperature    = await gtt
+        ghostTextMaxTokens       = await gtm
+        ghostTextDebounceMs      = await gtd
+        includeGhostTextContext = await gtc
 
         // Claude API key (shared with chat) — stored in the Keychain
         await loadClaudeAPIKey()
@@ -1011,182 +1078,80 @@ final class AppState {
 
     // MARK: - AI Ghost Text
 
-    /// Calls claude-haiku for a short inline code completion at the cursor.
-    /// Returns `nil` when no API key is configured or the request fails.
+    /// Dispatches to the selected ghost-text provider, all implemented in
+    /// `InlineCompletionService`. Local providers (Ollama, OpenAI-compatible)
+    /// get a compact code-context header prepended via
+    /// `buildGhostTextContext()`; Claude's tight cloud prompt is unchanged.
+    /// A local provider's connectivity/server errors land in `statusMessage`;
+    /// `nil` otherwise covers "no provider configured", "empty response",
+    /// and "request cancelled by the next keystroke" alike.
     func requestInlineCompletion(prefix: String, suffix: String) async -> String? {
         switch ghostTextProvider {
-        case .none:   return nil
-        case .claude: return await requestClaudeInlineCompletion(prefix: prefix, suffix: suffix)
-        case .ollama: return await requestOllamaInlineCompletion(prefix: prefix, suffix: suffix)
+        case .none:
+            return nil
+
+        case .claude:
+            return await inlineCompletionService.requestClaude(prefix: prefix, suffix: suffix, apiKey: claudeAPIKey)
+
+        case .ollama:
+            let endpoint = ollamaEndpoint.isEmpty ? Self.defaultOllamaEndpoint : ollamaEndpoint
+            let model    = ollamaModel.isEmpty    ? Self.defaultOllamaModel    : ollamaModel
+            let result = await inlineCompletionService.requestOllama(
+                prefix: prefix, suffix: suffix, contextHeader: buildGhostTextContext(),
+                endpoint: endpoint, model: model,
+                temperature: ghostTextTemperature, maxTokens: ghostTextMaxTokens
+            )
+            if let statusMessage = result.statusMessage { self.statusMessage = statusMessage }
+            return result.text
+
+        case .openAICompatible:
+            guard !localOAIEndpoint.isEmpty, !localOAIModel.isEmpty else { return nil }
+            let result = await inlineCompletionService.requestOpenAICompatible(
+                prefix: prefix, contextHeader: buildGhostTextContext(),
+                endpoint: localOAIEndpoint, model: localOAIModel, apiKey: localOAIAPIKey,
+                temperature: ghostTextTemperature, maxTokens: ghostTextMaxTokens
+            )
+            if let statusMessage = result.statusMessage { self.statusMessage = statusMessage }
+            return result.text
         }
     }
 
-    private func requestClaudeInlineCompletion(prefix: String, suffix: String) async -> String? {
-        guard !claudeAPIKey.isEmpty else { return nil }
+    /// Builds the compact "imports + enclosing symbol" block local-LLM ghost
+    /// text prepends to its prompt — the biggest lever on suggestion quality
+    /// beyond raw trailing text, and free to compute: `documentSymbols` is
+    /// already a live, kept-current tree for the focused tab (same one
+    /// `breadcrumbPath` reads), so this issues zero extra LSP calls. Returns
+    /// `""` when the toggle is off or there's nothing to say.
+    private func buildGhostTextContext() -> String {
+        guard includeGhostTextContext else { return "" }
 
-        let context = String(prefix.suffix(600)) + "<CURSOR>" + String(suffix.prefix(200))
-        let body: [String: Any] = [
-            "model":      "claude-haiku-4-5-20251001",
-            "max_tokens": 80,
-            "system":     "You are a code completion engine. Output ONLY the text that should appear at <CURSOR>. No explanation, no markdown, no backticks. Complete at most one line.",
-            "messages":   [["role": "user", "content": context]],
-        ]
+        var lines: [String] = []
 
-        var req = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue(claudeAPIKey,        forHTTPHeaderField: "x-api-key")
-        req.setValue("2023-06-01",        forHTTPHeaderField: "anthropic-version")
-        req.timeoutInterval = 10
-        guard let data = try? JSONSerialization.data(withJSONObject: body) else { return nil }
-        req.httpBody = data
+        let imports = importLines(in: focusedTab?.content ?? "").prefix(8)
+        if !imports.isEmpty {
+            lines.append("imports:\n\(imports.joined(separator: "\n"))")
+        }
 
-        guard
-            let (respData, _) = try? await URLSession.shared.data(for: req),
-            let json = try? JSONSerialization.jsonObject(with: respData) as? [String: Any],
-            let content = json["content"] as? [[String: Any]],
-            let text = content.first?["text"] as? String,
-            !text.isEmpty
-        else { return nil }
+        let cursorLine = focusedTab?.cursorLine ?? 1
+        let symbolPath = breadcrumbSymbolPath(in: documentSymbols, containingLine: cursorLine)
+            .map(\.name).joined(separator: ".")
+        if !symbolPath.isEmpty {
+            lines.append("inside: \(symbolPath)")
+        }
 
-        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !lines.isEmpty else { return "" }
+        // Keep the header itself bounded — a huge import list or deeply
+        // nested symbol path shouldn't crowd out the actual prefix/suffix
+        // text on a latency-sensitive local model.
+        return String(lines.joined(separator: "\n").prefix(500)) + "\n\n"
     }
 
-    private func requestOllamaInlineCompletion(prefix: String, suffix: String) async -> String? {
-        // A field cleared in Settings persists as `""`, not "unset" (see
-        // `loadSettings`'s doc comment) — fall back to the real default here
-        // too, so a value that somehow ends up empty mid-session (without a
-        // relaunch to re-trigger that self-heal) still resolves to a usable
-        // endpoint instead of building a host-less URL.
+    /// Fetches installed Ollama model names for the Settings "Fetch models"
+    /// button — falls back to the existing free-text field when empty
+    /// (Ollama not running yet, wrong endpoint, etc.).
+    func fetchOllamaModels() async -> [String] {
         let endpoint = ollamaEndpoint.isEmpty ? Self.defaultOllamaEndpoint : ollamaEndpoint
-        let model    = ollamaModel.isEmpty    ? Self.defaultOllamaModel    : ollamaModel
-        let base = endpoint.hasSuffix("/") ? String(endpoint.dropLast()) : endpoint
-        // Use the native generate endpoint with fill-in-middle: it returns ONLY the
-        // continuation rather than echoing the prompt back (which chat models do).
-        guard let url = URL(string: "\(base)/api/generate") else { return nil }
-
-        // qwen3-coder and similar instruct models reject FIM "suffix" ("does not
-        // support insert"), so we send prompt-only and strip the echoed prefix below.
-        let promptHead = String(prefix.suffix(2000))
-        let body: [String: Any] = [
-            "model":  model,
-            "prompt": promptHead,
-            "stream": false,
-            "options": [
-                "temperature": 0.1,
-                "num_predict": 96,
-            ],
-        ]
-
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.timeoutInterval = 20
-        guard let data = try? JSONSerialization.data(withJSONObject: body) else { return nil }
-        req.httpBody = data
-
-        let respData: Data
-        let response: URLResponse
-        do {
-            (respData, response) = try await Self.dataWithConnectionRetry(for: req)
-        } catch {
-            // Every keystroke cancels the in-flight request and schedules a
-            // new one for the updated cursor position (see EditorView's
-            // ghostDebounce). If a request was already waiting on Ollama's
-            // reply when the next keystroke landed, Swift's URLSession
-            // async/await bridge cancels that in-flight task automatically,
-            // surfacing as URLError.cancelled — routine debounce behavior,
-            // not a connectivity failure. Don't scare the user with
-            // "unreachable" for a request Athena itself tore down.
-            if let urlError = error as? URLError, urlError.code == .cancelled {
-                return nil
-            }
-            statusMessage = "Ollama unreachable at \(base): \(error.localizedDescription)"
-            return nil
-        }
-
-        if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-            let detail = String(data: respData, encoding: .utf8)?.prefix(200) ?? ""
-            statusMessage = "Ollama error \(http.statusCode) (model \(model)): \(detail)"
-            return nil
-        }
-
-        guard
-            let json = try? JSONSerialization.jsonObject(with: respData) as? [String: Any],
-            let text = json["response"] as? String
-        else { return nil }
-
-        return Self.cleanInlineCompletion(text, prefix: promptHead)
-    }
-
-    /// Performs `req` and retries on connection-level failures (host not yet
-    /// listening, connection lost) that are typically transient — e.g. Ollama
-    /// still finishing startup. Does not retry HTTP error responses or other
-    /// URL errors (those surface immediately).
-    private static func dataWithConnectionRetry(
-        for req: URLRequest,
-        attempts: Int = 3,
-        initialDelay: Duration = .milliseconds(300)
-    ) async throws -> (Data, URLResponse) {
-        var delay = initialDelay
-        for _ in 1..<attempts {
-            do {
-                return try await URLSession.shared.data(for: req)
-            } catch let error as URLError where Self.isTransientConnectionError(error) {
-                // ContinuousClock, not Task.sleep(for:) — avoids a Swift 6.2
-                // release-toolchain crash in swift_task_dealloc from colliding
-                // cross-module Task.sleep(for:) specializations
-                // (https://github.com/swiftlang/swift/issues/86204).
-                let clock = ContinuousClock()
-                try await clock.sleep(until: clock.now.advanced(by: delay))
-                delay *= 2
-            }
-        }
-        // Final attempt: let any error (transient or not) propagate to the caller.
-        return try await URLSession.shared.data(for: req)
-    }
-
-    private static func isTransientConnectionError(_ error: URLError) -> Bool {
-        switch error.code {
-        case .cannotConnectToHost, .networkConnectionLost:
-            return true
-        default:
-            return false
-        }
-    }
-
-    /// Strips markdown fences and any echoed prefix from a raw model completion,
-    /// returning `nil` when nothing usable remains. Instruct models like
-    /// qwen3-coder reproduce the prompt before continuing it, so we cut the
-    /// longest suffix of `prefix` that the response repeats at its head.
-    private static func cleanInlineCompletion(_ raw: String, prefix: String) -> String? {
-        var text = raw
-
-        // Drop a leading ```lang fence and any trailing ``` fence.
-        if text.hasPrefix("```") {
-            if let firstNewline = text.firstIndex(of: "\n") {
-                text = String(text[text.index(after: firstNewline)...])
-            }
-            if let fence = text.range(of: "```") {
-                text = String(text[..<fence.lowerBound])
-            }
-        }
-        text = text.trimmingCharacters(in: .newlines)
-
-        // Remove echoed prompt: find the longest suffix of `prefix` (up to 400
-        // chars) that the response repeats at its start, and drop it.
-        let maxOverlap = min(prefix.count, text.count, 400)
-        if maxOverlap > 0 {
-            for len in stride(from: maxOverlap, through: 1, by: -1) {
-                if text.hasPrefix(String(prefix.suffix(len))) {
-                    text = String(text.dropFirst(len))
-                    break
-                }
-            }
-        }
-
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+        return await inlineCompletionService.fetchOllamaModels(endpoint: endpoint)
     }
 
     // MARK: - Session Restore
@@ -1525,6 +1490,26 @@ final class AppState {
         } else {
             debugBreakpoints[filePath]!.insert(line)
         }
+        pushBreakpointsToLiveSession(changedFile: filePath)
+    }
+
+    /// A toggle during a session reaches the debuggee immediately; a
+    /// sandbox keeps halting storefront requests at a breakpoint the user
+    /// visibly removed otherwise.
+    private func pushBreakpointsToLiveSession(changedFile: String) {
+        switch debugState {
+        case .running, .paused: break
+        case .idle, .launching, .stopped: return
+        }
+        let lines = Array(debugBreakpoints[changedFile] ?? []).sorted()
+        let all = debugBreakpoints.mapValues { Array($0).sorted() }
+        Task {
+            do {
+                try await debugService.updateBreakpoints(changedFile: changedFile, lines: lines, allByFile: all)
+            } catch {
+                debugOutput += "[Athena] Couldn't update breakpoints: \(error.localizedDescription)\n"
+            }
+        }
     }
 
     func startDebugging() async {
@@ -1550,18 +1535,19 @@ final class AppState {
             onOutput:      { [weak self] text  in self?.debugOutput += text },
             onStopped:     { [weak self] stop  in
                 guard let self else { return }
-                if let path = stop.filePath {
-                    self.debugCurrentFile = URL(fileURLWithPath: path)
-                    self.debugCurrentLine = stop.line
-                    Task { await self.refreshDebugState() }
-                }
+                // A halt with no local file (a cartridge that only exists
+                // on the sandbox) still has frames, variables and watches.
+                self.debugCurrentFile = stop.filePath.map { URL(fileURLWithPath: $0) }
+                self.debugCurrentLine = stop.line
+                Task { await self.refreshDebugState() }
             }
         )
 
         let bpMap = debugBreakpoints.mapValues { Array($0) }
 
         do {
-            try await debugService.launch(config, workspaceURL: workspace?.rootURL, breakpointsByFile: bpMap)
+            try await debugService.launch(config, workspaceURL: workspace?.rootURL, breakpointsByFile: bpMap,
+                                          sfccConnection: sfccConnections.first(where: { $0.isActive }))
             debugOutput += "[Athena] Debug session started: \(config.name)\n"
         } catch {
             debugOutput += "[Athena] Failed to start debugger: \(error.localizedDescription)\n"
@@ -1589,8 +1575,10 @@ final class AppState {
     }
 
     func debugContinue() async {
-        try? await debugService.continueExecution()
+        // Cleared before the call: a backend may detect the next halt while
+        // the continue request is still in flight, and that marker must win.
         debugCurrentLine = nil
+        try? await debugService.continueExecution()
     }
 
     func debugStepOver() async {
@@ -1706,22 +1694,11 @@ final class AppState {
         if let data = try? Data(contentsOf: launchJSON),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let configs = json["configurations"] as? [[String: Any]] {
-            launchConfigs = configs.compactMap { c -> LaunchConfig? in
-                guard let type = c["type"] as? String,
-                      let name = c["name"] as? String,
-                      let req  = c["request"] as? String else { return nil }
-                return LaunchConfig(
-                    type:         type,
-                    request:      req,
-                    name:         name,
-                    program:      c["program"] as? String ?? "",
-                    args:         c["args"]    as? [String]         ?? [],
-                    env:          c["env"]     as? [String: String] ?? [:],
-                    cwd:          c["cwd"]     as? String ?? "${workspaceFolder}",
-                    stopOnEntry:  c["stopOnEntry"] as? Bool ?? false,
-                    debugPort:    c["port"] as? Int ?? c["debugPort"] as? Int,
-                    url:          c["url"] as? String
-                )
+            launchConfigs = configs.compactMap(LaunchConfig.from(json:))
+            // A workspace with dw.json / an SFCC connection gets the SFCC
+            // config even when launch.json predates Athena's debugger.
+            if !launchConfigs.contains(where: \.isSFCC), let sfcc = sfccLaunchConfigIfApplicable() {
+                launchConfigs.append(sfcc)
             }
         } else {
             launchConfigs = builtInLaunchConfigs()
@@ -1751,6 +1728,8 @@ final class AppState {
             }
         }
 
+        if let sfcc = sfccLaunchConfigIfApplicable() { configs.append(sfcc) }
+
         // Node.js and browser configs are always included (no external adapter required).
         configs += [
             LaunchConfig(type: "node-cdp", request: "launch",
@@ -1767,6 +1746,18 @@ final class AppState {
                          program: "", debugPort: 9222, url: "http://localhost:3000"),
         ]
         return configs
+    }
+
+    /// The built-in SFCC (Prophet-compatible) launch config, offered when the
+    /// workspace has a `dw.json` or an active SFCC connection — the two
+    /// places the debugger can get sandbox credentials from (ADR 0002).
+    private func sfccLaunchConfigIfApplicable() -> LaunchConfig? {
+        let hasDWJSON = workspace.map {
+            FileManager.default.fileExists(atPath: $0.rootURL.appendingPathComponent("dw.json").path)
+        } ?? false
+        let hasConnection = sfccConnections.contains(where: \.isActive)
+        guard hasDWJSON || hasConnection else { return nil }
+        return LaunchConfig(type: "prophet", request: "launch", name: "Debug SFCC (sandbox)", program: "")
     }
 
     // MARK: - SFCC connections & auto-upload
@@ -1847,6 +1838,84 @@ final class AppState {
         sfccWatchTask = nil
         sfccWatchRoot = nil
         Task { await sfccWatchService.stop() }
+    }
+
+    /// True while `uploadAllCartridges()` runs, so the sidebar can show
+    /// progress and refuse to start a second pass over the same sandbox.
+    var isUploadingCartridges: Bool = false
+
+    /// Re-uploads every cartridge in the workspace to the active sandbox.
+    ///
+    /// Each cartridge goes up as one archive the server expands, so a full
+    /// deploy is a few requests per cartridge instead of thousands. The
+    /// remote copy is replaced, not merged: files deleted locally disappear
+    /// from the sandbox too, which is the point of a full re-upload.
+    func uploadAllCartridges() async {
+        guard !isUploadingCartridges else { return }
+        guard let conn = sfccConnections.first(where: { $0.isActive }) else {
+            statusMessage = "No active SFCC sandbox — activate one first."
+            return
+        }
+        guard let ws = workspace else { return }
+
+        let root = SFCCService.cartridgesRoot(connection: conn, workspaceURL: ws.rootURL)
+        let cartridges = SFCCService.discoverCartridges(under: root)
+            .sorted { $0.key < $1.key }
+        guard !cartridges.isEmpty else {
+            statusMessage = "No cartridges found under \(root.lastPathComponent)/"
+            return
+        }
+
+        isUploadingCartridges = true
+        defer { isUploadingCartridges = false }
+
+        // A full deploy is long enough to need somewhere to report to. The
+        // status bar shows one line and truncates it, so each cartridge's
+        // result — above all the reason a failure happened — goes to the
+        // Output panel, which is opened for it.
+        showBottomPanel = true
+        activeBottomPanel = .output
+        appendSFCCOutput("")
+        appendSFCCOutput("── Uploading \(cartridges.count) cartridge\(cartridges.count == 1 ? "" : "s") to \(conn.hostname) (code version \(conn.codeVersion)) ──")
+
+        var failures = 0
+        for (index, entry) in cartridges.enumerated() {
+            statusMessage = "Uploading \(entry.key) (\(index + 1)/\(cartridges.count))…"
+            let started = ContinuousClock.now
+            do {
+                try await sfccService.uploadCartridge(
+                    name: entry.key, localDirectory: entry.value, connection: conn
+                )
+                let seconds = Double(started.duration(to: .now).components.seconds)
+                appendSFCCOutput(String(format: "  ✓ %@  (%.0fs)", entry.key, seconds))
+                appendSFCCUploadRecord(conn, entry.key, kind: .cartridge, status: .success)
+            } catch {
+                failures += 1
+                appendSFCCOutput("  ✗ \(entry.key) — \(error.localizedDescription)")
+                appendSFCCUploadRecord(conn, entry.key, kind: .cartridge,
+                                       status: .failure(error.localizedDescription))
+            }
+        }
+
+        appendSFCCOutput(failures == 0
+            ? "── Done: \(cartridges.count) uploaded, auto-upload is on ──"
+            : "── Done: \(cartridges.count - failures) uploaded, \(failures) failed ──")
+
+        // A full deploy is normally the start of a working session, so make
+        // sure saves keep flowing to the sandbox afterwards rather than
+        // leaving the sandbox to drift again. Idempotent: a watch already
+        // running on this root is left alone.
+        restartSFCCAutoUpload()
+
+        statusMessage = failures == 0
+            ? "Uploaded \(cartridges.count) cartridge\(cartridges.count == 1 ? "" : "s") to \(conn.hostname) — auto-upload on"
+            : "Uploaded \(cartridges.count - failures) of \(cartridges.count) cartridges — \(failures) failed, see Uploads"
+    }
+
+    /// Appends one line to the Output panel's buffer — the same sink the npm
+    /// script runner writes to.
+    private func appendSFCCOutput(_ line: String) {
+        scriptOutput += line + "\n"
     }
 
     func clearSFCCUploadLog() {
@@ -1985,12 +2054,23 @@ final class AppState {
 
     // MARK: - DB Data Browser
 
-    /// Connects to `connection` (PostgreSQL only, for now — `DBType` also
-    /// lists MySQL/MariaDB/Oracle/MongoDB, none of which `PostgresService`
-    /// speaks) and opens the data-browser sheet for it on success.
+    /// The driver actor for an engine, or nil for engines Athena can't speak
+    /// (`DBType.isSupported`). All DB browsing goes through this so the
+    /// views and the rest of AppState never know which driver is behind a
+    /// connection.
+    func dbEngine(for type: DBType) -> (any DBEngine)? {
+        switch type {
+        case .postgresql: return postgresService
+        case .sqlite:     return sqliteService
+        case .mongodb, .mysql, .oracle, .mariadb: return nil
+        }
+    }
+
+    /// Connects to `connection` and opens the data-browser sheet for it on
+    /// success. Unsupported engines fail loudly here rather than pretending.
     func connectAndBrowse(_ connection: DBConnection) async {
-        guard connection.type == .postgresql else {
-            statusMessage = "\(connection.type.rawValue) browsing isn't supported yet — PostgreSQL only."
+        guard let engine = dbEngine(for: connection.type) else {
+            statusMessage = "\(connection.type.rawValue) isn't supported in this version of Athena — PostgreSQL and SQLite are."
             return
         }
 
@@ -1999,23 +2079,32 @@ final class AppState {
         defer { dbBrowserIsLoading = false }
 
         do {
-            try await postgresService.connect(connection)
+            try await engine.connect(connection)
             if let idx = dbConnections.firstIndex(where: { $0.id == connection.id }) {
                 dbConnections[idx].isConnected = true
             }
             dbBrowserConnectionId = connection.id
-            dbBrowserTables = try await postgresService.listTables(connection.id)
+            dbBrowserTables = try await engine.listTables(connection.id)
             dbBrowserSelectedTable = nil
             dbBrowserTableData = nil
+            dbQueryResult = nil
+            dbQueryErrorMessage = nil
         } catch {
-            dbBrowserErrorMessage = error.localizedDescription
+            // `dbBrowserErrorMessage` only ever renders inside the browse
+            // sheet — which a failure here means never opens (see
+            // `DBConnectionRow.onBrowse` in DBConnectionsView.swift) — so a
+            // connect failure needs `statusMessage` too, or it's completely
+            // silent: no sheet, no error, nothing.
+            let message = "Couldn't connect to \(connection.name): \(error.localizedDescription)"
+            dbBrowserErrorMessage = message
+            statusMessage = message
         }
     }
 
     /// Disconnects `connection` and, if its data-browser sheet is open,
     /// closes it.
     func disconnectDatabase(_ connection: DBConnection) async {
-        await postgresService.disconnect(connection.id)
+        await dbEngine(for: connection.type)?.disconnect(connection.id)
         if let idx = dbConnections.firstIndex(where: { $0.id == connection.id }) {
             dbConnections[idx].isConnected = false
         }
@@ -2024,6 +2113,36 @@ final class AppState {
             dbBrowserTables = []
             dbBrowserSelectedTable = nil
             dbBrowserTableData = nil
+            dbQueryResult = nil
+            dbQueryErrorMessage = nil
+        }
+    }
+
+    /// The engine behind the connection whose browser sheet is open.
+    private var dbBrowserEngine: (any DBEngine)? {
+        guard let id = dbBrowserConnectionId,
+              let connection = dbConnections.first(where: { $0.id == id }) else { return nil }
+        return dbEngine(for: connection.type)
+    }
+
+    /// Runs one statement from the query console against the open browser
+    /// connection. After a data-changing statement the browsed table is
+    /// reloaded so the grid doesn't show stale rows.
+    func runDBQuery(_ sql: String) async {
+        let trimmed = sql.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let connectionId = dbBrowserConnectionId, let engine = dbBrowserEngine else { return }
+        dbQueryErrorMessage = nil
+        dbQueryIsRunning = true
+        defer { dbQueryIsRunning = false }
+        do {
+            let result = try await engine.runQuery(connectionId, sql: trimmed, limit: 500)
+            dbQueryResult = result
+            if result.columns.isEmpty, let table = dbBrowserSelectedTable {
+                await loadDBTableData(table)
+            }
+        } catch {
+            dbQueryResult = nil
+            dbQueryErrorMessage = error.localizedDescription
         }
     }
 
@@ -2035,8 +2154,9 @@ final class AppState {
         defer { dbBrowserIsLoading = false }
 
         do {
+            guard let engine = dbBrowserEngine else { throw PostgresServiceError.notConnected }
             dbBrowserSelectedTable = table
-            dbBrowserTableData = try await postgresService.fetchRows(connectionId, table: table)
+            dbBrowserTableData = try await engine.fetchRows(connectionId, table: table, limit: 200)
         } catch {
             dbBrowserErrorMessage = error.localizedDescription
         }
@@ -2057,7 +2177,8 @@ final class AppState {
         })
 
         do {
-            try await postgresService.updateCell(
+            guard let engine = dbBrowserEngine else { throw PostgresServiceError.notConnected }
+            try await engine.updateCell(
                 connectionId,
                 table: data.table,
                 column: column,
@@ -2081,10 +2202,115 @@ final class AppState {
         do {
             gitStatus = try await gitService.status(at: workspace.rootURL)
         } catch {
+            // Not a repository (or git broke): nothing below can be trusted.
+            gitStatus = GitStatus()
+            branches = []
+            gitStashes = []
             statusMessage = "Git error: \(error.localizedDescription)"
+            return
         }
 
         branches = (try? await gitService.branches(at: workspace.rootURL)) ?? branches
+        gitStashes = (try? await gitService.stashList(at: workspace.rootURL)) ?? []
+    }
+
+    // MARK: - Commit / sync / stash
+
+    /// Commits the staged changes with `commitMessage`. Failures (hooks,
+    /// empty index, identity not configured) surface in the status bar —
+    /// the panel used to `try?` this and silently keep the message.
+    func commitStaged() async {
+        guard let workspace else { return }
+        let message = commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !message.isEmpty else { return }
+        do {
+            try await gitService.commit(message: message, at: workspace.rootURL)
+            commitMessage = ""
+            statusMessage = "Committed: \(message.components(separatedBy: "\n").first ?? message)"
+        } catch {
+            statusMessage = "Commit failed: \(error.localizedDescription)"
+        }
+        await refreshGitStatus()
+    }
+
+    func gitPush() async  { await runGitSync("Push")  { try await $0.push(at: $1) } }
+    func gitPull() async  { await runGitSync("Pull")  { try await $0.pull(at: $1) } }
+    func gitFetch() async { await runGitSync("Fetch") { try await $0.fetch(at: $1) } }
+
+    private func runGitSync(_ verb: String, _ operation: (GitService, URL) async throws -> Void) async {
+        guard let workspace, !isGitSyncing else { return }
+        isGitSyncing = true
+        defer { isGitSyncing = false }
+        statusMessage = "\(verb)ing…"
+        do {
+            try await operation(gitService, workspace.rootURL)
+            statusMessage = "\(verb) complete"
+        } catch {
+            statusMessage = "\(verb) failed: \(error.localizedDescription)"
+        }
+        await refreshGitStatus()
+        if gitPanelShowsHistory { await refreshCommitHistory() }
+    }
+
+    /// Stashes the working tree. Uses the commit message box as the stash
+    /// message when it has one, and clears it — the text was describing
+    /// exactly the changes that just left the tree.
+    func stashChanges(includeUntracked: Bool) async {
+        guard let workspace else { return }
+        await refreshGitStatus()   // the guard below must not act on a stale tree
+        let hasTrackedChanges = !(gitStatus.staged.isEmpty && gitStatus.unstaged.isEmpty && gitStatus.conflicted.isEmpty)
+        guard includeUntracked || hasTrackedChanges else {
+            statusMessage = "Nothing tracked to stash — use \"Stash Including Untracked\" for new files."
+            return
+        }
+        do {
+            try await gitService.stashPush(message: commitMessage, includeUntracked: includeUntracked, at: workspace.rootURL)
+            commitMessage = ""
+            statusMessage = "Changes stashed"
+        } catch {
+            statusMessage = "Stash failed: \(error.localizedDescription)"
+        }
+        await refreshGitStatus()
+    }
+
+    /// Stashes are addressed by index, which shifts whenever a stash is
+    /// pushed or dropped elsewhere (the integrated terminal, say). Re-list
+    /// right before acting and find the entry by message and date so a
+    /// stale row never pops or drops a neighbour.
+    private func currentStash(matching stash: GitStash, at url: URL) async -> GitStash? {
+        let fresh = (try? await gitService.stashList(at: url)) ?? []
+        gitStashes = fresh
+        return fresh.first { $0.message == stash.message && $0.date == stash.date }
+    }
+
+    func applyStash(_ stash: GitStash, pop: Bool) async {
+        guard let workspace else { return }
+        guard let current = await currentStash(matching: stash, at: workspace.rootURL) else {
+            statusMessage = "That stash no longer exists — list refreshed"
+            return
+        }
+        do {
+            try await gitService.stashApply(current, pop: pop, at: workspace.rootURL)
+            statusMessage = pop ? "Stash popped" : "Stash applied"
+        } catch {
+            statusMessage = "\(pop ? "Pop" : "Apply") failed: \(error.localizedDescription)"
+        }
+        await refreshGitStatus()
+    }
+
+    func dropStash(_ stash: GitStash) async {
+        guard let workspace else { return }
+        guard let current = await currentStash(matching: stash, at: workspace.rootURL) else {
+            statusMessage = "That stash no longer exists — list refreshed"
+            return
+        }
+        do {
+            try await gitService.stashDrop(current, at: workspace.rootURL)
+            statusMessage = "Stash dropped"
+        } catch {
+            statusMessage = "Drop failed: \(error.localizedDescription)"
+        }
+        await refreshGitStatus()
     }
 
     // MARK: - Branches
@@ -2127,6 +2353,9 @@ final class AppState {
     var commitHistory: [GitCommit] = []
     var isLoadingCommitHistory: Bool = false
     var commitHistoryErrorMessage: String?
+    /// When set, History shows only commits touching this repo-relative
+    /// path (File History); nil is the whole repo.
+    var commitHistoryPath: String?
 
     func refreshCommitHistory(limit: Int = 50) async {
         guard let workspace else { return }
@@ -2135,10 +2364,22 @@ final class AppState {
         defer { isLoadingCommitHistory = false }
 
         do {
-            commitHistory = try await gitService.log(at: workspace.rootURL, limit: limit)
+            commitHistory = try await gitService.log(at: workspace.rootURL, limit: limit, path: commitHistoryPath)
         } catch {
             commitHistoryErrorMessage = "Git error: \(error.localizedDescription)"
         }
+    }
+
+    /// Switches the Source Control panel to History filtered to `path`.
+    func showFileHistory(path: String) async {
+        commitHistoryPath = path
+        gitPanelShowsHistory = true
+        await refreshCommitHistory()
+    }
+
+    func clearFileHistoryFilter() async {
+        commitHistoryPath = nil
+        await refreshCommitHistory()
     }
 
     // MARK: - Clone Repository
@@ -2648,14 +2889,32 @@ final class AppState {
         await claudeCLIService.abort()
         claudeIsStreaming = false
         claudeMessages = []
+        claudePendingAttachments = []
         activeClaudeAccount = account
+    }
+
+    /// Stages files for the next outgoing Claude message — the panel's
+    /// paperclip button and drag-and-drop both funnel through here.
+    /// De-dupes by path; ordering matches attachment order.
+    func addClaudeAttachments(_ urls: [URL]) {
+        for url in urls where !claudePendingAttachments.contains(where: { $0.url == url }) {
+            claudePendingAttachments.append(ClaudeAttachment(url: url))
+        }
+    }
+
+    /// Removes a single staged attachment, e.g. via its chip's ✕ button.
+    func removeClaudeAttachment(_ id: UUID) {
+        claudePendingAttachments.removeAll { $0.id == id }
     }
 
     /// Appends a user message, spawns the CLI, and streams the response.
     func sendClaudeMessage(_ text: String) async {
         guard !claudeIsStreaming else { return }
 
-        claudeMessages.append(ClaudeMessage(role: .user, content: text))
+        let attachments = claudePendingAttachments
+        claudePendingAttachments = []
+
+        claudeMessages.append(ClaudeMessage(role: .user, content: text, attachments: attachments))
 
         let assistantMsg = ClaudeMessage(role: .assistant, content: "", isStreaming: true)
         claudeMessages.append(assistantMsg)
@@ -2731,6 +2990,29 @@ final class AppState {
             try? await clock.sleep(until: clock.now.advanced(by: .milliseconds(300)))
             guard !Task.isCancelled else { return }
             await self?.refreshFileTree()
+        }
+    }
+
+    /// Rebuilds `quickOpenIndex` for the current `fileTree` on a background
+    /// task; a newer assignment cancels the in-flight one so a burst of tree
+    /// mutations (expanding folders, a watcher-driven rebuild) yields one
+    /// index, not one per mutation.
+    private func scheduleQuickOpenIndexRebuild() {
+        quickOpenIndexTask?.cancel()
+        let tree = fileTree
+        let root = workspace?.rootURL
+        quickOpenIndexTask = Task { [weak self] in
+            // Coalesce: the sidebar assigns `fileTree` on every expand
+            // toggle, and a detached walk can't be cancelled once started.
+            let clock = ContinuousClock()
+            try? await clock.sleep(until: clock.now.advanced(by: .milliseconds(100)))
+            guard !Task.isCancelled else { return }
+            let index = await Task.detached(priority: .utility) {
+                makeQuickOpenIndex(fileTree: tree, workspaceRootURL: root)
+            }.value
+                        guard !Task.isCancelled, let self else { return }
+            self.quickOpenIndex = index
+            self.quickOpenIndexVersion &+= 1
         }
     }
 
@@ -2945,6 +3227,8 @@ final class AppState {
             postEditorCommand(.copyLineDown)
         case .deleteLine:
             postEditorCommand(.deleteLine)
+        case .sfccUploadAllCartridges:
+            await uploadAllCartridges()
         case .zoomIn:
             adjustFontSize(by: 2)
         case .zoomOut:
@@ -3114,12 +3398,32 @@ final class AppState {
         // All messages except the empty assistant placeholder we just appended.
         let messages = claudeMessages.dropLast()
         guard messages.count > 1 else {
-            return messages.last?.content ?? ""
+            guard let last = messages.last else { return "" }
+            return last.content + attachmentBlock(for: last.attachments)
         }
         // Keep the last 10 messages (5 turns) for context.
         return messages.suffix(10).map { msg -> String in
             let role = msg.role == .user ? "Human" : "Assistant"
-            return "\(role): \(msg.content)"
+            return "\(role): \(msg.content)\(attachmentBlock(for: msg.attachments))"
         }.joined(separator: "\n\n")
+    }
+
+    /// Renders staged attachments as absolute paths appended to the prompt
+    /// text. The `claude` CLI process is a full agent with its own Bash and
+    /// Read tool access, so it opens these paths itself — for video files it
+    /// is nudged to decode frames/audio via ffmpeg rather than attempting to
+    /// read the container format directly.
+    private func attachmentBlock(for attachments: [ClaudeAttachment]) -> String {
+        guard !attachments.isEmpty else { return "" }
+        let lines = attachments
+            .map { att -> String in
+                let kind = att.iconName == "doc" ? "file" : att.iconName
+                return "- \(att.url.path) (\(kind))"
+            }
+            .joined(separator: "\n")
+        let videoNote = attachments.contains(where: \.isVideo)
+            ? "\n\nFor the attached video file(s), use ffmpeg/ffprobe (you have Bash access) to inspect and decode them — e.g. `ffmpeg -i <path> -vf fps=1 frame_%04d.png` to extract frames for viewing, or `ffprobe <path>` for metadata."
+            : ""
+        return "\n\nAttached files:\n\(lines)\(videoNote)"
     }
 }

@@ -18,7 +18,7 @@ enum PostgresServiceError: LocalizedError {
     }
 }
 
-actor PostgresService {
+actor PostgresService: DBEngine {
 
     // MARK: State
 
@@ -48,7 +48,13 @@ actor PostgresService {
             username: config.username,
             password: config.password.isEmpty ? nil : config.password,
             database: config.database.isEmpty ? config.username : config.database,
-            tls: .disable
+            // `.disable` outright fails against any server that requires
+            // SSL — the norm, not the exception, for AWS RDS. `.prefer`
+            // (PostgresNIO's own library default) negotiates TLS when the
+            // server offers it and falls back to plaintext when it
+            // doesn't, so both a locked-down RDS instance and a bare local
+            // dev Postgres connect correctly.
+            tls: .prefer(.makeClientConfiguration())
         )
         let client = PostgresClient(configuration: clientConfig)
         let runTask = Task { await client.run() }
@@ -74,14 +80,24 @@ actor PostgresService {
 
     // MARK: - Schema browsing
 
-    /// Every user table across every non-system schema, alphabetically.
+    /// Every user table (and view) across every non-system schema,
+    /// alphabetically. Reads `pg_catalog` rather than `information_schema`:
+    /// the latter's views only surface rows the connecting role has an
+    /// explicit privilege on, so a role with plain `CONNECT`/`USAGE` but no
+    /// per-table grants (a common setup when tables are owned by a separate
+    /// migration/app role) sees an empty list even though every table
+    /// exists and is perfectly visible — the same reason `psql`'s own `\dt`
+    /// queries `pg_catalog` instead of `information_schema`.
     func listTables(_ id: UUID) async throws -> [DBTableRef] {
         let client = try client(for: id)
         let rows = try await client.query(
             """
-            SELECT table_schema, table_name FROM information_schema.tables
-            WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
-            ORDER BY table_schema, table_name
+            SELECT n.nspname, c.relname
+            FROM pg_catalog.pg_class c
+            JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+            WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
+              AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+            ORDER BY n.nspname, c.relname
             """,
             logger: logger
         )
@@ -100,12 +116,18 @@ actor PostgresService {
 
         let primaryKeys = try await primaryKeyColumns(id, table: table)
 
+        // pg_catalog, not information_schema.columns — same privilege-
+        // visibility gap as listTables, and would otherwise report zero
+        // columns for a table listTables just found via pg_catalog.
         let rows = try await client.query(
             """
-            SELECT column_name, data_type
-            FROM information_schema.columns
-            WHERE table_schema = \(table.schema) AND table_name = \(table.name)
-            ORDER BY ordinal_position
+            SELECT a.attname, format_type(a.atttypid, a.atttypmod)
+            FROM pg_catalog.pg_attribute a
+            JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+            JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = \(table.schema) AND c.relname = \(table.name)
+              AND a.attnum > 0 AND NOT a.attisdropped
+            ORDER BY a.attnum
             """,
             logger: logger
         )
@@ -173,6 +195,35 @@ actor PostgresService {
         try await client.query(PostgresQuery(unsafeSQL: sql, binds: binds), logger: logger)
     }
 
+    // MARK: - Query console
+
+    /// Runs `sql` verbatim. PostgresNIO's client API streams rows but doesn't
+    /// surface the command tag, so non-row statements report `affectedRows`
+    /// as nil ("executed") rather than a count. One statement per call —
+    /// the extended query protocol rejects multi-statement strings.
+    func runQuery(_ id: UUID, sql: String, limit: Int = 500) async throws -> DBQueryResult {
+        let client = try client(for: id)
+        let start = ContinuousClock.now
+        let result = try await client.query(PostgresQuery(unsafeSQL: sql), logger: logger)
+
+        var rows: [DBRow] = []
+        var truncated = false
+        let names = DBQueryResult.uniqueColumnNames(result.columns.map(\.name))
+        for try await row in result {
+            if rows.count >= limit { truncated = true; break }
+            var values: [String: DBValue] = [:]
+            for (index, (cell, metadata)) in zip(row, result.columns).enumerated() {
+                values[names[index]] = Self.decode(cell, dataType: metadata.dataType)
+            }
+            rows.append(DBRow(id: rows.count, values: values))
+        }
+        let columns = zip(names, result.columns).map {
+            DBColumn(name: $0, dataTypeName: String(describing: $1.dataType), isPrimaryKey: false)
+        }
+        return DBQueryResult(columns: columns, rows: rows, affectedRows: nil,
+                             elapsed: start.duration(to: .now), isTruncated: truncated)
+    }
+
     // MARK: - Private helpers
 
     private func client(for id: UUID) throws -> PostgresClient {
@@ -182,14 +233,19 @@ actor PostgresService {
 
     private func primaryKeyColumns(_ id: UUID, table: DBTableRef) async throws -> Set<String> {
         let client = try client(for: id)
+        // pg_catalog again (see listTables) — information_schema's
+        // constraint views have the same privilege-visibility gap, which
+        // would otherwise make every table look like it has no primary key
+        // (silently falling back to read-only) for a role without explicit
+        // per-table grants.
         let rows = try await client.query(
             """
-            SELECT kcu.column_name
-            FROM information_schema.table_constraints tc
-            JOIN information_schema.key_column_usage kcu
-              ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
-            WHERE tc.constraint_type = 'PRIMARY KEY'
-              AND tc.table_schema = \(table.schema) AND tc.table_name = \(table.name)
+            SELECT a.attname
+            FROM pg_catalog.pg_constraint con
+            JOIN pg_catalog.pg_class c ON c.oid = con.conrelid
+            JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+            JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY(con.conkey)
+            WHERE con.contype = 'p' AND n.nspname = \(table.schema) AND c.relname = \(table.name)
             """,
             logger: logger
         )

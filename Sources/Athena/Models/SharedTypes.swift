@@ -138,20 +138,74 @@ struct LaunchConfig: Identifiable, Codable, Sendable {
     var stopOnEntry: Bool = false
     var debugPort: Int? = nil    // CDP port: 9229 for Node, 9222 for Chrome
     var url: String? = nil       // Browser page URL to open / attach to
+    // SFCC ("prophet") sessions — Prophet's launch.json keys. Any that are
+    // nil fall back to dw.json, then to the active SFCC connection.
+    var hostname: String? = nil
+    var username: String? = nil
+    var password: String? = nil
+    var codeVersion: String? = nil
+
+    /// Launch config types Athena debugs through the SFCC Script Debugger
+    /// API. "prophet" is what existing VS Code launch.json files contain.
+    static let sfccTypes: Set<String> = ["prophet", "sfcc"]
+    var isSFCC: Bool { Self.sfccTypes.contains(type) }
+
+    /// Parses one entry of launch.json's `configurations` array. `nil` when
+    /// the three required keys (type, name, request) are missing.
+    static func from(json c: [String: Any]) -> LaunchConfig? {
+        guard let type = c["type"] as? String,
+              let name = c["name"] as? String,
+              let req  = c["request"] as? String else { return nil }
+        return LaunchConfig(
+            type:         type,
+            request:      req,
+            name:         name,
+            program:      c["program"] as? String ?? "",
+            args:         c["args"]    as? [String]         ?? [],
+            env:          c["env"]     as? [String: String] ?? [:],
+            cwd:          c["cwd"]     as? String ?? "${workspaceFolder}",
+            stopOnEntry:  c["stopOnEntry"] as? Bool ?? false,
+            debugPort:    c["port"] as? Int ?? c["debugPort"] as? Int,
+            url:          c["url"] as? String,
+            hostname:     c["hostname"] as? String,
+            username:     c["username"] as? String,
+            password:     c["password"] as? String,
+            codeVersion:  c["codeversion"] as? String ?? c["codeVersion"] as? String ?? c["code-version"] as? String
+        )
+    }
 }
 
 // MARK: - Database connections
 
 enum DBType: String, Codable, Sendable, CaseIterable {
     case postgresql = "PostgreSQL"
+    case sqlite     = "SQLite"
     case mongodb    = "MongoDB"
     case mysql      = "MySQL"
     case oracle     = "Oracle"
     case mariadb    = "MariaDB"
 
+    /// Engines Athena has a driver for. The others stay in the enum only so
+    /// connections saved by older builds still decode; they're kept out of
+    /// the picker and can't connect (see `AppState.connectAndBrowse`),
+    /// rather than offering a choice that silently never works.
+    var isSupported: Bool {
+        switch self {
+        case .postgresql, .sqlite: return true
+        case .mongodb, .mysql, .oracle, .mariadb: return false
+        }
+    }
+
+    static var supportedCases: [DBType] { allCases.filter(\.isSupported) }
+
+    /// File-backed engines have no host/port/credentials — the `database`
+    /// field is the file path.
+    var isFileBased: Bool { self == .sqlite }
+
     var defaultPort: Int {
         switch self {
         case .postgresql: return 5432
+        case .sqlite:     return 0
         case .mongodb:    return 27017
         case .mysql:      return 3306
         case .oracle:     return 1521
@@ -162,6 +216,7 @@ enum DBType: String, Codable, Sendable, CaseIterable {
     var sfSymbol: String {
         switch self {
         case .postgresql: return "elephant"          // closest available
+        case .sqlite:     return "doc.badge.gearshape"
         case .mongodb:    return "leaf.fill"
         case .mysql:      return "cylinder.fill"
         case .oracle:     return "building.columns.fill"
@@ -172,6 +227,7 @@ enum DBType: String, Codable, Sendable, CaseIterable {
     var accentHex: UInt32 {
         switch self {
         case .postgresql: return 0x336791
+        case .sqlite:     return 0x0F80CC
         case .mongodb:    return 0x4DB33D
         case .mysql:      return 0x00758F
         case .oracle:     return 0xF80000
@@ -216,7 +272,13 @@ extension DBConnection {
         database    = try c.decodeIfPresent(String.self, forKey: .database) ?? ""
         username    = try c.decodeIfPresent(String.self, forKey: .username) ?? ""
         password    = try c.decodeIfPresent(String.self, forKey: .password) ?? ""  // legacy only
-        isConnected = try c.decodeIfPresent(Bool.self, forKey: .isConnected) ?? false
+        // Always false on load, regardless of what's in the file: a live
+        // `PostgresService` connection is in-memory only and can never
+        // survive a relaunch, so a persisted `true` here is always stale.
+        // Trusting it let "Browse Data" open an empty browser without ever
+        // attempting a real connection — no error, no indication anything
+        // was wrong, just a silently empty table list.
+        isConnected = false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -228,8 +290,9 @@ extension DBConnection {
         try c.encode(port,        forKey: .port)
         try c.encode(database,    forKey: .database)
         try c.encode(username,    forKey: .username)
-        // password intentionally omitted — stored in the Keychain
-        try c.encode(isConnected, forKey: .isConnected)
+        // password and isConnected intentionally omitted — the former lives
+        // in the Keychain, the latter is live session state that's never
+        // valid to reload from disk (see init(from:) above).
     }
 }
 
@@ -326,6 +389,41 @@ struct DBTableData: Sendable {
     /// than the fetch limit) — lets the UI show "showing first N of ..." only
     /// when it's actually true.
     let isComplete: Bool
+}
+
+/// The result of one ad-hoc SQL statement from the query console. Row-
+/// returning statements fill `columns`/`rows` (never editable — a result set
+/// has no addressable identity); everything else reports `affectedRows`
+/// when the engine can tell.
+struct DBQueryResult: Sendable {
+    let columns: [DBColumn]
+    var rows: [DBRow]
+    let affectedRows: Int?
+    let elapsed: Duration
+    /// True when more rows existed than the console's fetch limit.
+    let isTruncated: Bool
+
+    /// `SELECT a.id, b.id …` yields two columns named `id`. Rows are keyed
+    /// by column name and the grid identifies columns by name, so the
+    /// second becomes `id (2)`, third `id (3)`, and so on.
+    static func uniqueColumnNames(_ names: [String]) -> [String] {
+        var seen: [String: Int] = [:]
+        return names.map { name in
+            let count = (seen[name] ?? 0) + 1
+            seen[name] = count
+            return count == 1 ? name : "\(name) (\(count))"
+        }
+    }
+
+    /// Whether `sql`'s leading keyword is one whose "changes" count means
+    /// anything. SQLite's change counter reports the *last* DML statement,
+    /// so reading it after `CREATE TABLE` would show a stale number.
+    static func isDataModifying(_ sql: String) -> Bool {
+        let keyword = sql.trimmingCharacters(in: .whitespacesAndNewlines)
+            .prefix { $0.isLetter }
+            .uppercased()
+        return ["INSERT", "UPDATE", "DELETE", "REPLACE"].contains(keyword)
+    }
 }
 
 enum BottomPanel: String, Sendable, CaseIterable {
@@ -435,6 +533,9 @@ extension SFCCConnection {
 /// What an upload-log entry did to the sandbox: pushed a file or removed one.
 enum SFCCUploadKind: String, Codable, Sendable {
     case upload, delete
+    /// A whole cartridge replaced in one archive (`uploadAllCartridges`),
+    /// rather than a single file saved.
+    case cartridge
 }
 
 enum SFCCUploadStatus: Codable, Sendable, Equatable {
@@ -485,6 +586,39 @@ struct ClaudeMessage: Identifiable, Sendable {
     var role: ChatRole
     var content: String
     var isStreaming: Bool = false
+    var attachments: [ClaudeAttachment] = []
+}
+
+/// A file staged for (or sent with) a Claude panel message. Athena never
+/// reads or transcodes the file itself — it only passes the absolute path
+/// through to the `claude` CLI process, which has its own filesystem and
+/// Bash access and decodes media (e.g. video via ffmpeg) itself.
+struct ClaudeAttachment: Identifiable, Equatable, Sendable {
+    let id: UUID = UUID()
+    let url: URL
+
+    var fileName: String { url.lastPathComponent }
+
+    private static let videoExtensions: Set<String> = [
+        "mp4", "mov", "m4v", "avi", "mkv", "webm", "flv", "wmv", "mpg", "mpeg"
+    ]
+    private static let audioExtensions: Set<String> = [
+        "mp3", "wav", "m4a", "aac", "flac", "ogg", "aiff"
+    ]
+    private static let imageExtensions: Set<String> = [
+        "png", "jpg", "jpeg", "gif", "webp", "heic", "tiff", "bmp", "svg"
+    ]
+
+    var isVideo: Bool { Self.videoExtensions.contains(url.pathExtension.lowercased()) }
+    var isAudio: Bool { Self.audioExtensions.contains(url.pathExtension.lowercased()) }
+    var isImage: Bool { Self.imageExtensions.contains(url.pathExtension.lowercased()) }
+
+    var iconName: String {
+        if isVideo { return "video" }
+        if isAudio { return "waveform" }
+        if isImage { return "photo" }
+        return "doc"
+    }
 }
 
 // MARK: - Chat
@@ -725,6 +859,16 @@ struct GitCommit: Identifiable, Sendable {
     var date: Date
 }
 
+/// One `git stash list` entry, parsed by `GitService.parseStashList(_:)`.
+/// `index` is the N in `stash@{N}` — git's own address for apply/pop/drop.
+struct GitStash: Identifiable, Sendable, Equatable {
+    var index: Int
+    var message: String
+    var date: Date
+    var id: Int { index }
+    var ref: String { "stash@{\(index)}" }
+}
+
 /// One entry from `git branch -a`, parsed by `GitService.parseBranches(_:)`.
 /// Powers the branch-switcher menu in `StatusBarView` (plan.md item 20, "D3").
 struct GitBranch: Identifiable, Sendable, Equatable {
@@ -867,6 +1011,53 @@ struct CompletionItem: Identifiable, Sendable {
     var kind: String
     var detail: String?
     var insertText: String
+    /// Populated either directly off the initial `textDocument/completion`
+    /// response, or later via `LSPManager.resolve(itemID:language:)` for
+    /// servers that only fill it in on `completionItem/resolve`.
+    var documentation: String? = nil
+    /// The server's own relevance ordering (`sortText`) and, when present, a
+    /// filter key distinct from `label` (`filterText`) — both `nil` for
+    /// non-LSP items (Drizzle's static snippets), which fall back to
+    /// alphabetical/label-based ranking.
+    var sortText: String? = nil
+    var filterText: String? = nil
+}
+
+// MARK: - Signature help (parameter hints)
+
+/// One parameter of a call signature.
+struct SignatureParameter: Sendable, Equatable {
+    var label: String
+    /// Where this parameter sits inside the signature's own label, so the
+    /// active one can be emphasised without re-deriving it in the view.
+    /// A server may give the label as text or as offsets; both end up here.
+    var labelRange: NSRange?
+    var documentation: String?
+}
+
+/// A `textDocument/signatureHelp` result: the call the caret is inside,
+/// and which argument it is on.
+struct SignatureHelp: Sendable, Equatable {
+    var label: String
+    var parameters: [SignatureParameter]
+    var activeParameter: Int?
+    var documentation: String?
+
+    /// The span to emphasise, or `nil` when the caret is past the last
+    /// declared parameter (a variadic call, or one argument too many).
+    var activeParameterRange: NSRange? {
+        guard let index = activeParameter, parameters.indices.contains(index) else { return nil }
+        return parameters[index].labelRange
+    }
+
+    /// The same help with the argument index the editor counted locally, so
+    /// typing a comma moves the highlight immediately instead of waiting on
+    /// another round trip.
+    func withActiveParameter(_ index: Int) -> SignatureHelp {
+        var copy = self
+        copy.activeParameter = index
+        return copy
+    }
 }
 
 // MARK: - Go to Definition
@@ -1061,13 +1252,28 @@ enum GhostTextProvider: String, CaseIterable, Codable, Sendable {
     case none   = "none"
     case claude = "claude"
     case ollama = "ollama"
+    /// Any local (or self-hosted) server speaking the OpenAI `/v1/completions`
+    /// shape — LM Studio, llama.cpp's `server`, vLLM, etc.
+    case openAICompatible = "openai_compatible"
 
     var displayName: String {
         switch self {
-        case .none:   return "Off"
-        case .claude: return "Claude (Haiku)"
-        case .ollama: return "Local — Ollama"
+        case .none:            return "Off"
+        case .claude:          return "Claude (Haiku)"
+        case .ollama:          return "Local — Ollama"
+        case .openAICompatible: return "Local — OpenAI-compatible"
         }
+    }
+}
+
+/// Lines from `text` that look like import/include statements — mirrors the
+/// keyword list `EditorView.addImportLinkAttributes` uses to stamp Cmd+Click
+/// import links, reused here to give local-LLM ghost text a compact list of
+/// the file's imports without a full per-language parser.
+func importLines(in text: String) -> [String] {
+    let keywords = ["import ", "require(", " from ", "@import", "#include", "export "]
+    return text.components(separatedBy: .newlines).filter { line in
+        keywords.contains { line.contains($0) }
     }
 }
 
@@ -1107,5 +1313,170 @@ struct AppSettings: Codable, Sendable {
             claudeApiKey: "",
             showMinimap: true
         )
+    }
+}
+
+// MARK: - SFCC Script Debugger API (SDAPI)
+
+/// Credentials for one SFCC sandbox debug session. See ADR 0002 for the
+/// resolution order (launch config → dw.json → active connection).
+struct SFCCDebugCredentials: Sendable, Equatable {
+    var hostname: String
+    var username: String
+    var password: String
+    var codeVersion: String?
+}
+
+/// `dw.json` as Prophet and the SFCC CLI write it. Only the keys the
+/// debugger needs; unknown keys are ignored. Key spelling varies across
+/// tools (`code-version`, `codeVersion`, `codeversion`), all accepted.
+struct DWJSONConfig: Sendable, Equatable {
+    var hostname: String
+    var username: String?
+    var password: String?
+    var codeVersion: String?
+    var cartridgesPath: String?
+
+    static func parse(_ data: Data) -> DWJSONConfig? {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return from(json: json)
+    }
+
+    static func from(json: [String: Any]) -> DWJSONConfig? {
+        guard let host = json["hostname"] as? String, !host.isEmpty else { return nil }
+        return DWJSONConfig(
+            hostname: host,
+            username: json["username"] as? String,
+            password: json["password"] as? String,
+            codeVersion: json["code-version"] as? String
+                ?? json["codeVersion"] as? String
+                ?? json["codeversion"] as? String,
+            cartridgesPath: json["cartridgesPath"] as? String ?? json["cartridgePath"] as? String
+        )
+    }
+}
+
+/// Translates between local file paths and SDAPI Script Paths
+/// (`/<cartridge>/cartridge/<rest>`). `cartridges` maps each cartridge name
+/// to its local directory (the one containing `cartridge/`), discovered by
+/// `SFCCService.discoverCartridges`. Translation to a Script Path works
+/// without discovery — it only needs the `cartridge` path component; the
+/// reverse direction needs the map to know where the cartridge lives.
+struct SFCCCartridgeMap: Sendable, Equatable {
+    var cartridges: [String: URL]
+
+    init(cartridges: [String: URL] = [:]) {
+        self.cartridges = cartridges
+    }
+
+    func scriptPath(for fileURL: URL) -> String? {
+        let comps = fileURL.standardizedFileURL.pathComponents
+        // The first "cartridge" component whose parent is a known cartridge
+        // (or, with no map, any parent) starts the Script Path.
+        for (i, comp) in comps.enumerated() where comp == "cartridge" && i > 0 && i < comps.count - 1 {
+            let name = comps[i - 1]
+            if cartridges.isEmpty || cartridges[name] != nil {
+                let rest = comps[(i + 1)...].joined(separator: "/")
+                return "/\(name)/cartridge/\(rest)"
+            }
+        }
+        return nil
+    }
+
+    func localURL(for scriptPath: String) -> URL? {
+        let trimmed = scriptPath.hasPrefix("/") ? String(scriptPath.dropFirst()) : scriptPath
+        guard let slash = trimmed.firstIndex(of: "/") else { return nil }
+        let name = String(trimmed[..<slash])
+        let rest = String(trimmed[trimmed.index(after: slash)...])
+        guard let dir = cartridges[name], !rest.isEmpty else { return nil }
+        return dir.appendingPathComponent(rest)
+    }
+}
+
+enum SFCCDebugThreadStatus: String, Sendable, Decodable {
+    case halted, running, done
+    case unknown
+
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = SFCCDebugThreadStatus(rawValue: raw) ?? .unknown
+    }
+}
+
+struct SFCCDebugLocation: Sendable, Decodable, Equatable {
+    var functionName: String
+    var lineNumber: Int
+    var scriptPath: String
+
+    enum CodingKeys: String, CodingKey {
+        case functionName = "function_name"
+        case lineNumber = "line_number"
+        case scriptPath = "script_path"
+    }
+
+    init(functionName: String, lineNumber: Int, scriptPath: String) {
+        self.functionName = functionName
+        self.lineNumber = lineNumber
+        self.scriptPath = scriptPath
+    }
+
+    /// Top-level script frames may come without a `function_name`; that
+    /// must not fail the whole `threads` response.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        functionName = try c.decodeIfPresent(String.self, forKey: .functionName) ?? ""
+        lineNumber = try c.decodeIfPresent(Int.self, forKey: .lineNumber) ?? 0
+        scriptPath = try c.decodeIfPresent(String.self, forKey: .scriptPath) ?? ""
+    }
+}
+
+struct SFCCDebugFrame: Sendable, Decodable, Equatable {
+    var index: Int
+    var location: SFCCDebugLocation
+}
+
+struct SFCCDebugThread: Sendable, Decodable, Equatable {
+    var id: Int
+    var status: SFCCDebugThreadStatus
+    var callStack: [SFCCDebugFrame]
+
+    enum CodingKeys: String, CodingKey {
+        case id, status
+        case callStack = "call_stack"
+    }
+
+    init(id: Int, status: SFCCDebugThreadStatus, callStack: [SFCCDebugFrame]) {
+        self.id = id
+        self.status = status
+        self.callStack = callStack
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(Int.self, forKey: .id)
+        status = try c.decodeIfPresent(SFCCDebugThreadStatus.self, forKey: .status) ?? .unknown
+        callStack = try c.decodeIfPresent([SFCCDebugFrame].self, forKey: .callStack) ?? []
+    }
+}
+
+/// One entry of an SDAPI `object_members` list: a variable in a frame, or a
+/// member of an object when fetched with an `object_path`.
+struct SFCCDebugMember: Sendable, Decodable, Equatable {
+    var name: String
+    var type: String?
+    var value: String?
+    var scope: String?
+    var parent: String?
+}
+
+struct SFCCDebugBreakpoint: Sendable, Decodable, Equatable {
+    var id: Int
+    var lineNumber: Int
+    var scriptPath: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case lineNumber = "line_number"
+        case scriptPath = "script_path"
     }
 }

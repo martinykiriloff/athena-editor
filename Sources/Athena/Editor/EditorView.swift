@@ -61,6 +61,10 @@ struct EditorView: NSViewRepresentable {
     /// the Cmd+Click fallback used when the click isn't on a recognized
     /// import path. Returns `nil` when there's no server running or result.
     var onRequestDefinition: (Int, Int) async -> DefinitionLocation? = { _, _ in nil }
+    /// Parameter hints for the call at a 1-based line/column. The third
+    /// argument is the character that triggered the request ("(" or ","),
+    /// or nil when the caret moved into a call on its own.
+    var onRequestSignatureHelp: (Int, Int, String?) async -> SignatureHelp? = { _, _, _ in nil }
     /// Opens `url` in the editor (e.g. the target of a cross-file "Go to
     /// Definition" jump) so this view's `fileURL`/`content` bindings update.
     var onOpenDefinitionFile: (URL) async -> Void = { _ in }
@@ -123,10 +127,20 @@ struct EditorView: NSViewRepresentable {
     /// return convention as every other entry in the chain.
     var onEscapeUnhandled: () -> Bool = { false }
 
-    /// Returns merged completion items (LSP + Drizzle) for the given 1-based line/col.
-    var onRequestCompletion: (Int, Int) async -> [CompletionItem] = { _, _ in [] }
+    /// Returns merged completion items (LSP + Drizzle) for the given 1-based
+    /// line/col; `String?` is the trigger character (e.g. "." right before
+    /// the cursor) or nil for a plain invoked completion.
+    var onRequestCompletion: (Int, Int, String?) async -> [CompletionItem] = { _, _, _ in [] }
+    /// Resolves documentation for one completion item (by id) via
+    /// `completionItem/resolve`. Returns nil when there's nothing more to add.
+    var onResolveCompletionDoc: (UUID) async -> String? = { _ in nil }
     /// Returns an AI ghost-text suggestion given the text before and after the cursor.
     var onRequestGhostText: (String, String) async -> String? = { _, _ in nil }
+    /// User-tunable delay (Settings → AI) before a ghost-text request fires
+    /// after the last keystroke — mirrors the completion popup's fixed 150ms
+    /// debounce just below, but configurable since local-LLM latency varies
+    /// far more than an LSP server's.
+    var ghostTextDebounceMs: Int = 700
 
     // MARK: NSViewRepresentable
 
@@ -617,7 +631,27 @@ extension EditorView {
         let completionController = CompletionWindowController()
         let ghostController      = GhostTextController()
         @ObservationIgnored private var completionDebounce: Task<Void, Never>?
+        let signatureController = SignatureHelpController()
+        @ObservationIgnored private var signatureDebounce: Task<Void, Never>?
+        /// The call the panel is currently describing, so a comma can move
+        /// the highlight locally and a new call can be told apart from a
+        /// caret still inside the old one.
+        private var signatureCall: (openParen: Int, help: SignatureHelp)?
+
+        /// Labels currently on screen, so the semantic pass can skip a
+        /// re-show that would change nothing.
+        private var shownCompletionLabels: [String] = []
+        /// Set when the user dismisses the popup with Escape; cleared on the
+        /// next edit, so a late language-server reply can't pop it back up.
+        private var completionSuppressed = false
         @ObservationIgnored private var ghostDebounce:      Task<Void, Never>?
+
+        // Completion-item documentation panel — a dedicated HoverWindowController
+        // instance (not the mouse-hover one below) so resolving docs for a
+        // highlighted completion row never fights the mouse-hover tooltip's
+        // own show/dismiss state.
+        let completionDocController = HoverWindowController()
+        @ObservationIgnored private var completionResolveDebounce: Task<Void, Never>?
 
         // Snippet tab-stop tracking (plan.md item 16, "B5") — set when a
         // snippet-shaped completion (`$1`/`${1:placeholder}`/`$0`) is
@@ -1507,6 +1541,8 @@ extension EditorView {
             ghostDebounce?.cancel()
             ghostController.dismiss()
             cancelHover()
+            completionSuppressed = false
+            updateSignatureHelp(in: textView)
 
             completionDebounce = Task { [weak self] in
                 let clock = ContinuousClock()
@@ -1514,9 +1550,10 @@ extension EditorView {
                 guard !Task.isCancelled, let self else { return }
                 await self.triggerCompletion()
             }
+            let debounceMs = parent.ghostTextDebounceMs
             ghostDebounce = Task { [weak self] in
                 let clock = ContinuousClock()
-                try? await clock.sleep(until: clock.now.advanced(by: .milliseconds(700)))
+                try? await clock.sleep(until: clock.now.advanced(by: .milliseconds(debounceMs)))
                 guard !Task.isCancelled, let self else { return }
                 await self.triggerGhostText()
             }
@@ -1539,6 +1576,7 @@ extension EditorView {
                 fontFamily: parent.fontFamily,
                 theme: parent.theme
             )
+            updateSignatureHelp(in: textView)
             updateBracketMatchHighlight(in: textView)
             updateDiagnosticHighlights(in: textView)
             updateConflictHighlights(in: textView)
@@ -1607,18 +1645,53 @@ extension EditorView {
                 return
             }
 
-            let usedRect  = layoutManager.lineFragmentUsedRect(forGlyphAt: glyphRange.location,
-                                                               effectiveRange: nil)
-            let inset     = textView.textContainerInset
-            let labelX    = usedRect.maxX + inset.width + 20
-            let labelY    = usedRect.minY + inset.height
+            let usedRect = layoutManager.lineFragmentUsedRect(forGlyphAt: glyphRange.location,
+                                                              effectiveRange: nil)
+            let fragmentRect = layoutManager.lineFragmentRect(forGlyphAt: glyphRange.location,
+                                                              effectiveRange: nil)
+            let glyphLocation = layoutManager.location(forGlyphAt: glyphRange.location)
 
             label.attributedStringValue = blameAttributedString(
                 blameLine, fontSize: fontSize - 1, theme: theme
             )
             label.sizeToFit()
-            label.frame.origin = CGPoint(x: labelX, y: labelY)
-            label.alphaValue   = 1
+            // Size first: `firstBaselineOffsetFromTop` reflects the string
+            // and font just assigned.
+            label.frame.origin = Self.blameLabelOrigin(
+                lineUsedRect: usedRect,
+                lineFragmentRect: fragmentRect,
+                glyphBaselineInFragment: glyphLocation.y,
+                labelBaselineFromTop: label.firstBaselineOffsetFromTop,
+                textContainerInset: textView.textContainerInset
+            )
+            label.alphaValue = 1
+        }
+
+        /// Where the inline blame annotation sits: after the line's last
+        /// glyph, with its own text baseline on the code's baseline.
+        ///
+        /// The label draws one point smaller than the code, so it is shorter
+        /// than the line it annotates. Pinning its top to the line fragment's
+        /// top — what this did before — therefore left the blame text
+        /// floating above the code baseline, and a line-height multiple above
+        /// 1 widened that gap further. `lineFragmentRect.minY + glyphBaseline`
+        /// is the same baseline `AthenaLayoutManager` uses to place
+        /// whitespace markers, so both stay aligned however line height is set.
+        /// Pure geometry — no coordinator state, so it stays off the main actor
+        /// and is testable without a text view.
+        nonisolated static func blameLabelOrigin(
+            lineUsedRect: CGRect,
+            lineFragmentRect: CGRect,
+            glyphBaselineInFragment: CGFloat,
+            labelBaselineFromTop: CGFloat,
+            textContainerInset: CGSize,
+            gap: CGFloat = 20
+        ) -> CGPoint {
+            let codeBaselineY = lineFragmentRect.minY + glyphBaselineInFragment + textContainerInset.height
+            return CGPoint(
+                x: lineUsedRect.maxX + textContainerInset.width + gap,
+                y: codeBaselineY - labelBaselineFromTop
+            )
         }
 
         private func blameAttributedString(_ b: BlameLine, fontSize: CGFloat, theme: EditorTheme) -> NSAttributedString {
@@ -1945,8 +2018,19 @@ extension EditorView {
                 if let tv = textView, deleteEmptyPairIfPresent(in: tv) { return true }
                 return false
             case 53:  // Escape — dismiss popup, ghost text, the find/replace bar, multi-cursor, or a snippet
-                if completionController.isVisible  { completionController.dismiss(); return true }
+                if completionController.isVisible {
+                    completionController.dismiss()
+                    completionSuppressed = true
+                    shownCompletionLabels = []
+                    return true
+                }
                 if ghostController.hasSuggestion    { ghostController.dismiss();      return true }
+                if signatureController.isVisible {
+                    signatureDebounce?.cancel()
+                    signatureController.dismiss()
+                    signatureCall = nil
+                    return true
+                }
                 if findReplaceController?.isVisible == true { findReplaceController?.dismiss(); return true }
                 if let tv = textView, tv.selectedRanges.count > 1 {
                     collapseToSingleCursor(tv)
@@ -1981,33 +2065,130 @@ extension EditorView {
             let nsStr = tv.string as NSString
             let idx   = tv.selectedRange().location
             let prev  = idx > 0 ? nsStr.character(at: idx - 1) : 0
-            guard !word.isEmpty || prev == 46 /* "." */ else {
+            let isDotTrigger = prev == 46 /* "." */
+            guard !word.isEmpty || isDotTrigger else {
                 completionController.dismiss()
                 return
             }
 
-            let items = await parent.onRequestCompletion(line, col)
-            guard !items.isEmpty else { completionController.dismiss(); return }
+            let wRange   = currentWordRange(in: tv)
+            let language = parent.fileURL.map { Language.detect(from: $0) }
 
-            let lower    = word.lowercased()
-            let filtered = word.isEmpty
-                ? Array(items.prefix(20))
-                : items.filter { $0.label.lowercased().hasPrefix(lower) }.prefix(20).map { $0 }
+            // Buffer identifiers are available synchronously, so they show
+            // immediately. A language server that is slow, still starting,
+            // or wedged must never be what stands between a keystroke and a
+            // suggestion: `LSPManager.sendRequest` waits on a reply that a
+            // hung server never sends, and awaiting it first meant the popup
+            // never appeared at all. A "." is member access, which only a
+            // semantic source can answer, so the buffer stays out of that.
+            var bufferItems: [CompletionItem] = []
+            if !isDotTrigger, BufferCompletionProvider.isEnabled(for: language) {
+                bufferItems = BufferCompletionProvider.items(in: nsStr, cursor: idx, wordRange: wRange)
+                present(rank(bufferItems, matching: word), wordRange: wRange, in: tv)
+            }
 
-            guard !filtered.isEmpty else { completionController.dismiss(); return }
+            // Semantic items land later and win the merge; buffer words only
+            // fill the gaps they leave.
+            let items = await parent.onRequestCompletion(line, col, isDotTrigger ? "." : nil)
+            guard !Task.isCancelled, let tv = textView,
+                  tv.selectedRange().location == idx else { return }
 
-            let wRange  = currentWordRange(in: tv)
+            var seen = Set(items.map(\.label))
+            let merged = items + bufferItems.filter { seen.insert($0.label).inserted }
+            present(rank(merged, matching: word), wordRange: wRange, in: tv)
+        }
+
+        /// Orders candidates against the partial word under the caret.
+        private func rank(_ items: [CompletionItem], matching word: String) -> [CompletionItem] {
+            // No partial word to rank against (e.g. right after "."): keep
+            // the merge's own order as-is — Drizzle's curated items first,
+            // then LSP's response order. Re-sorting by `sortText` here would
+            // compare LSP's real rank strings against Drizzle's
+            // label-as-sortText fallback and, since digits sort before
+            // letters, silently bury Drizzle's items under any
+            // digit-prefixed LSP sortText.
+            guard !word.isEmpty else { return Array(items.prefix(20)) }
+            return items
+                .compactMap { item -> (item: CompletionItem, score: Int)? in
+                    guard let score = fuzzyNameScore(query: word, target: item.filterText ?? item.label) else { return nil }
+                    return (item, score)
+                }
+                // Higher fuzzy score first; the server's own `sortText`
+                // (falling back to label) breaks ties so equally-fuzzy-
+                // matched items don't reorder unpredictably between keystrokes.
+                .sorted {
+                    $0.score != $1.score
+                        ? $0.score > $1.score
+                        : ($0.item.sortText ?? $0.item.label) < ($1.item.sortText ?? $1.item.label)
+                }
+                .prefix(20)
+                .map { $0.item }
+        }
+
+        /// Shows `items`, or dismisses when nothing matches.
+        ///
+        /// Called twice per keystroke — once with buffer words, once with the
+        /// semantic merge — so it skips a redundant re-show: reissuing an
+        /// identical list would reset a selection the user has already moved
+        /// with the arrow keys, and Escape stays honoured until the next edit.
+        private func present(_ items: [CompletionItem], wordRange: NSRange, in tv: NSTextView) {
+            guard !completionSuppressed else { return }
+            guard !items.isEmpty else {
+                completionController.dismiss()
+                shownCompletionLabels = []
+                return
+            }
+            let labels = items.map(\.label)
+            if completionController.isVisible, labels == shownCompletionLabels { return }
+            shownCompletionLabels = labels
+
             var actual  = NSRange()
             let screenRect = tv.firstRect(
-                forCharacterRange: NSRange(location: wRange.location, length: 0),
+                forCharacterRange: NSRange(location: wordRange.location, length: 0),
                 actualRange: &actual
             )
 
-            completionController.show(items: filtered, wordRange: wRange, screenRect: screenRect)
+            completionController.show(items: items, wordRange: wordRange, screenRect: screenRect)
             completionController.onAccept = { [weak self, weak tv] item, range in
                 guard let self, let textView = tv else { return }
                 self.insertCompletion(item, wordRange: range, in: textView)
             }
+            completionController.onDismiss = { [weak self] in
+                self?.completionResolveDebounce?.cancel()
+                self?.completionDocController.dismiss()
+            }
+            completionController.onSelectionChange = { [weak self] item in
+                self?.scheduleCompletionDocResolve(for: item)
+            }
+        }
+
+        /// Debounced `completionItem/resolve` for the currently-highlighted
+        /// popup row — only the highlighted item is ever resolved, not the
+        /// full list, and arrow-key repeats cancel the previous request the
+        /// same way `scheduleHover` debounces mouse movement.
+        private func scheduleCompletionDocResolve(for item: CompletionItem) {
+            completionResolveDebounce?.cancel()
+            completionDocController.dismiss()
+
+            // Nothing to resolve for non-LSP items (Drizzle's static
+            // snippets) or items whose initial response already included docs.
+            if let doc = item.documentation, !doc.isEmpty {
+                showCompletionDoc(doc)
+                return
+            }
+
+            completionResolveDebounce = Task { [weak self] in
+                let clock = ContinuousClock()
+                try? await clock.sleep(until: clock.now.advanced(by: .milliseconds(150)))
+                guard !Task.isCancelled, let self else { return }
+                guard let doc = await self.parent.onResolveCompletionDoc(item.id), !doc.isEmpty else { return }
+                self.showCompletionDoc(doc)
+            }
+        }
+
+        private func showCompletionDoc(_ text: String) {
+            guard completionController.isVisible else { return }
+            completionDocController.show(text: text, near: completionController.screenFrame, placement: .rightOf)
         }
 
         // MARK: - Ghost text trigger
@@ -2016,20 +2197,91 @@ extension EditorView {
             guard let tv = textView else { return }
             let cursorIdx = tv.selectedRange().location
             let text      = tv.string
-            guard cursorIdx > 0 else { return }
+
+            // Finishing an identifier belongs to the popup — instant, from
+            // the language server and the buffer. The model is asked only
+            // where a whole line or block is what comes next, and never
+            // while the popup is already answering (see `GhostTextPolicy`).
+            guard GhostTextPolicy.shouldRequest(
+                text: text as NSString,
+                cursor: cursorIdx,
+                isPopupVisible: completionController.isVisible
+            ) else { return }
 
             let prefix = String(text.prefix(cursorIdx))
             let suffix = String(text.suffix(text.count - min(cursorIdx, text.count)))
 
-            // Need at least some code before the cursor to complete from; fill-in-middle
-            // still works right after whitespace (e.g. after `return ` or a fresh indent).
-            guard prefix.contains(where: { !$0.isWhitespace }) else { return }
-
             guard let suggestion = await parent.onRequestGhostText(prefix, suffix) else { return }
-            guard !suggestion.isEmpty else { return }
+            // A one-token answer is what the popup already gives, faster.
+            guard GhostTextPolicy.isSubstantial(suggestion) else { return }
 
             let font = tv.font ?? NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
             ghostController.show(text: suggestion, after: cursorIdx, font: font, in: tv)
+        }
+
+        // MARK: - Signature help (parameter hints)
+
+        /// Keeps the parameter-hint panel in step with the caret.
+        ///
+        /// The call the caret is inside is computed locally
+        /// (`SignatureHelpTrigger`), so leaving a call hides the panel and
+        /// typing a comma moves the emphasis immediately. The language
+        /// server is only asked when the caret enters a *different* call —
+        /// one request per call, not per keystroke.
+        private func updateSignatureHelp(in textView: NSTextView) {
+            let text = textView.string as NSString
+            let cursor = textView.selectedRange().location
+            guard textView.selectedRange().length == 0,
+                  let context = SignatureHelpTrigger.callContext(text: text, cursor: cursor) else {
+                signatureDebounce?.cancel()
+                signatureController.dismiss()
+                signatureCall = nil
+                return
+            }
+
+            if let current = signatureCall, current.openParen == context.openParen {
+                let updated = current.help.withActiveParameter(context.argumentIndex)
+                signatureCall = (context.openParen, updated)
+                presentSignature(updated, in: textView)
+                return
+            }
+
+            let trigger: String? = cursor > 0
+                ? (text.character(at: cursor - 1) == 0x28 ? "(" : text.character(at: cursor - 1) == 0x2C ? "," : nil)
+                : nil
+            let (line, col) = cursorPosition(in: textView)
+            signatureDebounce?.cancel()
+            signatureDebounce = Task { [weak self] in
+                let clock = ContinuousClock()
+                try? await clock.sleep(until: clock.now.advanced(by: .milliseconds(90)))
+                guard !Task.isCancelled, let self, let tv = self.textView else { return }
+                guard let help = await self.parent.onRequestSignatureHelp(line, col, trigger) else {
+                    self.signatureController.dismiss()
+                    self.signatureCall = nil
+                    return
+                }
+                // The caret may have moved on while the server answered.
+                guard !Task.isCancelled,
+                      let now = SignatureHelpTrigger.callContext(text: tv.string as NSString,
+                                                                 cursor: tv.selectedRange().location),
+                      now.openParen == context.openParen else { return }
+                let ranked = help.withActiveParameter(now.argumentIndex)
+                self.signatureCall = (context.openParen, ranked)
+                self.presentSignature(ranked, in: tv)
+            }
+        }
+
+        private func presentSignature(_ help: SignatureHelp, in textView: NSTextView) {
+            guard !help.label.isEmpty else {
+                signatureController.dismiss()
+                return
+            }
+            var actual = NSRange()
+            let screenRect = textView.firstRect(
+                forCharacterRange: NSRange(location: textView.selectedRange().location, length: 0),
+                actualRange: &actual
+            )
+            signatureController.show(help, near: screenRect, fontSize: parent.fontSize)
         }
 
         // MARK: - Completion helpers

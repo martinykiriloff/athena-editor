@@ -15,6 +15,46 @@ struct CommitHistoryView: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
+        VStack(spacing: 0) {
+            if let path = appState.commitHistoryPath {
+                fileFilterBar(path)
+                Divider()
+            }
+            historyContent
+        }
+        .onAppear {
+            Task { await appState.refreshCommitHistory() }
+        }
+    }
+
+    /// "File History" scope chip — the history below is one file's.
+    private func fileFilterBar(_ path: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "doc.text.magnifyingglass")
+                .font(.system(size: appState.sf(10)))
+                .foregroundStyle(.secondary)
+            Text(path)
+                .font(.system(size: appState.sf(11)))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.head)
+            Spacer()
+            Button {
+                Task { await appState.clearFileHistoryFilter() }
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: appState.sf(11)))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Show whole-repository history")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+    }
+
+    @ViewBuilder
+    private var historyContent: some View {
         Group {
             if appState.isLoadingCommitHistory {
                 ProgressView()
@@ -33,9 +73,6 @@ struct CommitHistoryView: View {
                     }
                 }
             }
-        }
-        .onAppear {
-            Task { await appState.refreshCommitHistory() }
         }
     }
 

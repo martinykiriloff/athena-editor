@@ -211,10 +211,17 @@ private struct SFCCUploadRow: View {
 
             Spacer()
 
-            if record.kind == .delete {
+            switch record.kind {
+            case .delete:
                 Text("deleted")
                     .font(.system(size: appState.sf(10)))
                     .foregroundStyle(.orange)
+            case .cartridge:
+                Text("full cartridge")
+                    .font(.system(size: appState.sf(10)))
+                    .foregroundStyle(.blue)
+            case .upload:
+                EmptyView()
             }
 
             Text("\(record.connectionName)/\(record.codeVersion)")
@@ -233,11 +240,19 @@ private struct SFCCUploadRow: View {
 
     private var iconName: String {
         if record.failureMessage != nil { return "exclamationmark.circle.fill" }
-        return record.kind == .upload ? "arrow.up.circle.fill" : "trash.circle.fill"
+        switch record.kind {
+        case .upload:    return "arrow.up.circle.fill"
+        case .delete:    return "trash.circle.fill"
+        case .cartridge: return "shippingbox.circle.fill"
+        }
     }
 
     private var iconColor: Color {
         if record.failureMessage != nil { return .red }
-        return record.kind == .upload ? .green : .orange
+        switch record.kind {
+        case .upload:    return .green
+        case .delete:    return .orange
+        case .cartridge: return .blue
+        }
     }
 }

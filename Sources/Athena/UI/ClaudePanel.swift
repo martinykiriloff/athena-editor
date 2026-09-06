@@ -1,6 +1,8 @@
 // ClaudePanel.swift — Claude AI right panel: account switcher, command palette, chat.
 
 import SwiftUI
+import AppKit
+import UniformTypeIdentifiers
 
 // MARK: - PanelCommand
 
@@ -141,6 +143,7 @@ struct ClaudePanel: View {
     @State private var commandFilter: String = ""
     @State private var hoveredCommandId: String? = nil
     @State private var selectedCommandId: String? = nil
+    @State private var isDropTargeted: Bool = false
     @FocusState private var inputFocused: Bool
 
     var body: some View {
@@ -152,6 +155,25 @@ struct ClaudePanel: View {
             inputArea
         }
         .overlay(alignment: .leading) { Divider() }
+        .overlay {
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: 0)
+                    .strokeBorder(Color.accentColor, lineWidth: 2)
+                    .background(Color.accentColor.opacity(0.06))
+                    .allowsHitTesting(false)
+            }
+        }
+        .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
+            for provider in providers {
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    guard let url else { return }
+                    Task { @MainActor in
+                        appState.addClaudeAttachments([url])
+                    }
+                }
+            }
+            return true
+        }
     }
 
     // MARK: Account switcher
@@ -235,8 +257,40 @@ struct ClaudePanel: View {
                 commandPalette
                 Divider()
             }
+            attachmentsBar
             inputBar
         }
+    }
+
+    // MARK: Attachments
+
+    @ViewBuilder
+    private var attachmentsBar: some View {
+        if !appState.claudePendingAttachments.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(appState.claudePendingAttachments) { attachment in
+                        AttachmentChip(attachment: attachment) {
+                            appState.removeClaudeAttachment(attachment.id)
+                        }
+                    }
+                }
+                .padding(.horizontal, 10)
+            }
+            .padding(.top, 8)
+        }
+    }
+
+    private func presentAttachmentPicker() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.title = "Attach Files to Claude"
+        panel.message = "Choose files to attach — images, videos, documents, or code. Claude reads them directly and can decode video with ffmpeg."
+
+        guard panel.runModal() == .OK else { return }
+        appState.addClaudeAttachments(panel.urls)
     }
 
     // MARK: Command palette
@@ -354,6 +408,16 @@ struct ClaudePanel: View {
 
     private var inputBar: some View {
         HStack(alignment: .bottom, spacing: 8) {
+            Button {
+                presentAttachmentPicker()
+            } label: {
+                Image(systemName: "paperclip")
+                    .font(.system(size: appState.sf(14)))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Attach files (or drag & drop onto the panel)")
+
             TextField("Message Claude… (/ for commands)", text: $inputText, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.system(size: appState.sf(13)))
@@ -445,6 +509,7 @@ struct ClaudePanel: View {
         // ── In-app handlers ──────────────────────────────────────────────────
         case "clear":
             appState.claudeMessages = []
+            appState.claudePendingAttachments = []
 
         case "cost":
             let chars = appState.claudeMessages.reduce(0) { $0 + $1.content.count }
@@ -702,6 +767,41 @@ private struct AccountChip: View {
     }
 }
 
+// MARK: - AttachmentChip
+
+/// A removable pill for one staged file, shown above the input bar.
+private struct AttachmentChip: View {
+    let attachment: ClaudeAttachment
+    let onRemove: () -> Void
+    @Environment(AppState.self) private var appState
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: attachment.iconName)
+                .font(.system(size: appState.sf(10)))
+                .foregroundStyle(.secondary)
+            Text(attachment.fileName)
+                .font(.system(size: appState.sf(11)))
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Button(action: onRemove) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: appState.sf(11)))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Remove")
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 1)
+        )
+    }
+}
+
 // MARK: - MessageRow
 
 private struct MessageRow: View {
@@ -713,12 +813,34 @@ private struct MessageRow: View {
             if message.role == .user { Spacer(minLength: 32) }
 
             VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 4) {
+                if !message.attachments.isEmpty {
+                    attachmentSummary
+                }
                 bubble
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 4)
 
             if message.role == .assistant { Spacer(minLength: 32) }
+        }
+    }
+
+    private var attachmentSummary: some View {
+        HStack(spacing: 6) {
+            ForEach(message.attachments) { attachment in
+                HStack(spacing: 3) {
+                    Image(systemName: attachment.iconName)
+                        .font(.system(size: appState.sf(9)))
+                    Text(attachment.fileName)
+                        .font(.system(size: appState.sf(10)))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+            }
         }
     }
 

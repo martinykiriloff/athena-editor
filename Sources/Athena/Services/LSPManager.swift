@@ -21,6 +21,11 @@ private struct LSPServerProcess {
 
 actor LSPManager {
 
+    /// How long any single request waits for its reply. Generous enough for
+    /// a cold `initialize` on a large project, short enough that a wedged
+    /// server frees the caller in the same session.
+    static let requestTimeout: Duration = .seconds(10)
+
     // MARK: State
 
     private var servers: [Language: LSPServerProcess] = [:]
@@ -34,6 +39,18 @@ actor LSPManager {
     /// an unstructured `Task` per opened file, so restoring several same-
     /// language tabs on launch calls it concurrently — see `startServer`.
     private var startingLanguages: Set<Language> = []
+    /// Per-document `textDocument/didChange` version counter, keyed by file
+    /// URL. The LSP spec requires a monotonically increasing version per
+    /// document; `didOpen` seeds it at 1 and `didChange` increments it.
+    private var documentVersions: [URL: Int] = [:]
+    /// Raw JSON (re-serialized per item, keyed by `CompletionItem.id`) for
+    /// the most recently returned completion list, kept only long enough to
+    /// back a `completionItem/resolve` call for whichever row the user
+    /// highlights — cleared/replaced on every new `complete()` call. `Data`
+    /// rather than `[String: Any]` because the latter isn't `Sendable` and
+    /// this cache is written from `parseCompletions` and read from `resolve`,
+    /// both actor-isolated methods, but the type itself must stay Sendable.
+    private var lastCompletionRawItems: [UUID: Data] = [:]
 
     // MARK: - Public API
 
@@ -90,6 +107,13 @@ actor LSPManager {
         )
         servers[language] = server
 
+        // Start reading *before* the first request. `initialize` is awaited
+        // below, and its reply can only be delivered by this loop — starting
+        // the reader afterwards (as this did) meant the await could never
+        // complete, so no server ever finished starting and every LSP
+        // feature silently did nothing.
+        startReadingLoop(for: language, process: process, stdoutHandle: server.stdoutHandle)
+
         // Send initialize
         let initParams: [String: Any] = [
             "processId": ProcessInfo.processInfo.processIdentifier,
@@ -103,6 +127,17 @@ actor LSPManager {
                     // Drizzle's own authored snippets (plan.md item 16, "B5").
                     "completion": ["dynamicRegistration": false, "completionItem": ["snippetSupport": true]],
                     "hover":      ["dynamicRegistration": false],
+                    // `labelOffsetSupport` lets a server return each
+                    // parameter's position inside the signature label as
+                    // offsets rather than repeating the text, which is the
+                    // only unambiguous way to emphasise the active one when
+                    // two parameters are spelled the same.
+                    "signatureHelp": [
+                        "dynamicRegistration": false,
+                        "signatureInformation": [
+                            "parameterInformation": ["labelOffsetSupport": true],
+                        ],
+                    ],
                 ],
             ],
         ]
@@ -111,9 +146,6 @@ actor LSPManager {
 
         // Send initialized notification (no id, no response expected)
         sendNotification(method: "initialized", params: [:], language: language)
-
-        // Start background reader
-        startReadingLoop(for: language, process: process, stdoutHandle: server.stdoutHandle)
     }
 
     /// Shuts down and terminates the language server for `language`.
@@ -145,15 +177,24 @@ actor LSPManager {
         servers[language] = nil
     }
 
-    /// Requests completions at the given position.  Returns an empty array when
-    /// no server is running or the response cannot be parsed.
-    func complete(fileURL: URL, line: Int, character: Int) async throws -> [CompletionItem] {
+    /// Requests completions at the given position. `triggerCharacter`, when
+    /// non-nil, is reported to the server as LSP's `context.triggerKind: 2`
+    /// (TriggerCharacter) instead of `1` (Invoked) — lets a server distinguish
+    /// "just typed `.`" from "typing a word", which some servers use to
+    /// scope/prioritize results differently. Returns an empty array when no
+    /// server is running or the response cannot be parsed.
+    func complete(fileURL: URL, line: Int, character: Int, triggerCharacter: String? = nil) async throws -> [CompletionItem] {
         let language = Language.detect(from: fileURL)
         guard servers[language] != nil else { return [] }
+
+        let context: [String: Any] = triggerCharacter.map {
+            ["triggerKind": 2, "triggerCharacter": $0]
+        } ?? ["triggerKind": 1]
 
         let params: [String: Any] = [
             "textDocument": ["uri": fileURL.absoluteString],
             "position": ["line": line, "character": character],
+            "context": context,
         ]
 
         guard let data = try? await sendRequest(method: "textDocument/completion", params: params, language: language) else {
@@ -161,6 +202,30 @@ actor LSPManager {
         }
 
         return parseCompletions(from: data)
+    }
+
+    /// Resolves lazily-computed detail (chiefly `documentation`) for one
+    /// completion item via `completionItem/resolve`, using the raw item JSON
+    /// `parseCompletions` cached for it. Returns `nil` when the item wasn't
+    /// in the last completion response, no server is running, or the server
+    /// has nothing more to add.
+    func resolve(itemID: UUID, language: Language) async throws -> String? {
+        guard servers[language] != nil else { return nil }
+        guard
+            let rawData = lastCompletionRawItems[itemID],
+            let rawItem = try? JSONSerialization.jsonObject(with: rawData) as? [String: Any]
+        else { return nil }
+
+        guard let data = try? await sendRequest(method: "completionItem/resolve", params: rawItem, language: language) else {
+            return nil
+        }
+
+        guard
+            let json   = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let result = json["result"] as? [String: Any]
+        else { return nil }
+
+        return Self.extractDocumentation(from: result["documentation"])
     }
 
     /// Requests hover information at the given position.  Returns `nil` when no
@@ -179,6 +244,93 @@ actor LSPManager {
         }
 
         return parseHover(from: data)
+    }
+
+    /// Requests parameter hints for the call at the given position.
+    /// `triggerCharacter` is "(" or "," when typing opened the request, nil
+    /// when the editor asked on its own (e.g. the caret moved into a call).
+    func signatureHelp(
+        fileURL: URL,
+        line: Int,
+        character: Int,
+        triggerCharacter: String? = nil
+    ) async throws -> SignatureHelp? {
+        let language = Language.detect(from: fileURL)
+        guard servers[language] != nil else { return nil }
+
+        let context: [String: Any] = triggerCharacter.map {
+            ["triggerKind": 2, "triggerCharacter": $0, "isRetrigger": false]
+        } ?? ["triggerKind": 1, "isRetrigger": false]
+
+        let params: [String: Any] = [
+            "textDocument": ["uri": fileURL.absoluteString],
+            "position": ["line": line, "character": character],
+            "context": context,
+        ]
+
+        guard let data = try? await sendRequest(method: "textDocument/signatureHelp", params: params, language: language) else {
+            return nil
+        }
+        return Self.parseSignatureHelp(from: data)
+    }
+
+    /// Parses a `signatureHelp` response. Static and internal so the wire
+    /// shapes can be tested without a server, matching
+    /// `GitService.parsePorcelainStatus`.
+    ///
+    /// Handles both parameter-label forms: plain text, and the `[start, end]`
+    /// UTF-16 offset pair into the signature label. When a server sends text,
+    /// each parameter is located after the previous one so a repeated name
+    /// (`fn(a, a)`) still highlights the right occurrence.
+    static func parseSignatureHelp(from data: Data) -> SignatureHelp? {
+        guard
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let result = json["result"] as? [String: Any],
+            let signatures = result["signatures"] as? [[String: Any]],
+            !signatures.isEmpty
+        else { return nil }
+
+        let activeSignature = result["activeSignature"] as? Int ?? 0
+        let signature = signatures.indices.contains(activeSignature) ? signatures[activeSignature] : signatures[0]
+        guard let label = signature["label"] as? String else { return nil }
+
+        let labelString = label as NSString
+        var searchFrom = 0
+        var parameters: [SignatureParameter] = []
+        for raw in signature["parameters"] as? [[String: Any]] ?? [] {
+            var text = ""
+            var range: NSRange?
+            if let offsets = raw["label"] as? [Int], offsets.count == 2,
+               offsets[0] >= 0, offsets[1] <= labelString.length, offsets[0] <= offsets[1] {
+                range = NSRange(location: offsets[0], length: offsets[1] - offsets[0])
+                text = labelString.substring(with: range!)
+            } else if let plain = raw["label"] as? String {
+                text = plain
+                let remaining = NSRange(location: searchFrom, length: labelString.length - searchFrom)
+                let found = labelString.range(of: plain, options: [], range: remaining)
+                if found.location != NSNotFound {
+                    range = found
+                    searchFrom = NSMaxRange(found)
+                }
+            }
+            guard !text.isEmpty else { continue }
+            parameters.append(SignatureParameter(
+                label: text,
+                labelRange: range,
+                documentation: extractDocumentation(from: raw["documentation"])
+            ))
+        }
+
+        // `activeParameter` may sit on the signature or on the result; the
+        // signature's own value wins per the spec.
+        let active = signature["activeParameter"] as? Int ?? result["activeParameter"] as? Int
+
+        return SignatureHelp(
+            label: label,
+            parameters: parameters,
+            activeParameter: active,
+            documentation: extractDocumentation(from: signature["documentation"])
+        )
     }
 
     /// Requests the definition location for the symbol at the given position.
@@ -318,15 +470,21 @@ actor LSPManager {
         return parseDocumentSymbols(from: data)
     }
 
-    /// Notifies the language server that a file's content has changed.
+    /// Notifies the language server that a file's content has changed, with a
+    /// monotonically increasing `version` per the LSP spec (seeded by
+    /// `didOpen`) — some servers reject or silently mis-order updates sent
+    /// with a non-monotonic version, staling completions/diagnostics.
     func didChange(fileURL: URL, content: String) async {
         let language = Language.detect(from: fileURL)
         guard servers[language] != nil else { return }
 
+        let version = (documentVersions[fileURL] ?? 1) + 1
+        documentVersions[fileURL] = version
+
         let params: [String: Any] = [
             "textDocument": [
                 "uri": fileURL.absoluteString,
-                "version": Int.random(in: 1 ..< Int.max),
+                "version": version,
             ],
             "contentChanges": [
                 ["text": content],
@@ -339,6 +497,8 @@ actor LSPManager {
     func didOpen(fileURL: URL, content: String) async {
         let language = Language.detect(from: fileURL)
         guard servers[language] != nil else { return }
+
+        documentVersions[fileURL] = 1
 
         let params: [String: Any] = [
             "textDocument": [
@@ -355,6 +515,8 @@ actor LSPManager {
     func didClose(fileURL: URL) async {
         let language = Language.detect(from: fileURL)
         guard servers[language] != nil else { return }
+
+        documentVersions.removeValue(forKey: fileURL)
 
         let params: [String: Any] = [
             "textDocument": ["uri": fileURL.absoluteString],
@@ -562,7 +724,26 @@ actor LSPManager {
 
             let data = makeRequest(id: id, method: method, params: params)
             sendMessage(data, to: &servers[language]!)
+
+            // A server that accepts a request and never answers it would
+            // otherwise strand this continuation — and whatever awaits it —
+            // for the lifetime of the app. Editor features must degrade to
+            // "no result", never to "no response ever".
+            Task { [self] in
+                let clock = ContinuousClock()
+                try? await clock.sleep(until: clock.now.advanced(by: Self.requestTimeout))
+                failPendingRequest(id: id, language: language, method: method)
+            }
         }
+    }
+
+    /// Fails request `id` if it is still outstanding. A no-op once the
+    /// reading loop has resumed the continuation, which is the normal case.
+    private func failPendingRequest(id: Int, language: Language, method: String) {
+        guard var server = servers[language],
+              let continuation = server.pending.removeValue(forKey: id) else { return }
+        servers[language] = server
+        continuation.resume(throwing: LSPError.requestTimedOut(method))
     }
 
     private func sendNotification(method: String, params: [String: Any], language: Language) {
@@ -640,13 +821,34 @@ actor LSPManager {
     /// `onMessage` with each message's raw JSON body. Blocks the calling
     /// thread for as long as the server runs; callers must invoke this from
     /// a dedicated background `Thread`, never from Swift's cooperative pool.
-    private static func readFramedMessages(from handle: FileHandle, onMessage: (Data) -> Void) {
+    static func readFramedMessages(from handle: FileHandle, onMessage: (Data) -> Void) {
         while true {
             guard let length = readContentLength(from: handle) else { break }
-            let bodyData = handle.readData(ofLength: length)
-            guard !bodyData.isEmpty else { break }
+            guard let bodyData = readExactly(length, from: handle), !bodyData.isEmpty else { break }
             onMessage(bodyData)
         }
+    }
+
+    /// Reads exactly `length` bytes, looping until they have all arrived.
+    ///
+    /// `FileHandle.readData(ofLength:)` returns *up to* that many bytes from
+    /// a pipe — whatever the writer has flushed so far. Reading a body with
+    /// one call therefore truncated every message that arrived in more than
+    /// one chunk: its JSON failed to parse and was dropped, and the bytes
+    /// left in the pipe were then read as the next message's header, so the
+    /// stream never resynchronised. Small notifications came through and
+    /// every larger reply (`initialize`, completion, hover) was lost, which
+    /// left the awaiting request hanging forever.
+    static func readExactly(_ length: Int, from handle: FileHandle) -> Data? {
+        guard length > 0 else { return Data() }
+        var body = Data()
+        body.reserveCapacity(length)
+        while body.count < length {
+            let chunk = handle.readData(ofLength: length - body.count)
+            if chunk.isEmpty { return nil }   // EOF before the body completed
+            body.append(chunk)
+        }
+        return body
     }
 
     /// Reads bytes from `handle` until the blank line terminating LSP headers is
@@ -744,13 +946,45 @@ actor LSPManager {
             return []
         }
 
+        // Repopulate the resolve-backing cache for exactly this response —
+        // any item from a previous `complete()` call is no longer resolvable
+        // (its row isn't showing anymore) and dropping it keeps the cache
+        // bounded to "at most the last shown list" rather than growing forever.
+        lastCompletionRawItems.removeAll(keepingCapacity: true)
+
         return items.compactMap { item in
             guard let label = item["label"] as? String else { return nil }
             let kind       = completionKindName(item["kind"] as? Int)
             let detail     = item["detail"] as? String
             let insertText = (item["insertText"] as? String) ?? label
-            return CompletionItem(label: label, kind: kind, detail: detail, insertText: insertText)
+            let documentation = Self.extractDocumentation(from: item["documentation"])
+            let sortText   = item["sortText"] as? String
+            let filterText = item["filterText"] as? String
+
+            let completionItem = CompletionItem(
+                label: label, kind: kind, detail: detail, insertText: insertText,
+                documentation: documentation, sortText: sortText, filterText: filterText
+            )
+            if let rawData = try? JSONSerialization.data(withJSONObject: item) {
+                lastCompletionRawItems[completionItem.id] = rawData
+            }
+            return completionItem
         }
+    }
+
+    /// Normalizes an LSP hover/completion "documentation-shaped" value —
+    /// a plain `string`, a `MarkupContent`/`MarkedString` object (`{value}`),
+    /// or an array of either — into a single display string. Shared by
+    /// `parseHover` and completion parsing/`resolve`, which all receive the
+    /// same handful of shapes for free-form doc text.
+    private static func extractDocumentation(from value: Any?) -> String? {
+        if let str = value as? String { return str.isEmpty ? nil : str }
+        if let obj = value as? [String: Any] { return obj["value"] as? String }
+        if let arr = value as? [[String: Any]] {
+            let joined = arr.compactMap { $0["value"] as? String }.joined(separator: "\n\n")
+            return joined.isEmpty ? nil : joined
+        }
+        return nil
     }
 
     private func completionKindName(_ kind: Int?) -> String {
@@ -775,20 +1009,10 @@ actor LSPManager {
     private func parseHover(from data: Data) -> String? {
         guard
             let json    = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let result  = json["result"] as? [String: Any],
-            let contents = result["contents"]
+            let result  = json["result"] as? [String: Any]
         else { return nil }
 
-        if let str = contents as? String { return str.isEmpty ? nil : str }
-
-        if let obj = contents as? [String: Any] {
-            return obj["value"] as? String
-        }
-
-        if let arr = contents as? [[String: Any]] {
-            return arr.compactMap { $0["value"] as? String }.joined(separator: "\n\n")
-        }
-        return nil
+        return Self.extractDocumentation(from: result["contents"])
     }
 
     /// Parses a `textDocument/definition` response's `result`, which per the
@@ -984,6 +1208,7 @@ actor LSPManager {
 private enum LSPError: Error {
     case serverNotRunning(Language)
     case serverTerminated(Language)
+    case requestTimedOut(String)
 }
 
 // MARK: - Data convenience

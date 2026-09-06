@@ -37,10 +37,13 @@ struct AthenaApp: App {
                 }
                 .task {
                     await appState.loadSettings()
+                    // Keybindings must work from the first frame — restoring
+                    // the last workspace (file tree, git, session tabs) can
+                    // take seconds, and ⌘P/⌘S were dead until it finished.
+                    await appState.installKeyMonitor()
                     appState.startDiagnosticsConsumer()
                     appState.startFileWatchConsumer()
                     await appState.restoreLastWorkspace()
-                    await appState.installKeyMonitor()
                     // Owned by updateService, not this view's .task — see
                     // scheduleAutoCheck's doc comment.
                     updateService.scheduleAutoCheck()

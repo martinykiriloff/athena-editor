@@ -342,6 +342,12 @@ struct CodeEditorView: View {
                         fileURL: fileURL, line: line - 1, character: col - 1
                     )
                 },
+                onRequestSignatureHelp: { line, col, trigger in
+                    guard let fileURL = tab.fileURL else { return nil }
+                    return try? await appState.lspManager.signatureHelp(
+                        fileURL: fileURL, line: line - 1, character: col - 1, triggerCharacter: trigger
+                    )
+                },
                 onOpenDefinitionFile: { url in
                     await appState.openFile(url)
                 },
@@ -387,12 +393,12 @@ struct CodeEditorView: View {
                     appState.isZenMode = false
                     return true
                 },
-                onRequestCompletion: { line, col in
+                onRequestCompletion: { line, col, triggerCharacter in
                     // LSP completions (0-indexed internally)
                     let lspItems: [CompletionItem]
                     if let fileURL = tab.fileURL {
                         lspItems = (try? await appState.lspManager.complete(
-                            fileURL: fileURL, line: line - 1, character: col - 1
+                            fileURL: fileURL, line: line - 1, character: col - 1, triggerCharacter: triggerCharacter
                         )) ?? []
                     } else {
                         lspItems = []
@@ -410,9 +416,15 @@ struct CodeEditorView: View {
                     var seen = Set<String>()
                     return (drizzleItems + lspItems).filter { seen.insert($0.label).inserted }
                 },
+                onResolveCompletionDoc: { itemID in
+                    guard let fileURL = tab.fileURL else { return nil }
+                    let language = Language.detect(from: fileURL)
+                    return try? await appState.lspManager.resolve(itemID: itemID, language: language)
+                },
                 onRequestGhostText: { prefix, suffix in
                     await appState.requestInlineCompletion(prefix: prefix, suffix: suffix)
-                }
+                },
+                ghostTextDebounceMs: appState.ghostTextDebounceMs
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .task(id: tab.id) { await appState.loadBlame(for: tab) }

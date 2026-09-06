@@ -1,43 +1,81 @@
 import Foundation
 
-enum GitError: Error {
+enum GitError: LocalizedError {
     case commandFailed(String)
     case notARepo
     case parseError
+
+    /// Without this, `error.localizedDescription` on a failed git command
+    /// reads "The operation couldn't be completed" and git's actual stderr
+    /// (the only useful part) never reaches the user.
+    var errorDescription: String? {
+        switch self {
+        case .commandFailed(let message):
+            let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? "git command failed" : trimmed
+        case .notARepo:   return "Not a git repository"
+        case .parseError: return "Couldn't parse git output"
+        }
+    }
 }
 
 actor GitService {
 
     // MARK: - Private helper
 
+    /// Both pipes are drained concurrently while git runs: draining only in
+    /// the termination handler deadlocks once output exceeds the 64 KB pipe
+    /// buffer (`git show` of a large commit). On failure the message is
+    /// stderr, or stdout when stderr is empty — a conflicting merge/pull
+    /// reports "CONFLICT …" on stdout with nothing on stderr.
     private func run(args: [String], at url: URL) async throws -> String {
-        try await withCheckedThrowingContinuation { continuation in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-            process.arguments = args
-            process.currentDirectoryURL = url
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = args
+        process.currentDirectoryURL = url
+        // No terminal is attached: a push/pull that needs credentials
+        // must fail with git's message, not hang forever on a prompt.
+        var environment = ProcessInfo.processInfo.environment
+        environment["GIT_TERMINAL_PROMPT"] = "0"
+        process.environment = environment
 
-            let stdoutPipe = Pipe()
-            let stderrPipe = Pipe()
-            process.standardOutput = stdoutPipe
-            process.standardError = stderrPipe
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
+        let stdoutHandle = stdoutPipe.fileHandleForReading
+        let stderrHandle = stderrPipe.fileHandleForReading
 
-            process.terminationHandler = { p in
-                if p.terminationStatus == 0 {
-                    let data = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-                    let output = String(data: data, encoding: .utf8) ?? ""
-                    continuation.resume(returning: output)
-                } else {
-                    let data = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-                    let errMsg = String(data: data, encoding: .utf8) ?? "unknown error"
-                    continuation.resume(throwing: GitError.commandFailed(errMsg))
-                }
+        // Installed before `run()` — a handler set after a fast exit never fires.
+        let termination = AsyncStream<Int32> { continuation in
+            process.terminationHandler = { finished in
+                continuation.yield(finished.terminationStatus)
+                continuation.finish()
             }
+        }
+        try process.run()
 
-            do {
-                try process.run()
-            } catch {
-                continuation.resume(throwing: error)
+        async let stdoutData = Self.drain(stdoutHandle)
+        async let stderrData = Self.drain(stderrHandle)
+        let stdout = String(decoding: await stdoutData, as: UTF8.self)
+        let stderr = String(decoding: await stderrData, as: UTF8.self)
+        var status: Int32 = 0
+        for await code in termination { status = code }
+
+        guard status == 0 else {
+            let message = stderr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? stdout : stderr
+            throw GitError.commandFailed(message)
+        }
+        return stdout
+    }
+
+    /// Blocking `readDataToEndOfFile` on a GCD queue, not the cooperative
+    /// pool, bridged back with a continuation. (`FileHandle.bytes` stalled
+    /// on a full pipe in practice.)
+    private static func drain(_ handle: FileHandle) async -> Data {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                continuation.resume(returning: handle.readDataToEndOfFile())
             }
         }
     }
@@ -160,26 +198,96 @@ actor GitService {
         _ = try await run(args: ["commit", "-m", message], at: url)
     }
 
+    /// `git push`, or `git push -u origin <branch>` the first time a branch
+    /// is pushed (no upstream yet) — the same thing VS Code's Sync does.
     func push(at url: URL) async throws {
-        _ = try await run(args: ["push"], at: url)
+        do {
+            _ = try await run(args: ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], at: url)
+            _ = try await run(args: ["push"], at: url)
+            return
+        } catch GitError.commandFailed(let message)
+            where message.contains("no upstream") || message.contains("does not point to a branch") {
+            // Fall through to the first-push path below. Any other failure
+            // (index.lock, corrupt ref) must not silently retarget the
+            // branch's upstream to origin.
+        }
+        let branch = try await currentBranch(at: url)
+        guard !branch.isEmpty else {
+            throw GitError.commandFailed("HEAD is detached — check out a branch before pushing.")
+        }
+        _ = try await run(args: ["push", "-u", "origin", branch], at: url)
     }
 
     func pull(at url: URL) async throws {
         _ = try await run(args: ["pull"], at: url)
     }
 
+    func fetch(at url: URL) async throws {
+        _ = try await run(args: ["fetch", "--prune"], at: url)
+    }
+
+    // MARK: - Stash
+
+    func stashList(at url: URL) async throws -> [GitStash] {
+        let output = try await run(args: ["stash", "list", "--format=%gd%x1f%s%x1f%at"], at: url)
+        return Self.parseStashList(output)
+    }
+
+    /// Parses `git stash list --format=%gd%x1f%s%x1f%at` — unit-separator
+    /// delimited so a stash message containing `|` can't break the parse.
+    static func parseStashList(_ output: String) -> [GitStash] {
+        var result: [GitStash] = []
+        for line in output.components(separatedBy: "\n") {
+            let parts = line.components(separatedBy: "\u{1f}")
+            guard parts.count >= 3 else { continue }
+            // "stash@{3}" → 3
+            let ref = parts[0]
+            guard let open = ref.firstIndex(of: "{"), let close = ref.firstIndex(of: "}"),
+                  open < close, let index = Int(ref[ref.index(after: open)..<close]) else { continue }
+            let date = Date(timeIntervalSince1970: Double(parts[2].trimmingCharacters(in: .whitespaces)) ?? 0)
+            result.append(GitStash(index: index, message: parts[1], date: date))
+        }
+        return result
+    }
+
+    func stashPush(message: String, includeUntracked: Bool, at url: URL) async throws {
+        var args = ["stash", "push"]
+        if includeUntracked { args.append("--include-untracked") }
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { args += ["-m", trimmed] }
+        // git exits 0 with this on stdout when there is nothing tracked to
+        // stash (e.g. only untracked files without --include-untracked).
+        let output = try await run(args: args, at: url)
+        if output.contains("No local changes to save") {
+            throw GitError.commandFailed("No local changes to save — untracked files need \"Stash Including Untracked\".")
+        }
+    }
+
+    func stashApply(_ stash: GitStash, pop: Bool, at url: URL) async throws {
+        _ = try await run(args: ["stash", pop ? "pop" : "apply", stash.ref], at: url)
+    }
+
+    func stashDrop(_ stash: GitStash, at url: URL) async throws {
+        _ = try await run(args: ["stash", "drop", stash.ref], at: url)
+    }
+
     // MARK: - Log
 
-    func log(at url: URL, limit: Int) async throws -> [GitCommit] {
-        let format = "--format=%H|%h|%s|%an|%at"
-        let output = try await run(args: ["log", format, "-" + String(limit)], at: url)
+    /// Recent commits, optionally only those touching `path` (file history).
+    func log(at url: URL, limit: Int, path: String? = nil) async throws -> [GitCommit] {
+        // Unit-separator delimited (like `stashList`) so a subject containing
+        // "|" can't shift the author/date columns.
+        let format = "--format=%H%x1f%h%x1f%s%x1f%an%x1f%at"
+        var args = ["log", format, "-" + String(limit)]
+        if let path, !path.isEmpty { args += ["--follow", "--", path] }
+        let output = try await run(args: args, at: url)
 
         var commits: [GitCommit] = []
         for line in output.components(separatedBy: "\n") {
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { continue }
 
-            let parts = trimmed.components(separatedBy: "|")
+            let parts = trimmed.components(separatedBy: "\u{1f}")
             guard parts.count >= 5 else { continue }
 
             let hash = parts[0]

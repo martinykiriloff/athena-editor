@@ -332,6 +332,7 @@ struct DebugSidebarView: View {
         switch type {
         case "node-cdp", "node", "pwa-node", "typescript": return "server.rack"
         case "chrome", "nextjs":                            return "globe"
+        case "prophet", "sfcc":                             return "shippingbox"
         case "python":                                      return "terminal"
         case "lldb", "swift":                               return "hammer"
         default:                                            return "play.circle"

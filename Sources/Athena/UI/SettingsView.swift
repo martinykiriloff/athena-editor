@@ -252,6 +252,8 @@ struct SettingsView: View {
     @State private var showApiKey: Bool = false
     @State private var claudeModel: String = "claude-opus-4-5"
     @State private var aiLoaded: Bool = false
+    @State private var ollamaModels: [String] = []
+    @State private var isFetchingOllamaModels: Bool = false
 
     private let availableModels = [
         "claude-opus-4-8",
@@ -313,19 +315,134 @@ struct SettingsView: View {
                             .frame(width: 220)
                             .onChange(of: appState.ollamaEndpoint) { _, v in
                                 appState.persistSetting(v, for: "ollamaEndpoint")
+                                ollamaModels = []  // stale for the old endpoint
                             }
                     }
                     HStack {
                         Text("Model")
                         Spacer()
-                        TextField("qwen2.5-coder:7b", text: Bindable(appState).ollamaModel)
-                            .textFieldStyle(.roundedBorder)
+                        if ollamaModels.isEmpty {
+                            TextField("qwen2.5-coder:7b", text: Bindable(appState).ollamaModel)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 220)
+                                .onChange(of: appState.ollamaModel) { _, v in
+                                    appState.persistSetting(v, for: "ollamaModel")
+                                }
+                        } else {
+                            Picker("", selection: Bindable(appState).ollamaModel) {
+                                ForEach(ollamaModels, id: \.self) { Text($0).tag($0) }
+                            }
+                            .labelsHidden()
                             .frame(width: 220)
                             .onChange(of: appState.ollamaModel) { _, v in
                                 appState.persistSetting(v, for: "ollamaModel")
                             }
+                        }
+                        Button {
+                            Task {
+                                isFetchingOllamaModels = true
+                                ollamaModels = await appState.fetchOllamaModels()
+                                isFetchingOllamaModels = false
+                            }
+                        } label: {
+                            if isFetchingOllamaModels {
+                                ProgressView().controlSize(.small)
+                            } else {
+                                Image(systemName: "arrow.clockwise")
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .help("Fetch installed models from Ollama")
                     }
                     Text("Any model available in Ollama works. Run `ollama pull <model>` to install.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                if appState.ghostTextProvider == .openAICompatible {
+                    HStack {
+                        Text("Endpoint")
+                        Spacer()
+                        TextField("http://127.0.0.1:1234/v1", text: Bindable(appState).localOAIEndpoint)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 220)
+                            .onChange(of: appState.localOAIEndpoint) { _, v in
+                                appState.persistSetting(v, for: "localOAIEndpoint")
+                            }
+                    }
+                    HStack {
+                        Text("Model")
+                        Spacer()
+                        TextField("model id", text: Bindable(appState).localOAIModel)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 220)
+                            .onChange(of: appState.localOAIModel) { _, v in
+                                appState.persistSetting(v, for: "localOAIModel")
+                            }
+                    }
+                    HStack {
+                        Text("API Key")
+                        Spacer()
+                        TextField("optional", text: Bindable(appState).localOAIAPIKey)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 220)
+                            .onChange(of: appState.localOAIAPIKey) { _, v in
+                                appState.persistSetting(v, for: "localOAIAPIKey")
+                            }
+                    }
+                    Text("Any server speaking the OpenAI /v1/completions API works — LM Studio, llama.cpp's `server`, vLLM, etc. Include the /v1 prefix in Endpoint.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                if appState.ghostTextProvider != .none {
+                    HStack {
+                        Text("Debounce")
+                        Spacer()
+                        Stepper(
+                            "\(appState.ghostTextDebounceMs) ms",
+                            value: Bindable(appState).ghostTextDebounceMs,
+                            in: 100...3000, step: 100
+                        )
+                        .frame(width: 160)
+                        .onChange(of: appState.ghostTextDebounceMs) { _, v in
+                            appState.persistSetting(v, for: "ghostTextDebounceMs")
+                        }
+                    }
+                }
+
+                if appState.ghostTextProvider == .ollama || appState.ghostTextProvider == .openAICompatible {
+                    HStack {
+                        Text("Temperature")
+                        Spacer()
+                        Stepper(
+                            String(format: "%.1f", appState.ghostTextTemperature),
+                            value: Bindable(appState).ghostTextTemperature,
+                            in: 0...1, step: 0.1
+                        )
+                        .frame(width: 160)
+                        .onChange(of: appState.ghostTextTemperature) { _, v in
+                            appState.persistSetting(v, for: "ghostTextTemperature")
+                        }
+                    }
+                    HStack {
+                        Text("Max Tokens")
+                        Spacer()
+                        Stepper(
+                            "\(appState.ghostTextMaxTokens)",
+                            value: Bindable(appState).ghostTextMaxTokens,
+                            in: 16...512, step: 16
+                        )
+                        .frame(width: 160)
+                        .onChange(of: appState.ghostTextMaxTokens) { _, v in
+                            appState.persistSetting(v, for: "ghostTextMaxTokens")
+                        }
+                    }
+                    Toggle("Include code context", isOn: Bindable(appState).includeGhostTextContext)
+                        .onChange(of: appState.includeGhostTextContext) { _, v in
+                            appState.persistSetting(v, for: "includeGhostTextContext")
+                        }
+                    Text("Prepends the file's imports and the enclosing function/class to every request — off if it hurts latency more than it helps quality.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

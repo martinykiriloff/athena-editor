@@ -1,5 +1,5 @@
 // DebugService.swift
-// Athena — manages DAP (Swift/Python) and CDP (Node.js/Chrome/Next.js) debug sessions.
+// Athena — manages DAP (Swift/Python), CDP (Node.js/Chrome/Next.js) and SFCC (SDAPI) debug sessions.
 // Swift 6, strict concurrency.
 
 import Foundation
@@ -13,9 +13,9 @@ actor DebugService {
     // wrapped closure itself, via `Task { @MainActor in ... }` in
     // `setCallbacks` below) — plain actor-isolated storage, no
     // `nonisolated(unsafe)` needed.
-    private var cbStateChange: ((DebugState) -> Void)?
-    private var cbOutput:      ((String) -> Void)?
-    private var cbStopped:     ((DebugStop) -> Void)?
+    private var cbStateChange: (@Sendable (DebugState) -> Void)?
+    private var cbOutput:      (@Sendable (String) -> Void)?
+    private var cbStopped:     (@Sendable (DebugStop) -> Void)?
 
     // DAP session (Swift / Python)
     private let dapClient = DAPClient()
@@ -28,6 +28,10 @@ actor DebugService {
     private var isCDP:        Bool = false
     // Paused call frames from the last Debugger.paused event.
     private var cdpFrames:    [[String: Any]] = []
+
+    // SFCC session (Script Debugger API, ADR 0002)
+    private var sfccSession:  SFCCDebugSession? = nil
+    private var isSFCC:       Bool { sfccSession != nil }
 
     // MARK: - Callback wiring
 
@@ -43,12 +47,106 @@ actor DebugService {
 
     // MARK: - Launch
 
-    func launch(_ config: LaunchConfig, workspaceURL: URL?, breakpointsByFile: [String: [Int]]) async throws {
-        if isCDPType(config.type) {
+    /// `sfccConnection` is the workspace's active SFCC connection, the last
+    /// credential fallback for "prophet" configs (ADR 0002); ignored otherwise.
+    func launch(_ config: LaunchConfig, workspaceURL: URL?, breakpointsByFile: [String: [Int]],
+                sfccConnection: SFCCConnection? = nil) async throws {
+        if config.isSFCC {
+            try await launchSFCC(config, workspaceURL: workspaceURL, breakpoints: breakpointsByFile,
+                                 connection: sfccConnection)
+        } else if isCDPType(config.type) {
             try await launchCDP(config, workspaceURL: workspaceURL, breakpoints: breakpointsByFile)
         } else {
             try await launchDAP(config, workspaceURL: workspaceURL, breakpoints: breakpointsByFile)
         }
+    }
+
+    // MARK: - SFCC launch (Script Debugger API)
+
+    private func launchSFCC(_ config: LaunchConfig, workspaceURL: URL?, breakpoints: [String: [Int]],
+                            connection: SFCCConnection?) async throws {
+        let dwJSON = workspaceURL.flatMap { Self.loadDWJSON(in: $0) }
+        let credentials = try Self.resolveSFCCCredentials(config: config, dwJSON: dwJSON, connection: connection)
+
+        var roots: [URL] = []
+        if let ws = workspaceURL {
+            if let conn = connection {
+                roots.append(SFCCService.cartridgesRoot(connection: conn, workspaceURL: ws))
+            }
+            if let rel = dwJSON?.cartridgesPath {
+                roots.append(rel.hasPrefix("/") ? URL(fileURLWithPath: rel) : ws.appendingPathComponent(rel))
+            }
+            roots.append(ws)
+        }
+        var found: [String: URL] = [:]
+        for root in roots where FileManager.default.fileExists(atPath: root.path) {
+            for (name, url) in SFCCService.discoverCartridges(under: root) where found[name] == nil {
+                found[name] = url
+            }
+        }
+        let map = SFCCCartridgeMap(cartridges: found)
+        cbOutput?("[SFCC] \(found.count) cartridge(s) found locally; connecting to \(credentials.hostname)…\n")
+
+        let session = SFCCDebugSession(
+            client: try SDAPIClient(credentials: credentials),
+            cartridges: map,
+            onStateChange: cbStateChange ?? { _ in },
+            onOutput: cbOutput ?? { _ in },
+            onStopped: cbStopped ?? { _ in }
+        )
+        sfccSession = session
+        do {
+            try await session.start(breakpointsByFile: breakpoints)
+        } catch is CancellationError {
+            // Stop was pressed while the sandbox handshake was in flight;
+            // the session already cleaned up after itself.
+            sfccSession = nil
+            throw DAPError.launchFailed("stopped before the sandbox session was established")
+        } catch {
+            sfccSession = nil
+            throw error
+        }
+    }
+
+    /// Pushes a breakpoint toggle into a live session. SFCC replaces the
+    /// sandbox's whole set (SDAPI only appends); DAP re-sends the changed
+    /// file. CDP breakpoints aren't tracked by id yet, so a toggle there
+    /// takes effect on the next launch.
+    func updateBreakpoints(changedFile: String, lines: [Int], allByFile: [String: [Int]]) async throws {
+        if let sfcc = sfccSession {
+            try await sfcc.updateBreakpoints(byFile: allByFile)
+            return
+        }
+        if isCDP { return }
+        _ = try await dapClient.request("setBreakpoints", args: [
+            "source": ["path": changedFile],
+            "breakpoints": lines.map { ["line": $0] }
+        ])
+    }
+
+    /// Launch config first (Prophet's launch.json keys), then dw.json, then
+    /// the active Athena SFCC connection. Hostname, username and password are
+    /// all required; the code version is informational for the debugger.
+    static func resolveSFCCCredentials(config: LaunchConfig, dwJSON: DWJSONConfig?,
+                                       connection: SFCCConnection?) throws -> SFCCDebugCredentials {
+        func nonEmpty(_ s: String?) -> String? { (s?.isEmpty ?? true) ? nil : s }
+        guard let hostname = nonEmpty(config.hostname) ?? nonEmpty(dwJSON?.hostname) ?? nonEmpty(connection?.hostname) else {
+            throw SDAPIError.missingCredentials("no hostname — add one to launch.json, dw.json, or an SFCC connection")
+        }
+        guard let username = nonEmpty(config.username) ?? nonEmpty(dwJSON?.username) ?? nonEmpty(connection?.username) else {
+            throw SDAPIError.missingCredentials("no username for \(hostname)")
+        }
+        guard let password = nonEmpty(config.password) ?? nonEmpty(dwJSON?.password) ?? nonEmpty(connection?.password) else {
+            throw SDAPIError.missingCredentials("no password for \(username)@\(hostname)")
+        }
+        let codeVersion = nonEmpty(config.codeVersion) ?? nonEmpty(dwJSON?.codeVersion) ?? nonEmpty(connection?.codeVersion)
+        return SFCCDebugCredentials(hostname: hostname, username: username, password: password, codeVersion: codeVersion)
+    }
+
+    static func loadDWJSON(in workspaceURL: URL) -> DWJSONConfig? {
+        let url = workspaceURL.appendingPathComponent("dw.json")
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return DWJSONConfig.parse(data)
     }
 
     // MARK: - DAP launch (Swift / Python / legacy Node via @vscode/js-debug)
@@ -210,31 +308,45 @@ actor DebugService {
     // MARK: - Controls
 
     func continueExecution(threadId: Int = 1) async throws {
+        if let sfcc = sfccSession { try await sfcc.resume(); return }
         if isCDP { _ = try await cdpClient?.send("Debugger.resume")
         } else    { _ = try await dapClient.request("continue", args: ["threadId": threadId]) }
     }
 
     func stepOver(threadId: Int = 1) async throws {
+        if let sfcc = sfccSession { try await sfcc.step(.over); return }
         if isCDP { _ = try await cdpClient?.send("Debugger.stepOver")
         } else    { _ = try await dapClient.request("next", args: ["threadId": threadId]) }
     }
 
     func stepIn(threadId: Int = 1) async throws {
+        if let sfcc = sfccSession { try await sfcc.step(.into); return }
         if isCDP { _ = try await cdpClient?.send("Debugger.stepInto")
         } else    { _ = try await dapClient.request("stepIn", args: ["threadId": threadId]) }
     }
 
     func stepOut(threadId: Int = 1) async throws {
+        if let sfcc = sfccSession { try await sfcc.step(.out); return }
         if isCDP { _ = try await cdpClient?.send("Debugger.stepOut")
         } else    { _ = try await dapClient.request("stepOut", args: ["threadId": threadId]) }
     }
 
     func pause(threadId: Int = 1) async throws {
+        if isSFCC {
+            // SDAPI halts only at breakpoints; there is no "pause now".
+            cbOutput?("[SFCC] Pause isn't supported by the Script Debugger API — set a breakpoint instead\n")
+            return
+        }
         if isCDP { _ = try await cdpClient?.send("Debugger.pause")
         } else    { _ = try await dapClient.request("pause", args: ["threadId": threadId]) }
     }
 
     func disconnect() async {
+        if let sfcc = sfccSession {
+            await sfcc.stop()
+            sfccSession = nil
+            return
+        }
         if isCDP {
             cdpEventTask?.cancel()
             cdpEventTask = nil
@@ -259,6 +371,7 @@ actor DebugService {
     // MARK: - Stack & Variables
 
     func fetchStackFrames(threadId: Int = 1) async throws -> [DebugStackFrame] {
+        if let sfcc = sfccSession { return try await sfcc.stackFrames() }
         if isCDP {
             return cdpFrames.enumerated().compactMap { idx, frame -> DebugStackFrame? in
                 let raw  = frame["functionName"] as? String ?? ""
@@ -287,6 +400,7 @@ actor DebugService {
     }
 
     func fetchVariables(frameId: Int) async throws -> [DebugVariable] {
+        if let sfcc = sfccSession { return try await sfcc.variables(frameIndex: frameId) }
         if isCDP {
             guard frameId < cdpFrames.count else { return [] }
             let frame      = cdpFrames[frameId]
@@ -343,6 +457,7 @@ actor DebugService {
     /// DAP's own vocabulary (`"watch"`, `"repl"`, `"hover"`…) — CDP doesn't
     /// take one, so it's ignored on that path.
     func evaluate(expression: String, frameId: Int?, context: String) async throws -> DAPEvaluateResult {
+        if let sfcc = sfccSession { return try await sfcc.evaluate(expression, frameIndex: frameId) }
         if isCDP {
             guard let cdp = cdpClient else { throw DAPError.sessionEnded }
             let resp: CDPClient.Response

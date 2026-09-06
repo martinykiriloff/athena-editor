@@ -2,6 +2,8 @@
 // Swift 6, strict concurrency.
 
 import SwiftUI
+@preconcurrency import AppKit
+import UniformTypeIdentifiers
 
 // MARK: - DBConnectionsView
 
@@ -103,7 +105,19 @@ struct DBConnectionsView: View {
                             }
                         }
                     }, onBrowse: {
-                        browsingConnection = conn
+                        // Re-verify rather than trust `conn.isConnected` —
+                        // it can go stale mid-session (a dropped network
+                        // path) with nothing to notice and flip it back, so
+                        // "Browse Data" always re-establishes the connection
+                        // itself and surfaces a real error if that fails,
+                        // instead of silently opening an empty browser.
+                        Task {
+                            await appState.connectAndBrowse(conn)
+                            if appState.dbBrowserConnectionId == conn.id {
+                                browsingConnection = conn
+                            }
+                            persistConnections()
+                        }
                     })
                     Divider()
                 }
@@ -178,13 +192,25 @@ private struct DBConnectionRow: View {
                     .font(.system(size: appState.sf(12), weight: .medium))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
-                Text("\(connection.host):\(connection.port)")
+                Text(connection.type.isFileBased
+                     ? (connection.database as NSString).abbreviatingWithTildeInPath
+                     : "\(connection.host):\(connection.port)")
                     .font(.system(size: appState.sf(11), design: .monospaced))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .truncationMode(.head)
             }
 
             Spacer()
+
+            // A connection saved by an older build for an engine this build
+            // has no driver for: say so, and don't offer Connect.
+            if !connection.type.isSupported {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: appState.sf(11)))
+                    .foregroundStyle(.orange)
+                    .help("\(connection.type.rawValue) isn't supported in this version of Athena")
+            }
 
             // Action buttons (visible on hover)
             if isHovered {
@@ -193,11 +219,13 @@ private struct DBConnectionRow: View {
                     if connection.isConnected {
                         IconButton("tablecells", help: "Browse Data", action: onBrowse)
                     }
-                    IconButton(
-                        connection.isConnected ? "stop.fill" : "bolt.fill",
-                        help: connection.isConnected ? "Disconnect" : "Connect",
-                        action: onToggle
-                    )
+                    if connection.type.isSupported {
+                        IconButton(
+                            connection.isConnected ? "stop.fill" : "bolt.fill",
+                            help: connection.isConnected ? "Disconnect" : "Connect",
+                            action: onToggle
+                        )
+                    }
                     IconButton("trash", help: "Delete", action: onDelete)
                 }
             }
@@ -211,6 +239,7 @@ private struct DBConnectionRow: View {
     private func dbColor(_ type: DBType) -> Color {
         switch type {
         case .postgresql: return Color(red: 0.20, green: 0.40, blue: 0.57)
+        case .sqlite:     return Color(red: 0.06, green: 0.50, blue: 0.80)
         case .mongodb:    return Color(red: 0.30, green: 0.70, blue: 0.24)
         case .mysql:      return Color(red: 0.00, green: 0.46, blue: 0.56)
         case .oracle:     return Color(red: 0.97, green: 0.00, blue: 0.00)
@@ -271,28 +300,40 @@ struct DBConnectionFormView: View {
                     TextField("Connection Name", text: $name)
 
                     Picker("Type", selection: $type) {
-                        ForEach(DBType.allCases, id: \.self) { t in
+                        // Only engines with a driver; see DBType.isSupported.
+                        // An existing connection of another type keeps its
+                        // type visible so the form still round-trips it.
+                        ForEach(type.isSupported ? DBType.supportedCases : [type], id: \.self) { t in
                             Text(t.rawValue).tag(t)
                         }
                     }
-                    .onChange(of: type) { _, newType in
-                        if port == String(type.defaultPort) || port.isEmpty {
+                    .onChange(of: type) { oldType, newType in
+                        if port == String(oldType.defaultPort) || port.isEmpty {
                             port = String(newType.defaultPort)
                         }
                     }
                 }
 
-                Section("Server") {
-                    TextField("Host", text: $host)
-                    TextField("Port", text: $port)
-                        .onReceive(port.publisher.collect()) { chars in
-                            let filtered = String(chars.filter(\.isNumber))
-                            if filtered != port { port = filtered }
+                if type.isFileBased {
+                    Section("Database File") {
+                        HStack {
+                            TextField("Path to .sqlite / .db file", text: $database)
+                            Button("Choose…") { chooseDatabaseFile() }
                         }
-                    TextField("Database", text: $database)
+                    }
+                } else {
+                    Section("Server") {
+                        TextField("Host", text: $host)
+                        TextField("Port", text: $port)
+                            .onReceive(port.publisher.collect()) { chars in
+                                let filtered = String(chars.filter(\.isNumber))
+                                if filtered != port { port = filtered }
+                            }
+                        TextField("Database", text: $database)
+                    }
                 }
 
-                Section("Authentication") {
+                if !type.isFileBased { Section("Authentication") {
                     TextField("Username", text: $username)
                     HStack {
                         Group {
@@ -310,12 +351,27 @@ struct DBConnectionFormView: View {
                         }
                         .buttonStyle(.plain)
                     }
-                }
+                } }
             }
             .formStyle(.grouped)
         }
         .frame(width: 420)
         .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func chooseDatabaseFile() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.database, .data]
+        panel.allowsOtherFileTypes = true
+        if panel.runModal() == .OK, let url = panel.url {
+            database = url.path
+            if name.trimmingCharacters(in: .whitespaces).isEmpty {
+                name = url.deletingPathExtension().lastPathComponent
+            }
+        }
     }
 
     private func save() {
