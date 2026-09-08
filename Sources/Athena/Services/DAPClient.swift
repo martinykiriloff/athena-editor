@@ -36,6 +36,9 @@ actor DAPClient {
     private var pendingTyped: [Int: CheckedContinuation<ResponseBody, Error>] = [:]
     // Buffer for partially received messages.
     private var receiveBuffer = Data()
+    /// Requests sent via `beginRequest` that nothing is awaiting yet.
+    private var deferredSeqs: Set<Int> = []
+    private var deferredResults: [Int: Result<ResponseBody, Error>] = [:]
 
     // Delivery channel for events (initialized, stopped, continued, output, terminated…)
     // DAPRawMessage wraps [String: Any] as @unchecked Sendable since JSON dicts cross actor boundaries.
@@ -96,6 +99,8 @@ actor DAPClient {
         eventContinuation.finish()
         for (_, cont) in pendingTyped { cont.resume(throwing: DAPError.sessionEnded) }
         pendingTyped.removeAll()
+        deferredSeqs.removeAll()
+        deferredResults.removeAll()
     }
 
     // MARK: - Public API
@@ -108,14 +113,91 @@ actor DAPClient {
         subscript(key: String) -> Any? { json[key] }
     }
 
-    func request(_ command: String, args: [String: Any]? = nil) async throws -> ResponseBody {
+    /// Sends a DAP request and waits for its response.
+    ///
+    /// `timeout` exists because an adapter that accepts a request and never
+    /// answers would otherwise strand the caller — and the whole debug
+    /// session — permanently. The continuation is registered before the
+    /// message goes out so a fast adapter can't reply into an empty table.
+    func request(
+        _ command: String,
+        args: [String: Any]? = nil,
+        timeout: Duration = .seconds(20)
+    ) async throws -> ResponseBody {
         let s = seq; seq += 1
         var msg: [String: Any] = ["seq": s, "type": "request", "command": command]
         if let args { msg["arguments"] = args }
-        try send(msg)
+
         return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<ResponseBody, Error>) in
             pendingTyped[s] = cont
+            do {
+                try send(msg)
+            } catch {
+                pendingTyped.removeValue(forKey: s)
+                cont.resume(throwing: error)
+                return
+            }
+            Task { [weak self] in
+                let clock = ContinuousClock()
+                try? await clock.sleep(until: clock.now.advanced(by: timeout))
+                await self?.failIfPending(seq: s, command: command)
+            }
         }
+    }
+
+    /// Fails request `seq` if it is still outstanding — a no-op once the
+    /// adapter has answered, which is the normal case.
+    private func failIfPending(seq: Int, command: String) {
+        guard let cont = pendingTyped.removeValue(forKey: seq) else { return }
+        cont.resume(throwing: DAPError.requestFailed("\(command) timed out"))
+    }
+
+    /// Sends a request and returns its sequence number without waiting.
+    ///
+    /// DAP adapters may hold the `launch` response until `configurationDone`
+    /// arrives, so a client that awaits `launch` before configuring
+    /// deadlocks against any adapter that behaves that way. Pair this with
+    /// `awaitResponse(seq:timeout:)` once configuration is finished.
+    func beginRequest(_ command: String, args: [String: Any]? = nil) throws -> Int {
+        let s = seq; seq += 1
+        var msg: [String: Any] = ["seq": s, "type": "request", "command": command]
+        if let args { msg["arguments"] = args }
+        deferredSeqs.insert(s)
+        do {
+            try send(msg)
+        } catch {
+            deferredSeqs.remove(s)
+            throw error
+        }
+        return s
+    }
+
+    /// Collects a `beginRequest` response, whether it already arrived or is
+    /// still outstanding.
+    func awaitResponse(seq s: Int, timeout: Duration = .seconds(20)) async throws -> ResponseBody {
+        if let done = deferredResults.removeValue(forKey: s) { return try done.get() }
+        return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<ResponseBody, Error>) in
+            deferredSeqs.remove(s)
+            pendingTyped[s] = cont
+            Task { [weak self] in
+                let clock = ContinuousClock()
+                try? await clock.sleep(until: clock.now.advanced(by: timeout))
+                await self?.failIfPending(seq: s, command: "request \(s)")
+            }
+        }
+    }
+
+    /// Turns a response message into the value or error the caller sees.
+    private static func outcome(of msg: [String: Any]) -> Result<ResponseBody, Error> {
+        if msg["success"] as? Bool ?? false {
+            return .success(ResponseBody(json: msg["body"] as? [String: Any] ?? [:]))
+        }
+        let body = msg["body"] as? [String: Any]
+        let errorObject = body?["error"] as? [String: Any]
+        let message = (errorObject?["format"] as? String)
+            ?? (msg["message"] as? String)
+            ?? "the adapter rejected the request"
+        return .failure(DAPError.requestFailed(message))
     }
 
     // MARK: - Private
@@ -170,12 +252,27 @@ actor DAPClient {
         switch type {
         case "response":
             let reqSeq = msg["request_seq"] as? Int ?? 0
+            // A deferred request (see `beginRequest`) is usually answered
+            // before anything awaits it, so hold the result rather than
+            // dropping it on the floor.
+            if pendingTyped[reqSeq] == nil, deferredSeqs.contains(reqSeq) {
+                deferredSeqs.remove(reqSeq)
+                deferredResults[reqSeq] = Self.outcome(of: msg)
+                return
+            }
             if let cont = pendingTyped.removeValue(forKey: reqSeq) {
                 let success = msg["success"] as? Bool ?? false
                 if success {
                     cont.resume(returning: ResponseBody(json: msg["body"] as? [String: Any] ?? [:]))
                 } else {
-                    let errMsg = msg["message"] as? String ?? "Unknown error"
+                    // DAP puts the useful text in `body.error.format`;
+                    // `message` is often just "cancelled" or absent, which
+                    // surfaced to the user as "Unknown error".
+                    let body = msg["body"] as? [String: Any]
+                    let errorObject = body?["error"] as? [String: Any]
+                    let errMsg = (errorObject?["format"] as? String)
+                        ?? (msg["message"] as? String)
+                        ?? "the adapter rejected the request"
                     cont.resume(throwing: DAPError.requestFailed(errMsg))
                 }
             }

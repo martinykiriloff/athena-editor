@@ -574,19 +574,21 @@ enum DiagnosticSeverity: Sendable, Equatable {
 struct ClaudeAccount: Identifiable, Equatable, Sendable {
     let id: String
     let name: String
-    let command: String   // CLI binary name: "claude" or "claude-work"
+    /// CLI binary to launch — both accounts run the same `claude` executable.
+    let binaryName: String
+    /// `CLAUDE_CONFIG_DIR` for this account, or `nil` for the default root.
+    /// This is exactly what the `claude-work` shell wrapper does, so Athena
+    /// can launch the binary directly instead of going through a login shell.
+    let configDirectory: String?
 
-    static let personal = ClaudeAccount(id: "personal", name: "Personal", command: "claude")
-    static let work     = ClaudeAccount(id: "work",     name: "Work",     command: "claude-work")
+    static let personal = ClaudeAccount(
+        id: "personal", name: "Personal", binaryName: "claude", configDirectory: nil
+    )
+    static let work = ClaudeAccount(
+        id: "work", name: "Work", binaryName: "claude",
+        configDirectory: "\(NSHomeDirectory())/.claude-work"
+    )
     static let all: [ClaudeAccount] = [.personal, .work]
-}
-
-struct ClaudeMessage: Identifiable, Sendable {
-    let id: UUID = UUID()
-    var role: ChatRole
-    var content: String
-    var isStreaming: Bool = false
-    var attachments: [ClaudeAttachment] = []
 }
 
 /// A file staged for (or sent with) a Claude panel message. Athena never

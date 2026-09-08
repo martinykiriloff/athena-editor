@@ -331,6 +331,24 @@ struct AthenaCommands: Commands {
             }
         }
 
+        CommandMenu("Debug") {
+            // F5/F9 and the step keys are owned by the keybinding monitor,
+            // as ⌘P is; the menu routes through the same actions.
+            Button("Start Debugging / Continue") { performAction(.startOrContinueDebug) }
+            Button("Stop Debugging") { performAction(.stopDebug) }
+
+            Divider()
+
+            Button("Step Over") { performAction(.debugStepOver) }
+            Button("Step Into") { performAction(.debugStepInto) }
+            Button("Step Out")  { performAction(.debugStepOut) }
+
+            Divider()
+
+            Button("Toggle Breakpoint") { performAction(.toggleBreakpoint) }
+            Button("Remove All Breakpoints") { performAction(.removeAllBreakpoints) }
+        }
+
         CommandMenu("SFCC") {
             Button("Upload All Cartridges") {
                 performAction(.sfccUploadAllCartridges)

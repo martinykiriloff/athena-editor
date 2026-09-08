@@ -36,13 +36,27 @@ struct DebugConsoleView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 6) {
-                    if appState.debugConsoleEntries.isEmpty {
-                        Text(isPaused
-                             ? "Evaluate expressions in the paused frame…"
-                             : "Start debugging and pause execution to evaluate expressions.")
-                            .font(.system(size: appState.sf(12)))
+                    // The session's own transcript: what was launched, the
+                    // debuggee's stdout/stderr, and why a launch failed.
+                    // This was collected but displayed by no view at all, so
+                    // a failure to start looked like nothing happening.
+                    if !appState.debugOutput.isEmpty {
+                        Text(appState.debugOutput)
+                            .font(.system(size: appState.sf(12), design: .monospaced))
                             .foregroundColor(.secondary)
-                            .padding(8)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    if appState.debugConsoleEntries.isEmpty {
+                        if appState.debugOutput.isEmpty {
+                            Text(isPaused
+                                 ? "Evaluate expressions in the paused frame…"
+                                 : "Start debugging and pause execution to evaluate expressions.")
+                                .font(.system(size: appState.sf(12)))
+                                .foregroundColor(.secondary)
+                                .padding(8)
+                        }
                     } else {
                         ForEach(appState.debugConsoleEntries) { entry in
                             consoleEntryRow(entry)
@@ -54,6 +68,9 @@ struct DebugConsoleView: View {
                 .id("bottom")
             }
             .onChange(of: appState.debugConsoleEntries.count) { _, _ in
+                proxy.scrollTo("bottom", anchor: .bottom)
+            }
+            .onChange(of: appState.debugOutput) { _, _ in
                 proxy.scrollTo("bottom", anchor: .bottom)
             }
         }

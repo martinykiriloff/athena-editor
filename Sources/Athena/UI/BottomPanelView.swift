@@ -112,6 +112,16 @@ private struct TerminalPanelView: View {
             TerminalTabStripView()
             Divider()
 
+            content
+        }
+        // Deferred to here so the shell starts in the open folder: at app
+        // init no workspace has been restored yet.
+        .onAppear { appState.ensureTerminalSession() }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        Group {
             if appState.terminalSessions.isEmpty {
                 emptyState
             } else {

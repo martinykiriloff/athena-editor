@@ -23,6 +23,9 @@ struct EditorView: NSViewRepresentable {
     var tabSize:        Int     = 4
     var insertSpaces:   Bool    = true
     var autoIndent:     Bool    = true
+    /// Match the open file's own indentation instead of the global setting
+    /// (Settings → Editor → Detect Indentation).
+    var detectIndentation: Bool = true
     var blameInfo: [Int: BlameLine] = [:]
     /// Live LSP diagnostics for the file being edited (`AppState.diagnostics[fileURL]`),
     /// used to paint squiggle underlines and feed the gutter's error/warning
@@ -51,6 +54,10 @@ struct EditorView: NSViewRepresentable {
     /// open their own find bar simultaneously once a split exists.
     var isFocusedGroup: Bool = true
     var onCursorMove: (Int, Int) -> Void = { _, _ in }
+    /// Called with the 1-based line span of the current selection, or `nil`
+    /// when the selection is an empty caret. Feeds the Claude panel's
+    /// "add selection as context" affordance.
+    var onSelectionChange: (ClosedRange<Int>?) -> Void = { _ in }
     var onContentChange: (String) -> Void = { _ in }
     /// Called whenever the scroll position changes. (fraction 0‥1, visible ratio 0‥1)
     var onScrollChange: (Double, Double) -> Void = { _, _ in }
@@ -193,9 +200,11 @@ struct EditorView: NSViewRepresentable {
         }
         gutter.installObservers(textView: textView)
 
+
         configureTextView(textView, coordinator: context.coordinator)
 
         textView.string = content
+        context.coordinator.refreshDetectedIndentation(from: content)
         context.coordinator.applyHighlighting(to: textView)
         context.coordinator.currentDiagnostics = diagnostics
         context.coordinator.updateDiagnosticHighlights(in: textView)
@@ -303,10 +312,22 @@ struct EditorView: NSViewRepresentable {
     func updateNSView(_ nsView: NSScrollView, context: Context) {
         guard let textView = nsView.documentView as? NSTextView else { return }
 
+        // AppKit clears `rulersVisible` again after `makeNSView` sets it —
+        // measured at runtime as `rulersVisible=false` with the ruler laid
+        // out at zero size — which is why the editor had no line numbers and
+        // no breakpoint column to click. Re-asserting it here, once the view
+        // is in a window, is what actually makes the gutter appear.
+        if !nsView.rulersVisible {
+            nsView.hasVerticalRuler = true
+            nsView.rulersVisible = true
+            nsView.tile()
+        }
+
         let coord = context.coordinator
         coord.parent = self          // keep fileURL and callbacks fresh on every render
         coord.currentTabSize      = tabSize
         coord.currentInsertSpaces = insertSpaces
+        coord.currentDetectIndentation = detectIndentation
         coord.currentAutoIndent   = autoIndent
         let themeChanged = coord.currentTheme != theme
         let langChanged  = coord.currentLanguage != language
@@ -361,6 +382,9 @@ struct EditorView: NSViewRepresentable {
 
         if textView.string != content {
             textView.string = content
+            // A different document (tab switch, reload, revert) has its own
+            // indentation; re-read it here rather than per keystroke.
+            coord.refreshDetectedIndentation(from: content)
             coord.applyHighlighting(to: textView)
             coord.consumePendingDefinitionScroll()
             coord.cancelActiveSnippet()
@@ -572,6 +596,9 @@ extension EditorView {
         var currentRenderWhitespace: Bool = true
         var currentTabSize:       Int     = 4
         var currentInsertSpaces:  Bool    = true
+        var currentDetectIndentation: Bool = true
+        /// The open file's own style, or nil when it has no indentation yet.
+        private(set) var detectedIndentStyle: IndentationStyle?
         var currentAutoIndent:    Bool    = true
         var scrollProxy: EditorScrollProxy?
         var findReplaceController: FindReplaceController?
@@ -693,6 +720,7 @@ extension EditorView {
             self.currentRenderWhitespace = parent.renderWhitespace
             self.currentTabSize      = parent.tabSize
             self.currentInsertSpaces = parent.insertSpaces
+            self.currentDetectIndentation = parent.detectIndentation
             self.currentAutoIndent   = parent.autoIndent
             self.highlighter = SyntaxHighlighter(
                 language: parent.language, theme: parent.theme,
@@ -1014,8 +1042,22 @@ extension EditorView {
             }
         }
 
-        private var indentUnit: String {
-            currentInsertSpaces ? String(repeating: " ", count: max(1, currentTabSize)) : "\t"
+        /// The file's own indentation when it has any and detection is on,
+        /// otherwise the editor's setting. Matching the file matters more
+        /// than matching a preference: inserting four spaces into a
+        /// two-space file is a diff nobody asked for.
+        private var indentStyle: IndentationStyle {
+            if currentDetectIndentation, let detected = detectedIndentStyle { return detected }
+            return IndentationStyle(usesSpaces: currentInsertSpaces, width: currentTabSize)
+        }
+
+        private var indentUnit: String { indentStyle.unit }
+
+        /// Re-detected when the document is replaced (open, reload, revert),
+        /// not on every keystroke — a file's style doesn't change as it is
+        /// typed, and scanning on each edit would be wasted work.
+        func refreshDetectedIndentation(from text: String) {
+            detectedIndentStyle = IndentationStyle.detect(in: text)
         }
 
         private func promptGoToLine(_ tv: NSTextView) {
@@ -1166,7 +1208,7 @@ extension EditorView {
                 if line.hasPrefix("\t") { return String(line.dropFirst()) }
                 var removed = 0
                 var s = Substring(line)
-                while removed < max(1, currentTabSize), s.first == " " {
+                while removed < max(1, indentStyle.width), s.first == " " {
                     s = s.dropFirst()
                     removed += 1
                 }
@@ -1542,7 +1584,7 @@ extension EditorView {
             ghostController.dismiss()
             cancelHover()
             completionSuppressed = false
-            updateSignatureHelp(in: textView)
+            updateSignatureHelp(in: textView, allowShow: true)
 
             completionDebounce = Task { [weak self] in
                 let clock = ContinuousClock()
@@ -1570,13 +1612,14 @@ extension EditorView {
             guard let textView = notification.object as? NSTextView else { return }
             let (line, col) = cursorPosition(in: textView)
             parent.onCursorMove(line, col)
+            parent.onSelectionChange(selectedLineRange(in: textView))
             updateBlameLabel(
                 in: textView,
                 fontSize: parent.fontSize,
                 fontFamily: parent.fontFamily,
                 theme: parent.theme
             )
-            updateSignatureHelp(in: textView)
+            updateSignatureHelp(in: textView, allowShow: false)
             updateBracketMatchHighlight(in: textView)
             updateDiagnosticHighlights(in: textView)
             updateConflictHighlights(in: textView)
@@ -2228,7 +2271,12 @@ extension EditorView {
         /// typing a comma moves the emphasis immediately. The language
         /// server is only asked when the caret enters a *different* call —
         /// one request per call, not per keystroke.
-        private func updateSignatureHelp(in textView: NSTextView) {
+        /// `allowShow` is false for caret movement: moving into a call — or
+        /// merely reopening a file with the caret already inside one — must
+        /// not conjure the panel. Hints appear when the user types an
+        /// argument list and follow the caret from there, which is when they
+        /// are wanted and not before.
+        private func updateSignatureHelp(in textView: NSTextView, allowShow: Bool) {
             let text = textView.string as NSString
             let cursor = textView.selectedRange().location
             guard textView.selectedRange().length == 0,
@@ -2242,7 +2290,18 @@ extension EditorView {
             if let current = signatureCall, current.openParen == context.openParen {
                 let updated = current.help.withActiveParameter(context.argumentIndex)
                 signatureCall = (context.openParen, updated)
-                presentSignature(updated, in: textView)
+                // Only keep an already-visible panel in step; don't revive a
+                // dismissed one just because the caret moved.
+                if signatureController.isVisible {
+                    presentSignature(updated, in: textView)
+                }
+                return
+            }
+
+            guard allowShow else {
+                signatureDebounce?.cancel()
+                signatureController.dismiss()
+                signatureCall = nil
                 return
             }
 
@@ -2409,6 +2468,20 @@ extension EditorView {
         /// Computes 1-based line and column numbers for the current cursor offset.
         private func cursorPosition(in textView: NSTextView) -> (line: Int, column: Int) {
             position(in: textView.string, at: textView.selectedRange().location)
+        }
+
+        /// The 1-based line span covered by a non-empty selection. A bare
+        /// caret returns `nil` — there is nothing to share as context.
+        private func selectedLineRange(in textView: NSTextView) -> ClosedRange<Int>? {
+            let range = textView.selectedRange()
+            guard range.length > 0 else { return nil }
+            let text = textView.string
+            let start = position(in: text, at: range.location).line
+            // A selection ending exactly at a line start visually covers the
+            // lines above it, not the empty one below.
+            let rawEnd = position(in: text, at: range.location + range.length).line
+            let end = max(start, rawEnd - ((text as NSString).character(at: max(0, range.location + range.length - 1)) == 10 ? 1 : 0))
+            return start...end
         }
 
         /// Computes 1-based line/column for an arbitrary character offset —

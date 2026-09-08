@@ -13,14 +13,17 @@ enum CDPError: LocalizedError {
     case disconnected
     case encodingFailed
     case rpcError(String)
+    case requestFailed(String)
 
     var errorDescription: String? {
         switch self {
-        case .noTarget(let p): return "No debug target on port \(p). Is the process running with --inspect?"
+        case .noTarget(let p):
+            return "Nothing is listening for a debugger on port \(p). Use the \"Debug Next.js dev server\" configuration to start it with the inspector enabled, or start it yourself with NODE_OPTIONS='--inspect' npm run dev — a server already running without that flag has to be restarted."
         case .noBrowser:       return "No browser found (install Chrome, Chromium, Edge, or Brave)."
         case .disconnected:    return "Debugger disconnected."
         case .encodingFailed:  return "Failed to encode CDP message."
         case .rpcError(let m): return "CDP: \(m)"
+        case .requestFailed(let m):  return "Chrome DevTools: \(m)"
         }
     }
 }
@@ -87,7 +90,11 @@ actor CDPClient {
     }
 
     // Stays inside the actor — [String: Any] is fine here.
-    private func buildAndSend(_ method: String, params: [String: Any]) async throws -> Response {
+    private func buildAndSend(
+        _ method: String,
+        params: [String: Any],
+        timeout: Duration = .seconds(15)
+    ) async throws -> Response {
         let id = mid; mid += 1
         var payload: [String: Any] = ["id": id, "method": method]
         if !params.isEmpty { payload["params"] = params }
@@ -96,7 +103,22 @@ actor CDPClient {
         try await wsTask?.send(.string(str))
         return try await withCheckedThrowingContinuation { cont in
             pending[id] = cont
+            // A response that never comes back — a target that went away
+            // mid-handshake, a socket that stayed open but stopped
+            // answering — would otherwise wedge the launch and leave the
+            // UI in "launching" with no way out.
+            Task { [weak self] in
+                let clock = ContinuousClock()
+                try? await clock.sleep(until: clock.now.advanced(by: timeout))
+                await self?.failIfPending(id: id, method: method)
+            }
         }
+    }
+
+    /// Fails message `id` if it is still outstanding; a no-op once answered.
+    private func failIfPending(id: Int, method: String) {
+        guard let cont = pending.removeValue(forKey: id) else { return }
+        cont.resume(throwing: CDPError.requestFailed("\(method) timed out"))
     }
 
     nonisolated private func startReceiving() {
@@ -142,11 +164,15 @@ actor CDPClient {
     // MARK: - Target Discovery
 
     /// Polls `http://127.0.0.1:PORT/json/list` until a matching target appears (up to 10 s).
-    static func targetWebSocketURL(port: Int, pageURLContains filter: String? = nil) async throws -> URL {
+    static func targetWebSocketURL(
+        port: Int,
+        pageURLContains filter: String? = nil,
+        attempts: Int = 20
+    ) async throws -> URL {
         guard let listURL = URL(string: "http://127.0.0.1:\(port)/json/list") else {
             throw CDPError.noTarget(port: port)
         }
-        for _ in 1...20 {
+        for _ in 1...max(1, attempts) {
             if let (data, _) = try? await URLSession.shared.data(from: listURL),
                let targets = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
                 let target: [String: Any]?

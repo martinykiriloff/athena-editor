@@ -32,6 +32,21 @@ final class SignatureHelpController: NSObject {
         panel.alphaValue      = 0.98
         super.init()
         buildPanel()
+
+        // A floating panel that outlives the editor's focus reads as a stuck
+        // tooltip — it would sit above whatever the user switched to.
+        let centre = NotificationCenter.default
+        for name in [NSWindow.didResignKeyNotification, NSApplication.didResignActiveNotification] {
+            centre.addObserver(self, selector: #selector(dismissFromNotification), name: name, object: nil)
+        }
+    }
+
+    deinit { NotificationCenter.default.removeObserver(self) }
+
+    @objc private func dismissFromNotification() {
+        // The panel itself becoming key must not dismiss it.
+        guard panel.isVisible else { return }
+        panel.orderOut(nil)
     }
 
     /// Shows `help` just above `screenRect` (the caret's rect in screen

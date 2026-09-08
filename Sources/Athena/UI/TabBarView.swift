@@ -70,23 +70,23 @@ private struct TabItemView: View {
                 .font(.system(size: appState.sf(12)))
                 .frame(width: 14)
 
-            // Title
+            // Title — an unsaved file is coloured, the way JetBrains marks a
+            // modified tab, so the state reads from the title itself rather
+            // than from a small grey dot at the far edge.
             Text(tab.title)
                 .font(.system(size: appState.sf(12)))
-                .foregroundColor(isActive ? .primary : .secondary)
+                .foregroundColor(TabAppearance.titleColor(isDirty: tab.isDirty, isActive: isActive))
                 .lineLimit(1)
 
             // Dirty indicator / close button
             ZStack {
-                // Dirty dot — shown when not hovering and tab is dirty
-                if tab.isDirty && !isHovering {
+                if TabAppearance.showsDirtyDot(isDirty: tab.isDirty, isHovering: isHovering) {
                     Circle()
-                        .fill(Color.secondary)
-                        .frame(width: 6, height: 6)
+                        .fill(Color.accentColor)
+                        .frame(width: 7, height: 7)
                 }
 
-                // Close button — shown on hover or for active tab
-                if isHovering || isActive {
+                if TabAppearance.showsCloseButton(isDirty: tab.isDirty, isHovering: isHovering, isActive: isActive) {
                     Button {
                         appState.closeTab(tab.id)
                     } label: {
@@ -222,5 +222,33 @@ final class MiddleClickNSView: NSView {
     override func otherMouseDown(with event: NSEvent) {
         guard event.buttonNumber == 2 else { super.otherMouseDown(with: event); return }
         action()
+    }
+}
+
+
+// MARK: - TabAppearance
+
+/// How one tab presents saved/unsaved state. Extracted so the rules are
+/// checkable without driving SwiftUI.
+enum TabAppearance {
+    /// A modified file is coloured; otherwise the active tab is emphasised
+    /// and the rest recede.
+    static func titleColor(isDirty: Bool, isActive: Bool) -> Color {
+        if isDirty { return .accentColor }
+        return isActive ? .primary : .secondary
+    }
+
+    /// The dot marks unsaved work whenever the close button isn't taking
+    /// its place.
+    static func showsDirtyDot(isDirty: Bool, isHovering: Bool) -> Bool {
+        isDirty && !isHovering
+    }
+
+    /// The close button appears on hover, and on the active tab — but not
+    /// over a dirty tab's dot, which used to draw both on top of each other
+    /// and hide the unsaved marker exactly where it mattered most.
+    static func showsCloseButton(isDirty: Bool, isHovering: Bool, isActive: Bool) -> Bool {
+        if isHovering { return true }
+        return isActive && !isDirty
     }
 }

@@ -3686,3 +3686,481 @@ struct SFCCUploadCommandTests {
         #expect(registered == Set(KeyAction.allCases))
     }
 }
+
+// MARK: - Breakpoint and debug commands
+
+@Suite("Debug commands")
+@MainActor
+struct DebugCommandTests {
+    private func binding(_ action: KeyAction) -> KeyBinding? {
+        KeyBinding.vscodeDefaults.first { $0.action == action }
+    }
+
+    /// Setting a breakpoint used to require knowing the gutter was
+    /// clickable: no shortcut, no menu item, nothing in the palette.
+    @Test func breakpointsAreReachableByKeyboardAndPalette() {
+        #expect(binding(.toggleBreakpoint)?.combo == KeyCombo(key: "f9"))
+        #expect(KeyAction.toggleBreakpoint.displayName == "Toggle Breakpoint")
+        #expect(KeyAction.toggleBreakpoint.category == "Debug")
+        for query in ["breakpoint", "toggle break", "bp"] {
+            #expect(fuzzyNameScore(query: query, target: KeyAction.toggleBreakpoint.displayName) != nil,
+                    "'\(query)' should find Toggle Breakpoint")
+        }
+    }
+
+    @Test func theUsualDebugKeysMatchVSCode() {
+        #expect(binding(.startOrContinueDebug)?.combo == KeyCombo(key: "f5"))
+        #expect(binding(.stopDebug)?.combo == KeyCombo(key: "f5", shift: true))
+        #expect(binding(.debugStepOver)?.combo == KeyCombo(key: "f10"))
+        #expect(binding(.debugStepInto)?.combo == KeyCombo(key: "f11"))
+        #expect(binding(.debugStepOut)?.combo == KeyCombo(key: "f11", shift: true))
+    }
+
+    @Test func togglingAtTheCursorSetsThenClearsTheBreakpoint() {
+        let state = AppState()
+        let url = URL(fileURLWithPath: "/tmp/project/app.js")
+        var tab = TabModel(fileURL: url, title: "app.js", content: "a\nb\nc\n")
+        tab.cursorLine = 2
+        state.openTabs = [tab]
+        state.activeTabId = tab.id
+
+        state.toggleBreakpointAtCursor()
+        #expect(state.debugBreakpoints[url.path]?.contains(2) == true)
+        #expect(state.statusMessage.contains("app.js:2"))
+
+        state.toggleBreakpointAtCursor()
+        #expect(state.debugBreakpoints[url.path]?.contains(2) != true)
+        #expect(state.statusMessage.contains("removed"))
+    }
+
+    @Test func removeAllClearsEveryFile() {
+        let state = AppState()
+        state.debugBreakpoints = ["/a.js": [1, 2], "/b.swift": [7]]
+        state.removeAllBreakpoints()
+        #expect(state.debugBreakpoints.isEmpty)
+        #expect(state.statusMessage.contains("3"))
+    }
+
+    @Test func togglingWithNoOpenFileSaysSo() {
+        let state = AppState()
+        state.openTabs = []
+        state.toggleBreakpointAtCursor()
+        #expect(state.debugBreakpoints.isEmpty)
+        #expect(state.statusMessage.contains("Open a file"))
+    }
+}
+
+// MARK: - Next.js debug configuration
+
+@Suite("Next.js launch configs")
+@MainActor
+struct NextJSLaunchConfigTests {
+    private func workspace(withConfigNamed name: String?) throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("athena-next-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        if let name {
+            try "export default {}".write(to: dir.appendingPathComponent(name), atomically: true, encoding: .utf8)
+        }
+        return dir
+    }
+
+    /// Server code in a Next.js app runs inside the dev server, so the
+    /// useful configuration is an attach — "current file" runs the open
+    /// module under Node, where a React hook is never called.
+    @Test func aNextProjectOffersAnAttachConfiguration() throws {
+        for name in ["next.config.ts", "next.config.js", "next.config.mjs"] {
+            let dir = try workspace(withConfigNamed: name)
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let state = AppState()
+            state.workspace = WorkspaceModel(rootURL: dir)
+            state.loadLaunchConfigs()
+            let attach = state.launchConfigs.first { $0.name.hasPrefix("Attach to Next.js") }
+            #expect(attach != nil, "\(name) should offer the dev-server attach")
+            #expect(attach?.request == "attach")
+            #expect(attach?.debugPort == 9229)
+        }
+    }
+
+    @Test func aPlainProjectDoesNotOfferIt() throws {
+        let dir = try workspace(withConfigNamed: nil)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let state = AppState()
+        state.workspace = WorkspaceModel(rootURL: dir)
+        state.loadLaunchConfigs()
+        #expect(state.launchConfigs.contains { $0.name.contains("Next.js dev server") } == false)
+        #expect(state.launchConfigs.contains { $0.type == "dev-server" } == false)
+        // The generic Node and browser entries are always there.
+        #expect(state.launchConfigs.contains { $0.name.contains("Attach to Node.js") })
+    }
+}
+
+// MARK: - Terminal working directory
+
+@Suite("Terminal working directory")
+@MainActor
+struct TerminalDirectoryTests {
+    /// The first shell used to be created in `AppState.init`, before the
+    /// workspace was restored, so it started in $HOME and stayed there.
+    @Test func noSessionExistsBeforeTheTerminalIsShown() {
+        let state = AppState()
+        #expect(state.terminalSessions.isEmpty)
+    }
+
+    @Test func theFirstShellStartsInTheOpenFolder() {
+        let state = AppState()
+        let root = URL(fileURLWithPath: "/Users/dev/shop")
+        state.workspace = WorkspaceModel(rootURL: root)
+
+        state.ensureTerminalSession()
+        #expect(state.terminalSessions.count == 1)
+        #expect(state.terminalSessions[0].currentDirectory == root.path)
+        #expect(state.activeTerminalSessionId == state.terminalSessions[0].id)
+
+        // Showing the panel again must not stack up shells.
+        state.ensureTerminalSession()
+        #expect(state.terminalSessions.count == 1)
+    }
+
+    @Test func everyLaterTerminalOpensThereToo() {
+        let state = AppState()
+        state.workspace = WorkspaceModel(rootURL: URL(fileURLWithPath: "/Users/dev/shop"))
+        state.ensureTerminalSession()
+        state.newTerminalSession()
+        #expect(state.terminalSessions.count == 2)
+        #expect(state.terminalSessions.allSatisfy { $0.currentDirectory == "/Users/dev/shop" })
+    }
+
+    /// With no folder open, the focused file's own directory is the sensible
+    /// place to land rather than $HOME.
+    @Test func withoutAWorkspaceItFollowsTheOpenFile() {
+        let state = AppState()
+        let file = URL(fileURLWithPath: "/Users/dev/scratch/notes/todo.md")
+        let tab = TabModel(fileURL: file, title: "todo.md")
+        state.openTabs = [tab]
+        state.activeTabId = tab.id
+
+        #expect(state.terminalStartDirectory == "/Users/dev/scratch/notes")
+        state.ensureTerminalSession()
+        #expect(state.terminalSessions[0].currentDirectory == "/Users/dev/scratch/notes")
+    }
+
+    @Test func withNeitherTheShellKeepsItsOwnDefault() {
+        let state = AppState()
+        #expect(state.terminalStartDirectory == nil)
+        state.ensureTerminalSession()
+        #expect(state.terminalSessions[0].currentDirectory == nil)
+    }
+}
+
+
+// MARK: - Source maps
+
+@Suite("SourceMap")
+struct SourceMapTests {
+    /// A real `tsc --sourceMap` output for a file whose `console.log` sits
+    /// on original line 11 and generated line 43. Anything that decodes the
+    /// VLQ mappings wrongly gets a different number.
+    private let realMap = #"""
+    {"version":3,"file":"use-client.js","sourceRoot":"","sources":["../use-client.ts"],"names":[],"mappings":";AAAA,YAAY,CAAC;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;AAEb,6CAA+B;AAE/B,MAAM,YAAY,GAAG,GAAG,EAAE,CAAC,GAAG,EAAE,GAAE,CAAC,CAAC;AAEpC;;GAEG;AACH,SAAS,WAAW;IAClB,OAAO,CAAC,GAAG,CAAC,WAAW,CAAC,CAAA;IACxB,OAAO,KAAK,CAAC,oBAAoB,CAC/B,YAAY,EACZ,GAAG,EAAE,CAAC,IAAI,EACV,GAAG,EAAE,CAAC,KAAK,CACZ,CAAC;AACJ,CAAC;AACD,kBAAe,WAAW,CAAC"}
+    """#
+
+    private func map() -> SourceMap? { SourceMap.parse(Data(realMap.utf8)) }
+
+    @Test func aBreakpointInTypeScriptResolvesToTheCompiledLine() throws {
+        let sourceMap = try #require(map())
+        #expect(sourceMap.sources == ["../use-client.ts"])
+        #expect(sourceMap.generatedLine(forSourceMatching: "use-client.ts", originalLine: 11) == 43)
+        // The absolute path the editor holds must match the same entry.
+        #expect(sourceMap.generatedLine(forSourceMatching: "/Users/dev/app/use-client.ts", originalLine: 11) == 43)
+    }
+
+    @Test func aStopInCompiledCodeReportsTheOriginalLine() throws {
+        let sourceMap = try #require(map())
+        let position = sourceMap.originalPosition(generatedLine: 43)
+        #expect(position?.line == 11)
+        #expect(position?.source == "../use-client.ts")
+    }
+
+    @Test func everyStatementResolvesToItsOwnCompiledLine() throws {
+        let sourceMap = try #require(map())
+        // `function useIsClient() {` is original 10 → generated 42, and the
+        // statement inside it is 11 → 43: consecutive, not collapsed.
+        #expect(sourceMap.generatedLine(forSourceMatching: "use-client.ts", originalLine: 10) == 42)
+        #expect(sourceMap.generatedLine(forSourceMatching: "use-client.ts", originalLine: 11) == 43)
+    }
+
+    /// A breakpoint on a line with no mapping of its own — a blank line —
+    /// still resolves, by falling forward to the next mapped line rather
+    /// than failing to bind.
+    @Test func anUnmappedLineFallsForward() throws {
+        let sourceMap = try #require(map())
+        let blank = try #require(sourceMap.generatedLine(forSourceMatching: "use-client.ts", originalLine: 6))
+        let next = try #require(sourceMap.generatedLine(forSourceMatching: "use-client.ts", originalLine: 10))
+        #expect(blank <= next)
+        #expect(blank > 0)
+    }
+
+    @Test func bundlerSourceNamesStillMatch() {
+        #expect(SourceMap.normalise("webpack://_N_E/./src/hooks/use-client.ts") == "src/hooks/use-client.ts")
+        #expect(SourceMap.normalise("turbopack://[project]/src/hooks/use-client.ts") == "src/hooks/use-client.ts")
+        #expect(SourceMap.normalise("../../src/hooks/use-client.ts") == "src/hooks/use-client.ts")
+        #expect(SourceMap.normalise("file:///Users/dev/app/src/x.ts?v=2") == "Users/dev/app/src/x.ts")
+    }
+
+    @Test func vlqDecodingHandlesSignAndContinuation() {
+        // "AAAA" is four zeroes; "D" is -1; "gBAAA" carries a continuation.
+        #expect(SourceMap.decode(mappings: "AAAA").first
+                == SourceMapSegment(generatedLine: 0, generatedColumn: 0, sourceIndex: 0,
+                                    originalLine: 0, originalColumn: 0))
+        let twoLines = SourceMap.decode(mappings: "AAAA;AACA")
+        #expect(twoLines.count == 2)
+        #expect(twoLines[1].generatedLine == 1)
+        #expect(twoLines[1].originalLine == 1)
+        #expect(SourceMap.decode(mappings: "").isEmpty)
+    }
+
+    @Test func malformedInputIsRejectedNotCrashed() {
+        #expect(SourceMap.parse(Data("not json".utf8)) == nil)
+        #expect(SourceMap.parse(Data(#"{"version":3}"#.utf8)) == nil)
+        #expect(SourceMap.parse(Data(#"{"version":3,"mappings":"","sources":[]}"#.utf8))?.segments.isEmpty == true)
+    }
+}
+
+
+// MARK: - Dev-server debugging
+
+@Suite("Dev server debugging")
+@MainActor
+struct DevServerDebugTests {
+    private func project(lockfile: String?) throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("athena-dev-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try "export default {}".write(to: dir.appendingPathComponent("next.config.ts"),
+                                      atomically: true, encoding: .utf8)
+        if let lockfile {
+            try "".write(to: dir.appendingPathComponent(lockfile), atomically: true, encoding: .utf8)
+        }
+        return dir
+    }
+
+    /// Attaching only works against a server already started with the
+    /// inspector; this configuration starts one that way itself.
+    @Test func aNextProjectCanStartItsOwnDebuggableServer() throws {
+        let dir = try project(lockfile: nil)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let state = AppState()
+        state.workspace = WorkspaceModel(rootURL: dir)
+        state.loadLaunchConfigs()
+
+        let launch = state.launchConfigs.first { $0.name == "Debug Next.js dev server" }
+        #expect(launch?.type == "dev-server")
+        #expect(launch?.request == "launch")
+        #expect(launch?.program == "dev")
+        #expect(launch?.debugPort == 9229)
+        // The manual attach stays available for a server started elsewhere.
+        #expect(state.launchConfigs.contains { $0.name.contains("Attach to Next.js") })
+    }
+
+    @Test func theProjectsOwnPackageManagerIsUsed() throws {
+        for (lockfile, expected) in [("pnpm-lock.yaml", "pnpm"), ("yarn.lock", "yarn"), ("bun.lockb", "bun")] {
+            let dir = try project(lockfile: lockfile)
+            defer { try? FileManager.default.removeItem(at: dir) }
+            #expect(DebugService.packageManager(for: dir) == expected)
+        }
+        let plain = try project(lockfile: nil)
+        defer { try? FileManager.default.removeItem(at: plain) }
+        #expect(DebugService.packageManager(for: plain) == "npm")
+    }
+
+    @Test func aSourceMapURLResolvesAgainstItsScript() {
+        let relative = DebugService.resolveMapURL("chunk.js.map",
+                                                  relativeTo: "http://localhost:3000/_next/static/chunk.js")
+        #expect(relative?.absoluteString == "http://localhost:3000/_next/static/chunk.js.map")
+        let absolute = DebugService.resolveMapURL("http://localhost:3000/a.map", relativeTo: "http://x/b.js")
+        #expect(absolute?.absoluteString == "http://localhost:3000/a.map")
+        #expect(DebugService.resolveMapURL("out.js.map", relativeTo: "file:///Users/dev/app/out.js")?.path
+                == "/Users/dev/app/out.js.map")
+    }
+}
+
+// MARK: - Modified-file indication in tabs
+
+@Suite("Tab appearance")
+@MainActor
+struct TabAppearanceTests {
+    /// JetBrains marks a modified file by colouring its tab title; a small
+    /// grey dot at the far edge is easy to miss.
+    @Test func aModifiedTabIsColouredWhetherActiveOrNot() {
+        #expect(TabAppearance.titleColor(isDirty: true, isActive: true) == .accentColor)
+        #expect(TabAppearance.titleColor(isDirty: true, isActive: false) == .accentColor)
+        #expect(TabAppearance.titleColor(isDirty: false, isActive: true) == .primary)
+        #expect(TabAppearance.titleColor(isDirty: false, isActive: false) == .secondary)
+    }
+
+    /// The active tab always showed its close button, drawing it on top of
+    /// the dirty dot — so the one tab you are editing was the one tab that
+    /// never showed unsaved state.
+    @Test func theActiveTabShowsItsDotRatherThanTheCloseButton() {
+        #expect(TabAppearance.showsDirtyDot(isDirty: true, isHovering: false))
+        #expect(TabAppearance.showsCloseButton(isDirty: true, isHovering: false, isActive: true) == false)
+        // The two indicators are never drawn at the same time.
+        for isActive in [true, false] {
+            for isHovering in [true, false] {
+                for isDirty in [true, false] {
+                    let dot = TabAppearance.showsDirtyDot(isDirty: isDirty, isHovering: isHovering)
+                    let close = TabAppearance.showsCloseButton(isDirty: isDirty, isHovering: isHovering, isActive: isActive)
+                    #expect(!(dot && close), "dot and close overlapped for dirty=\(isDirty) hover=\(isHovering) active=\(isActive)")
+                }
+            }
+        }
+    }
+
+    @Test func hoveringAlwaysOffersTheCloseButton() {
+        #expect(TabAppearance.showsCloseButton(isDirty: true, isHovering: true, isActive: false))
+        #expect(TabAppearance.showsCloseButton(isDirty: false, isHovering: true, isActive: false))
+        #expect(TabAppearance.showsDirtyDot(isDirty: true, isHovering: true) == false)
+    }
+
+    @Test func editingMarksTheTabAndSavingClearsIt() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("athena-tab-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("note.txt")
+        try "one".write(to: file, atomically: true, encoding: .utf8)
+
+        let state = AppState()
+        await state.openFile(file)
+        let tab = try #require(state.openTabs.first)
+        #expect(tab.isDirty == false)
+
+        state.updateTabContent(tab.id, content: "one two")
+        #expect(state.openTabs.first?.isDirty == true)
+
+        await state.saveActiveTab()
+        #expect(state.openTabs.first?.isDirty == false)
+        #expect(try String(contentsOf: file, encoding: .utf8) == "one two")
+    }
+}
+
+// MARK: - Indentation detection
+
+@Suite("IndentationStyle.detect")
+struct IndentationDetectionTests {
+    @Test func twoSpaceCodeIsDetectedAsTwo() {
+        let source = """
+        function useIsClient() {
+          console.log("is client")
+          return React.useSyncExternalStore(
+            NO_SUBSCRIBE,
+            () => true,
+          );
+        }
+        """
+        #expect(IndentationStyle.detect(in: source) == IndentationStyle(usesSpaces: true, width: 2))
+    }
+
+    @Test func fourSpaceCodeIsDetectedAsFour() {
+        let source = """
+        def handler(event):
+            if event:
+                for item in event:
+                    print(item)
+            return None
+        """
+        #expect(IndentationStyle.detect(in: source) == IndentationStyle(usesSpaces: true, width: 4))
+    }
+
+    /// Depth alone would call deeply nested two-space code "six"; the step
+    /// between consecutive lines is what reveals one level.
+    @Test func deepNestingDoesNotInflateTheWidth() {
+        let source = """
+        a
+          b
+            c
+              d
+                e
+        """
+        #expect(IndentationStyle.detect(in: source)?.width == 2)
+    }
+
+    @Test func tabIndentedFilesUseTabs() {
+        let source = "func main() {\n\tif true {\n\t\tprintln()\n\t}\n}"
+        let style = IndentationStyle.detect(in: source)
+        #expect(style?.usesSpaces == false)
+        #expect(style?.unit == "\t")
+    }
+
+    @Test func aMajorityDecidesAMixedFile() {
+        let mostlyTabs = "a\n\tb\n\tc\n\td\n  e\n"
+        #expect(IndentationStyle.detect(in: mostlyTabs)?.usesSpaces == false)
+        let mostlySpaces = "a\n  b\n  c\n  d\n\te\n"
+        #expect(IndentationStyle.detect(in: mostlySpaces)?.usesSpaces == true)
+    }
+
+    /// With nothing indented there is nothing to infer, and the editor's own
+    /// setting should be used instead of a guess.
+    @Test func aFileWithNoIndentationYieldsNothing() {
+        #expect(IndentationStyle.detect(in: "one\ntwo\nthree\n") == nil)
+        #expect(IndentationStyle.detect(in: "") == nil)
+        #expect(IndentationStyle.detect(in: "\n\n   \n") == nil)
+    }
+
+    @Test func theUnitIsWhatGetsInserted() {
+        #expect(IndentationStyle(usesSpaces: true, width: 2).unit == "  ")
+        #expect(IndentationStyle(usesSpaces: true, width: 4).unit == "    ")
+        #expect(IndentationStyle(usesSpaces: false, width: 4).unit == "\t")
+        // A nonsensical width still yields something insertable.
+        #expect(IndentationStyle(usesSpaces: true, width: 0).unit == " ")
+    }
+
+    /// Scanning is bounded so opening a very large file stays cheap.
+    @Test func detectionIsBounded() {
+        let huge = String(repeating: "  indented\n", count: 50_000)
+        #expect(IndentationStyle.detect(in: huge, sampleLimit: 100)?.usesSpaces == true)
+    }
+}
+
+// MARK: - Bundled-code breakpoints
+
+@Suite("Bundled breakpoint matching")
+struct BundledBreakpointTests {
+    private let workspace = URL(fileURLWithPath: "/Users/dev/athena-web")
+
+    /// A dev server names its modules after the original file without using
+    /// a file:// URL, so matching only file:// never bound anything.
+    @Test func theRegexMatchesHowABundlerNamesTheFile() throws {
+        let pattern = try #require(DebugService.urlRegex(
+            for: "/Users/dev/athena-web/src/hooks/use-client.ts",
+            workspaceURL: workspace
+        ))
+        let regex = try NSRegularExpression(pattern: pattern)
+        func matches(_ url: String) -> Bool {
+            regex.firstMatch(in: url, range: NSRange(url.startIndex..., in: url)) != nil
+        }
+        #expect(matches("webpack-internal:///(rsc)/./src/hooks/use-client.ts"))
+        #expect(matches("file:///Users/dev/athena-web/src/hooks/use-client.ts"))
+        #expect(matches("turbopack://[project]/src/hooks/use-client.ts"))
+        // Specific enough not to catch a same-named file elsewhere.
+        #expect(!matches("webpack-internal:///(rsc)/./vendor/hooks/use-client.ts"))
+        #expect(!matches("webpack-internal:///(rsc)/./src/hooks/use-client.tsx"))
+    }
+
+    /// The dot in an extension must not act as a wildcard.
+    @Test func regexMetacharactersInThePathAreEscaped() throws {
+        let pattern = try #require(DebugService.urlRegex(
+            for: "/Users/dev/athena-web/src/a.b/use-client.ts", workspaceURL: workspace))
+        let regex = try NSRegularExpression(pattern: pattern)
+        let wrong = "webpack-internal:///./src/axb/use-clientxts"
+        #expect(regex.firstMatch(in: wrong, range: NSRange(wrong.startIndex..., in: wrong)) == nil)
+    }
+
+    /// With no folder open the last two components still identify the file.
+    @Test func withoutAWorkspaceTheTailIsUsed() throws {
+        let pattern = try #require(DebugService.urlRegex(for: "/tmp/scratch/app.js", workspaceURL: nil))
+        #expect(pattern.contains("scratch"))
+        #expect(pattern.hasSuffix("app\\.js$"))
+    }
+}

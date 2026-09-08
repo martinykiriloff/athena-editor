@@ -424,3 +424,35 @@ struct AppStateCartridgeDeployTests {
         #expect(state.isUploadingCartridges == false)
     }
 }
+
+// MARK: - Debug session reporting
+
+@Suite("Debug session reporting")
+@MainActor
+struct DebugReportingTests {
+    /// A failed launch used to be silent: the panel opened on the generic
+    /// Output tab while every message went to `debugOutput`, which no view
+    /// rendered at all.
+    @Test func aFailedLaunchIsVisibleWhereTheUserIsLooking() async throws {
+        let dir = try makeTempDir("athena-debug-report")
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let state = AppState()
+        state.workspace = WorkspaceModel(rootURL: dir)
+        // Attach to a port with nothing listening: fails after the CDP probe.
+        state.launchConfigs = [LaunchConfig(type: "node-cdp", request: "attach",
+                                            name: "Attach", program: "", debugPort: 9351)]
+        state.selectedLaunchConfigId = state.launchConfigs[0].id
+
+        await state.startDebugging()
+
+        #expect(state.showBottomPanel)
+        #expect(state.activeBottomPanel == .debugConsole)
+        #expect(state.debugState == .stopped)
+        #expect(state.debugOutput.contains("Failed to start debugger"))
+        #expect(state.statusMessage.contains("Debug failed"))
+        // And the reason names the port and what to do about it.
+        #expect(state.debugOutput.contains("9351"))
+        #expect(state.debugOutput.contains("--inspect"))
+    }
+}

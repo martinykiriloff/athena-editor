@@ -316,6 +316,7 @@ struct CodeEditorView: View {
                 tabSize:          appState.editorTabSize,
                 insertSpaces:     appState.editorInsertSpaces,
                 autoIndent:       appState.editorAutoIndent,
+                detectIndentation: appState.editorDetectIndentation,
                 blameInfo:        blameInfo,
                 diagnostics:      fileDiagnostics,
                 gitLineChanges:   fileGitLineChanges,
@@ -324,6 +325,13 @@ struct CodeEditorView: View {
                 isFocusedGroup:   appState.focusedGroup == side,
                 onCursorMove: { line, col in
                     appState.setCursorPosition(tabId: tab.id, in: side, line: line, column: col)
+                },
+                onSelectionChange: { range in
+                    appState.setClaudeEditorSelection(
+                        url: range == nil ? nil : tab.fileURL,
+                        startLine: range?.lowerBound ?? 0,
+                        endLine: range?.upperBound ?? 0
+                    )
                 },
                 onContentChange: { newContent in
                     appState.updateTabContent(tab.id, content: newContent)

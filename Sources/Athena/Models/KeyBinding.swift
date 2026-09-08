@@ -17,6 +17,8 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
     case showSearch         = "workbench.view.search"
     case showDatabase       = "workbench.view.database"
     case showClaude         = "workbench.view.claude"
+    case claudeAddContext   = "claude.addSelectionToChat"
+    case claudeInterrupt    = "claude.interrupt"
     // Navigation
     case quickOpen          = "workbench.action.quickOpen"
     case commandPalette     = "workbench.action.showCommands"
@@ -41,6 +43,14 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
     case copyLineUp          = "editor.action.copyLinesUpAction"
     case copyLineDown        = "editor.action.copyLinesDownAction"
     case deleteLine          = "editor.action.deleteLines"
+    // Debug
+    case toggleBreakpoint       = "editor.debug.action.toggleBreakpoint"
+    case removeAllBreakpoints   = "workbench.debug.viewlet.action.removeAllBreakpoints"
+    case startOrContinueDebug   = "workbench.action.debug.start"
+    case stopDebug              = "workbench.action.debug.stop"
+    case debugStepOver          = "workbench.action.debug.stepOver"
+    case debugStepInto          = "workbench.action.debug.stepInto"
+    case debugStepOut           = "workbench.action.debug.stepOut"
     // SFCC
     case sfccUploadAllCartridges = "athena.sfcc.uploadAllCartridges"
     // Zoom
@@ -60,6 +70,15 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
         case .showSearch:        return "Show Search"
         case .showDatabase:      return "Show DB Connections"
         case .showClaude:        return "Show Claude"
+        case .claudeAddContext:  return "Add Selection to Claude"
+        case .claudeInterrupt:   return "Stop Claude"
+        case .toggleBreakpoint:      return "Toggle Breakpoint"
+        case .removeAllBreakpoints:  return "Remove All Breakpoints"
+        case .startOrContinueDebug:  return "Start Debugging / Continue"
+        case .stopDebug:             return "Stop Debugging"
+        case .debugStepOver:         return "Step Over"
+        case .debugStepInto:         return "Step Into"
+        case .debugStepOut:          return "Step Out"
         case .sfccUploadAllCartridges: return "Upload All Cartridges"
         case .quickOpen:         return "Quick Open"
         case .commandPalette:    return "Command Palette"
@@ -94,10 +113,14 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
             return "File"
         case .toggleSidebar, .toggleTerminal,
              .showExplorer, .showSourceControl, .showSearch, .showDatabase, .showClaude,
+             .claudeAddContext, .claudeInterrupt,
              .zoomIn, .zoomOut, .resetZoom, .splitEditorRight, .toggleZenMode:
             return "View"
         case .quickOpen, .commandPalette, .nextTab, .previousTab, .goToLine, .goToSymbol:
             return "Navigation"
+        case .toggleBreakpoint, .removeAllBreakpoints, .startOrContinueDebug, .stopDebug,
+             .debugStepOver, .debugStepInto, .debugStepOut:
+            return "Debug"
         case .sfccUploadAllCartridges:
             return "SFCC"
         case .findInFile, .findAndReplace, .toggleComment, .indentLine, .outdentLine,
@@ -234,6 +257,9 @@ struct KeyBinding: Identifiable, Codable, Sendable {
         KeyBinding(action: .showSearch,        combo: KeyCombo(key: "f",   command: true, shift: true)),
         KeyBinding(action: .showDatabase,      combo: nil),
         KeyBinding(action: .showClaude,        combo: KeyCombo(key: "a",   command: true, shift: true)),
+        KeyBinding(action: .claudeAddContext,  combo: KeyCombo(key: "l",   command: true)),
+        // ⌘. is the platform's Cancel; it stops the agent mid-turn.
+        KeyBinding(action: .claudeInterrupt,   combo: KeyCombo(key: ".",   command: true)),
         // Navigation
         KeyBinding(action: .quickOpen,         combo: KeyCombo(key: "p",   command: true)),
         KeyBinding(action: .commandPalette,    combo: KeyCombo(key: "p",   command: true, shift: true)),
@@ -276,6 +302,16 @@ struct KeyBinding: Identifiable, Codable, Sendable {
         KeyBinding(action: .copyLineUp,         combo: KeyCombo(key: "up",   shift: true, option: true)),
         KeyBinding(action: .copyLineDown,       combo: KeyCombo(key: "down", shift: true, option: true)),
         KeyBinding(action: .deleteLine,         combo: KeyCombo(key: "k",    command: true, shift: true)),
+        // Debug — VS Code's own function keys. Breakpoints had no binding,
+        // no menu item and no palette entry at all, so the only way to set
+        // one was to know the gutter was clickable.
+        KeyBinding(action: .toggleBreakpoint,      combo: KeyCombo(key: "f9")),
+        KeyBinding(action: .removeAllBreakpoints,  combo: nil),
+        KeyBinding(action: .startOrContinueDebug,  combo: KeyCombo(key: "f5")),
+        KeyBinding(action: .stopDebug,             combo: KeyCombo(key: "f5", shift: true)),
+        KeyBinding(action: .debugStepOver,         combo: KeyCombo(key: "f10")),
+        KeyBinding(action: .debugStepInto,         combo: KeyCombo(key: "f11")),
+        KeyBinding(action: .debugStepOut,          combo: KeyCombo(key: "f11", shift: true)),
         // SFCC — no default shortcut: it replaces every cartridge on the
         // sandbox, so it is reached deliberately from the palette or the
         // menu rather than by a key that could be hit by accident.

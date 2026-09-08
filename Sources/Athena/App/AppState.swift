@@ -15,7 +15,8 @@ final class AppState {
     let fileService: FileService
     let gitService: GitService
     let claudeService: ClaudeService
-    let claudeCLIService: ClaudeCLIService
+    let claudeAgentService: ClaudeAgentService
+    let claudeSessionStore: ClaudeSessionStore
     let searchService: SearchService
     let settingsService: SettingsService
     let keychainService: KeychainService
@@ -235,14 +236,60 @@ final class AppState {
     /// evaluated expression, shown in `DebugConsoleView`.
     var debugConsoleEntries: [DebugConsoleEntry] = []
 
+    // MARK: - Claude agent sidebar
+
     var activeClaudeAccount: ClaudeAccount = .personal
-    var claudeMessages: [ClaudeMessage] = []
+    /// The conversation as rendered: user turns, assistant prose, thinking,
+    /// tool calls, permission prompts and turn summaries, in arrival order.
+    var claudeTimeline: [ClaudeTimelineItem] = []
+    /// True while the agent is mid-turn (thinking, calling tools, or writing).
     var claudeIsStreaming: Bool = false
+    /// The CLI's current activity ("requesting", "compacting"…), shown while
+    /// the agent works and no text has arrived yet.
+    var claudeStatus: String = ""
+    /// Metadata from the session's `system`/`init` frame.
+    var claudeSessionInfo: ClaudeSessionInfo?
+    /// The live command catalogue from the CLI's `initialize` handshake —
+    /// this machine's real skills, plugins and project commands.
+    var claudeSlashCommands: [ClaudeSlashCommand] = []
+    /// Permission prompts waiting on the user, oldest first.
+    var claudePendingPermissions: [ClaudePermissionRequest] = []
+    /// Turns typed while the agent was busy; flushed when it goes idle.
+    var claudeQueuedMessages: [String] = []
+    var claudeModel: ClaudeModelOption = .auto
+    var claudePermissionMode: ClaudePermissionMode = .normal
+    /// Accumulated spend and token usage for this session.
+    var claudeSessionCostUSD: Double = 0
+    var claudeSessionTokens: Int = 0
     /// Files staged via the paperclip button or drag-and-drop, attached to
     /// the next outgoing message then cleared.
     var claudePendingAttachments: [ClaudeAttachment] = []
+    /// Workspace files (and editor selections) attached to the next message,
+    /// sent as `@path` mentions the agent resolves itself.
+    var claudePendingContexts: [ClaudeContextRef] = []
+    /// Set when the editor has a live selection, offered as a one-click chip.
+    var claudeEditorSelection: ClaudeContextRef?
     var showClaudePanel: Bool = false
     var claudePanelWidth: CGFloat = 340
+
+    /// Consumes the agent's event stream; cancelled when the session is
+    /// replaced or the app tears down.
+    @ObservationIgnored var claudeEventTask: Task<Void, Never>?
+    /// Text block id → timeline item id, so streaming deltas update in place.
+    @ObservationIgnored var claudeBlockIndex: [String: String] = [:]
+    /// Tool use id → timeline item id, for the same reason.
+    @ObservationIgnored var claudeToolIndex: [String: String] = [:]
+    /// Paths the agent wrote during the current turn; open tabs showing them
+    /// are refreshed once the turn ends.
+    @ObservationIgnored var claudeTouchedPaths: Set<String> = []
+    /// Resumable conversations for this workspace, loaded on demand by the
+    /// panel's history menu.
+    var claudeRecentSessions: [ClaudeStoredSession] = []
+    /// Bumped on every session start. A consumer task that finds the counter
+    /// moved on knows a newer session replaced it and must not touch state —
+    /// two rapid starts otherwise let the older task clear the newer one's
+    /// session info as its stream finishes.
+    @ObservationIgnored var claudeSessionGeneration: Int = 0
     var keyBindings: [KeyBinding] = KeyBinding.vscodeDefaults
     var showQuickOpen: Bool = false
     /// Seeds QuickOpenView's query on presentation — "" for plain file quick-open,
@@ -498,7 +545,8 @@ final class AppState {
         fileService: FileService = FileService(),
         gitService: GitService = GitService(),
         claudeService: ClaudeService = ClaudeService(),
-        claudeCLIService: ClaudeCLIService = ClaudeCLIService(),
+        claudeAgentService: ClaudeAgentService = ClaudeAgentService(),
+        claudeSessionStore: ClaudeSessionStore = ClaudeSessionStore(),
         searchService: SearchService = SearchService(),
         settingsService: SettingsService = SettingsService(),
         keychainService: KeychainService = KeychainService(),
@@ -517,7 +565,8 @@ final class AppState {
         self.fileService = fileService
         self.gitService = gitService
         self.claudeService = claudeService
-        self.claudeCLIService = claudeCLIService
+        self.claudeAgentService = claudeAgentService
+        self.claudeSessionStore = claudeSessionStore
         self.searchService = searchService
         self.settingsService = settingsService
         self.keychainService = keychainService
@@ -533,11 +582,11 @@ final class AppState {
         self.sqliteService = sqliteService
         self.inlineCompletionService = inlineCompletionService
 
-        // Default to one terminal session at launch — matches the
-        // pre-multi-terminal behavior (plan.md item 21 point 4): a user who
-        // never touches this feature shouldn't see an empty terminal panel
-        // or be forced to click "+" first.
-        newTerminalSession()
+        // The first session is created when the terminal panel is first
+        // shown, not here: at init time no workspace has been restored yet,
+        // so a shell started now would sit in $HOME for the rest of the
+        // session. `ensureTerminalSession()` does it once the workspace is
+        // known, and the user still never has to click "+" first.
     }
 
     // MARK: - Methods
@@ -1481,6 +1530,27 @@ final class AppState {
 
     // MARK: - Debugger
 
+    /// Toggles a breakpoint on the line the caret is on in the focused
+    /// editor — what F9, the Debug menu and the command palette all call.
+    /// Clicking the gutter does the same thing; this is the discoverable way.
+    func toggleBreakpointAtCursor() {
+        guard let tab = focusedTab, let path = tab.fileURL?.path else {
+            statusMessage = "Open a file to set a breakpoint."
+            return
+        }
+        toggleBreakpoint(filePath: path, line: tab.cursorLine)
+        let isSet = debugBreakpoints[path]?.contains(tab.cursorLine) ?? false
+        statusMessage = isSet
+            ? "Breakpoint set at \((path as NSString).lastPathComponent):\(tab.cursorLine)"
+            : "Breakpoint removed from \((path as NSString).lastPathComponent):\(tab.cursorLine)"
+    }
+
+    func removeAllBreakpoints() {
+        let count = debugBreakpoints.values.reduce(0) { $0 + $1.count }
+        debugBreakpoints = [:]
+        statusMessage = count == 0 ? "No breakpoints to remove" : "Removed \(count) breakpoint\(count == 1 ? "" : "s")"
+    }
+
     func toggleBreakpoint(filePath: String, line: Int) {
         if debugBreakpoints[filePath] == nil {
             debugBreakpoints[filePath] = []
@@ -1526,8 +1596,10 @@ final class AppState {
         debugCurrentLine = nil
         selectedFrameId = nil
         debugConsoleEntries = []
+        // The Debug Console is where the session reports; opening the
+        // generic Output tab instead is why a failed launch looked silent.
         showBottomPanel = true
-        activeBottomPanel = .output
+        activeBottomPanel = .debugConsole
 
         // Wire up callbacks before launching.
         await debugService.setCallbacks(
@@ -1547,10 +1619,12 @@ final class AppState {
 
         do {
             try await debugService.launch(config, workspaceURL: workspace?.rootURL, breakpointsByFile: bpMap,
+                                          currentFileURL: focusedTab?.fileURL,
                                           sfccConnection: sfccConnections.first(where: { $0.isActive }))
             debugOutput += "[Athena] Debug session started: \(config.name)\n"
         } catch {
             debugOutput += "[Athena] Failed to start debugger: \(error.localizedDescription)\n"
+            statusMessage = "Debug failed: \(error.localizedDescription)"
             debugState = .stopped
         }
     }
@@ -1602,6 +1676,15 @@ final class AppState {
         do {
             debugStackFrames = try await debugService.fetchStackFrames()
             selectedFrameId = debugStackFrames.first?.id
+
+            // Most adapters (lldb-dap among them) send `stopped` without a
+            // location — the spec expects the client to read it from the top
+            // stack frame. Without this the session pauses correctly but the
+            // gutter never marks the current line.
+            if debugCurrentFile == nil, let top = debugStackFrames.first, let source = top.sourceURL {
+                debugCurrentFile = source
+                debugCurrentLine = top.line
+            }
             if let topFrame = debugStackFrames.first {
                 debugVariables = try await debugService.fetchVariables(frameId: topFrame.id)
             }
@@ -1729,6 +1812,26 @@ final class AppState {
         }
 
         if let sfcc = sfccLaunchConfigIfApplicable() { configs.append(sfcc) }
+
+        // A Next.js project's server code (route handlers, server components,
+        // middleware) runs inside the dev server, so it is reached by
+        // attaching to that process — not by running the open file, which is
+        // what "Debug Node.js (current file)" does.
+        if let ws = workspace,
+           ["next.config.ts", "next.config.js", "next.config.mjs"].contains(where: {
+               FileManager.default.fileExists(atPath: ws.rootURL.appendingPathComponent($0).path)
+           }) {
+            // Starts the dev script with the inspector on, so the user
+            // never has to remember NODE_OPTIONS or restart by hand.
+            configs.append(LaunchConfig(
+                type: "dev-server", request: "launch",
+                name: "Debug Next.js dev server",
+                program: "dev", debugPort: 9229))
+            configs.append(LaunchConfig(
+                type: "node-cdp", request: "attach",
+                name: "Attach to Next.js dev server (port 9229)",
+                program: "", debugPort: 9229))
+        }
 
         // Node.js and browser configs are always included (no external adapter required).
         configs += [
@@ -2880,63 +2983,6 @@ final class AppState {
         statusMessage = message
     }
 
-    // MARK: - Claude sidebar
-
-    /// Switches the active Claude account, aborting any in-flight request and
-    /// clearing the conversation (each CLI maintains its own session).
-    func switchClaudeAccount(_ account: ClaudeAccount) async {
-        guard account != activeClaudeAccount else { return }
-        await claudeCLIService.abort()
-        claudeIsStreaming = false
-        claudeMessages = []
-        claudePendingAttachments = []
-        activeClaudeAccount = account
-    }
-
-    /// Stages files for the next outgoing Claude message — the panel's
-    /// paperclip button and drag-and-drop both funnel through here.
-    /// De-dupes by path; ordering matches attachment order.
-    func addClaudeAttachments(_ urls: [URL]) {
-        for url in urls where !claudePendingAttachments.contains(where: { $0.url == url }) {
-            claudePendingAttachments.append(ClaudeAttachment(url: url))
-        }
-    }
-
-    /// Removes a single staged attachment, e.g. via its chip's ✕ button.
-    func removeClaudeAttachment(_ id: UUID) {
-        claudePendingAttachments.removeAll { $0.id == id }
-    }
-
-    /// Appends a user message, spawns the CLI, and streams the response.
-    func sendClaudeMessage(_ text: String) async {
-        guard !claudeIsStreaming else { return }
-
-        let attachments = claudePendingAttachments
-        claudePendingAttachments = []
-
-        claudeMessages.append(ClaudeMessage(role: .user, content: text, attachments: attachments))
-
-        let assistantMsg = ClaudeMessage(role: .assistant, content: "", isStreaming: true)
-        claudeMessages.append(assistantMsg)
-        let assistantId = assistantMsg.id
-
-        claudeIsStreaming = true
-
-        let prompt  = buildClaudePrompt()
-        let command = activeClaudeAccount.command
-        let stream  = await claudeCLIService.stream(prompt: prompt, command: command)
-
-        for await chunk in stream {
-            guard let idx = claudeMessages.firstIndex(where: { $0.id == assistantId }) else { break }
-            claudeMessages[idx].content += chunk
-        }
-
-        if let idx = claudeMessages.firstIndex(where: { $0.id == assistantId }) {
-            claudeMessages[idx].isStreaming = false
-        }
-        claudeIsStreaming = false
-    }
-
     // MARK: - LSP
 
     /// Starts consuming `LSPManager`'s diagnostics stream, populating
@@ -3187,6 +3233,13 @@ final class AppState {
             activateSidebarPanel(.database)
         case .showClaude:
             showClaudePanel.toggle()
+
+        case .claudeAddContext:
+            attachFocusedEditorContext()
+
+        case .claudeInterrupt:
+            guard claudeIsStreaming else { return }
+            interruptClaude()
         case .quickOpen:
             presentQuickOpen()
         case .commandPalette:
@@ -3227,6 +3280,20 @@ final class AppState {
             postEditorCommand(.copyLineDown)
         case .deleteLine:
             postEditorCommand(.deleteLine)
+        case .toggleBreakpoint:
+            toggleBreakpointAtCursor()
+        case .removeAllBreakpoints:
+            removeAllBreakpoints()
+        case .startOrContinueDebug:
+            if case .paused = debugState { await debugContinue() } else { await startDebugging() }
+        case .stopDebug:
+            await stopDebugging()
+        case .debugStepOver:
+            await debugStepOver()
+        case .debugStepInto:
+            await debugStepIn()
+        case .debugStepOut:
+            await debugStepOut()
         case .sfccUploadAllCartridges:
             await uploadAllCartridges()
         case .zoomIn:
@@ -3323,9 +3390,25 @@ final class AppState {
         let shellPath = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         let shellName = URL(fileURLWithPath: shellPath).lastPathComponent
         let title = terminalSessionSequence == 1 ? shellName : "\(shellName) \(terminalSessionSequence)"
-        let session = TerminalSession(title: title, shell: shellPath, currentDirectory: workspace?.rootURL.path)
+        let session = TerminalSession(title: title, shell: shellPath,
+                                      currentDirectory: terminalStartDirectory)
         terminalSessions.append(session)
         activeTerminalSessionId = session.id
+    }
+
+    /// Where a new shell starts: the open folder, or the focused file's own
+    /// directory when there is no folder open. `nil` only when neither
+    /// exists, leaving the shell its own default.
+    var terminalStartDirectory: String? {
+        if let root = workspace?.rootURL.path { return root }
+        return focusedTab?.fileURL?.deletingLastPathComponent().path
+    }
+
+    /// Creates the first session the moment the terminal is actually shown,
+    /// by which time the workspace has been restored.
+    func ensureTerminalSession() {
+        guard terminalSessions.isEmpty else { return }
+        newTerminalSession()
     }
 
     /// Closes the terminal session with the given ID, activating an adjacent
@@ -3393,37 +3476,4 @@ final class AppState {
         }
     }
 
-    /// Builds a prompt that includes recent conversation history as context.
-    private func buildClaudePrompt() -> String {
-        // All messages except the empty assistant placeholder we just appended.
-        let messages = claudeMessages.dropLast()
-        guard messages.count > 1 else {
-            guard let last = messages.last else { return "" }
-            return last.content + attachmentBlock(for: last.attachments)
-        }
-        // Keep the last 10 messages (5 turns) for context.
-        return messages.suffix(10).map { msg -> String in
-            let role = msg.role == .user ? "Human" : "Assistant"
-            return "\(role): \(msg.content)\(attachmentBlock(for: msg.attachments))"
-        }.joined(separator: "\n\n")
-    }
-
-    /// Renders staged attachments as absolute paths appended to the prompt
-    /// text. The `claude` CLI process is a full agent with its own Bash and
-    /// Read tool access, so it opens these paths itself — for video files it
-    /// is nudged to decode frames/audio via ffmpeg rather than attempting to
-    /// read the container format directly.
-    private func attachmentBlock(for attachments: [ClaudeAttachment]) -> String {
-        guard !attachments.isEmpty else { return "" }
-        let lines = attachments
-            .map { att -> String in
-                let kind = att.iconName == "doc" ? "file" : att.iconName
-                return "- \(att.url.path) (\(kind))"
-            }
-            .joined(separator: "\n")
-        let videoNote = attachments.contains(where: \.isVideo)
-            ? "\n\nFor the attached video file(s), use ffmpeg/ffprobe (you have Bash access) to inspect and decode them — e.g. `ffmpeg -i <path> -vf fps=1 frame_%04d.png` to extract frames for viewing, or `ffprobe <path>` for metadata."
-            : ""
-        return "\n\nAttached files:\n\(lines)\(videoNote)"
-    }
 }

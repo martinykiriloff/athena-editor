@@ -48,7 +48,11 @@ final class GutterView: NSRulerView {
     private let dotRadius:      CGFloat = 5
     private let changeBarWidth: CGFloat = 3    // git change bar — absolute left edge
     private let diagDotRadius:  CGFloat = 2.5  // small, left-edge — clear of the change bar
-    private let numberRightPad: CGFloat = 22  // space for the dot column
+    private let numberRightPad: CGFloat = 8   // right margin for the line numbers
+    /// Centre of the breakpoint column, to the LEFT of the line numbers —
+    /// where every other editor puts it, and clear of the numbers so the
+    /// dot never sits on top of a digit.
+    private let dotColumnX: CGFloat = 13
 
     /// Mirrors the editor's own zoom level (`AppState.editorFontSize`) so the
     /// line numbers scale with the code instead of staying a fixed tiny size
@@ -199,7 +203,7 @@ final class GutterView: NSRulerView {
         // breakpoint dot's column — the two are rarely on the same line at
         // once, and it's an acceptable visual overlap on the rare line that is.
         if conflictRegions.contains(where: { $0.startLine == lineNum }) {
-            let cx = gutterWidth - 10
+            let cx = dotColumnX
             let cy = rulerY + height / 2
             let s: CGFloat = 5
             let path = NSBezierPath()
@@ -214,7 +218,7 @@ final class GutterView: NSRulerView {
 
         // Breakpoint dot or debug arrow
         if hasBP || isDebugLine {
-            let cx = gutterWidth - 10
+            let cx = dotColumnX
             let cy = rulerY + height / 2
             let path = NSBezierPath()
 
@@ -241,9 +245,11 @@ final class GutterView: NSRulerView {
             ? numberAttrs.merging([.foregroundColor: NSColor.systemYellow]) { _, new in new }
             : numberAttrs
         let size   = numStr.size(withAttributes: attrs)
-        let x      = gutterWidth - numberRightPad - size.width
-        let y      = rulerY + (height - size.height) / 2
-        numStr.draw(at: NSPoint(x: max(4, x), y: y), withAttributes: attrs)
+        // Right-aligned in the space left over after the dot column.
+        let numbersLeftEdge = dotColumnX + dotRadius + 5
+        let x = max(numbersLeftEdge, gutterWidth - numberRightPad - size.width)
+        let y = rulerY + (height - size.height) / 2
+        numStr.draw(at: NSPoint(x: x, y: y), withAttributes: attrs)
     }
 
     // MARK: - Click handling

@@ -50,7 +50,7 @@ endif
 
 # ── Phony targets ──────────────────────────────────────────────────────────────
 
-.PHONY: all run build-debug build-release bundle dmg dmg-pretty test clean open help
+.PHONY: all run build-debug build-release bundle dmg dmg-pretty test icon clean open help
 
 all: bundle
 
@@ -79,6 +79,17 @@ run: build-debug
 	    "$(APP_BUNDLE)"
 	@echo "▶  Launching $(APP_NAME) (debug)…"
 	@"$(APP_BUNDLE)/Contents/MacOS/$(APP_NAME)"
+
+# ── App icon ──────────────────────────────────────────────────────────────────
+
+# Regenerates AppIcon.icns from the vector source in XcodeConfig/IconGen.swift.
+# Only needed when the icon artwork changes — the .icns is committed.
+icon:
+	@echo "🎨 Rendering app icon…"
+	@rm -rf XcodeConfig/AppIcon.iconset
+	@$(SWIFT_ENV) swift XcodeConfig/IconGen.swift bronze XcodeConfig/AppIcon.iconset
+	@iconutil -c icns XcodeConfig/AppIcon.iconset -o XcodeConfig/AppIcon.icns
+	@echo "✅ XcodeConfig/AppIcon.icns"
 
 # ── Builds ────────────────────────────────────────────────────────────────────
 
@@ -167,6 +178,7 @@ help:
 	@echo "  make dmg          release DMG  →  $(APP_NAME)-<version>.dmg"
 	@echo "  make dmg-pretty   polished DMG (needs: brew install create-dmg)"
 	@echo "  make test         run Swift test suite"
+	@echo "  make icon         re-render the app icon from IconGen.swift"
 	@echo "  make open         open Package.swift in Xcode"
 	@echo "  make clean        remove .build/, .app, .dmg files"
 	@echo ""
