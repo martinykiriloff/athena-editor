@@ -67,11 +67,11 @@ struct SearchFileGroupView: View {
             Button {
                 isExpanded.toggle()
             } label: {
-                HStack(spacing: 6) {
+                HStack(spacing: appState.sf(6)) {
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                         .font(.system(size: appState.sf(10), weight: .medium))
                         .foregroundStyle(.secondary)
-                        .frame(width: 12)
+                        .frame(width: appState.sf(12))
 
                     Text(fileName)
                         .font(.system(size: appState.sf(12), weight: .semibold))
@@ -90,14 +90,14 @@ struct SearchFileGroupView: View {
                     Text("\(group.results.count)")
                         .font(.system(size: appState.sf(10), weight: .medium))
                         .foregroundStyle(.white)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1)
+                        .padding(.horizontal, appState.sf(5))
+                        .padding(.vertical, appState.sf(1))
                         .background(
                             Capsule().fill(Color.accentColor.opacity(0.8))
                         )
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
+                .padding(.horizontal, appState.sf(10))
+                .padding(.vertical, appState.sf(5))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color(nsColor: .controlBackgroundColor).opacity(0.6))
             }
@@ -131,8 +131,8 @@ struct SearchResultRowView: View {
                 Text("\(result.lineNumber)")
                     .font(.system(size: appState.sf(11), design: .monospaced))
                     .foregroundStyle(.secondary)
-                    .frame(width: 36, alignment: .trailing)
-                    .padding(.trailing, 8)
+                    .frame(width: appState.sf(36), alignment: .trailing)
+                    .padding(.trailing, appState.sf(8))
 
                 // Line content
                 Text(result.lineContent.trimmingCharacters(in: .whitespaces))
@@ -142,8 +142,8 @@ struct SearchResultRowView: View {
                     .truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 3)
+            .padding(.horizontal, appState.sf(10))
+            .padding(.vertical, appState.sf(3))
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(isHovered
                         ? Color(nsColor: .selectedContentBackgroundColor).opacity(0.3)

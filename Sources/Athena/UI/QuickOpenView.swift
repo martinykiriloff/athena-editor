@@ -338,7 +338,7 @@ struct QuickOpenView: View {
             // Palette card
             VStack(spacing: 0) {
                 // Search field row
-                HStack(spacing: 8) {
+                HStack(spacing: appState.sf(8)) {
                     Image(systemName: "magnifyingglass")
                         .foregroundStyle(.secondary)
                         .font(.system(size: appState.sf(14)))
@@ -355,8 +355,8 @@ struct QuickOpenView: View {
                         // Escape — dismiss
                         .onKeyPress(.escape)    { close(); return .handled }
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
+                .padding(.horizontal, appState.sf(12))
+                .padding(.vertical, appState.sf(10))
 
                 // Results or empty state — each mode's filtered list is computed
                 // once into `matches` and reused for the empty-check and the
@@ -370,7 +370,7 @@ struct QuickOpenView: View {
                         Text("No matching commands")
                             .foregroundStyle(.secondary)
                             .font(.system(size: appState.sf(12)))
-                            .padding(20)
+                            .padding(appState.sf(20))
                     } else {
                         Divider()
                         ScrollViewReader { proxy in
@@ -396,7 +396,7 @@ struct QuickOpenView: View {
                                     }
                                 }
                             }
-                            .frame(maxHeight: 360)
+                            .frame(maxHeight: appState.sf(360))
                             .onChange(of: selectedIndex) { _, idx in
                                 guard matches.indices.contains(idx) else { return }
                                 proxy.scrollTo(matches[idx].id, anchor: .center)
@@ -410,7 +410,7 @@ struct QuickOpenView: View {
                         Text("No matching symbols")
                             .foregroundStyle(.secondary)
                             .font(.system(size: appState.sf(12)))
-                            .padding(20)
+                            .padding(appState.sf(20))
                     } else {
                         Divider()
                         ScrollViewReader { proxy in
@@ -430,7 +430,7 @@ struct QuickOpenView: View {
                                     }
                                 }
                             }
-                            .frame(maxHeight: 360)
+                            .frame(maxHeight: appState.sf(360))
                             .onChange(of: selectedIndex) { _, idx in
                                 guard matches.indices.contains(idx) else { return }
                                 proxy.scrollTo(matches[idx].symbol.id, anchor: .center)
@@ -444,7 +444,7 @@ struct QuickOpenView: View {
                         Text("No results for \"\(query)\"")
                             .foregroundStyle(.secondary)
                             .font(.system(size: appState.sf(12)))
-                            .padding(20)
+                            .padding(appState.sf(20))
                     } else if !matches.isEmpty {
                     Divider()
                     ScrollViewReader { proxy in
@@ -464,7 +464,7 @@ struct QuickOpenView: View {
                                 }
                             }
                         }
-                        .frame(maxHeight: 360)
+                        .frame(maxHeight: appState.sf(360))
                         .onChange(of: selectedIndex) { _, idx in
                             guard matches.indices.contains(idx) else { return }
                             proxy.scrollTo(matches[idx].id, anchor: .center)
@@ -474,10 +474,10 @@ struct QuickOpenView: View {
                 }
             }
             .background(Color(nsColor: .windowBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .shadow(color: .black.opacity(0.5), radius: 24, x: 0, y: 12)
-            .frame(width: 580)
-            .padding(.top, 80)
+            .clipShape(RoundedRectangle(cornerRadius: appState.sf(10)))
+            .shadow(color: .black.opacity(0.5), radius: appState.sf(24), x: 0, y: appState.sf(12))
+            .frame(width: appState.sf(580))
+            .padding(.top, appState.sf(80))
         }
         .onAppear {
             query = appState.quickOpenPrefill
@@ -553,13 +553,15 @@ private struct QuickOpenRow: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "doc")
-                .font(.system(size: appState.sf(11)))
-                .foregroundStyle(isSelected ? .white.opacity(0.8) : .secondary)
-                .frame(width: 14)
+        HStack(spacing: appState.sf(8)) {
+            MaterialFileIcon(
+                url: URL(fileURLWithPath: name), size: appState.sf(13),
+                fallbackSystemName: "doc",
+                fallbackColor: isSelected ? .white.opacity(0.8) : .secondary
+            )
+            .frame(width: appState.sf(16))
 
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: appState.sf(1)) {
                 Text(name)
                     .font(.system(size: appState.sf(13)))
                     .foregroundStyle(isSelected ? .white : .primary)
@@ -576,8 +578,8 @@ private struct QuickOpenRow: View {
 
             Spacer()
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.horizontal, appState.sf(12))
+        .padding(.vertical, appState.sf(6))
         .background(isSelected ? Color.accentColor : Color.clear)
         .contentShape(Rectangle())
     }
@@ -591,13 +593,13 @@ private struct CommandPaletteRow: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: appState.sf(8)) {
             Image(systemName: "chevron.right")
                 .font(.system(size: appState.sf(11)))
                 .foregroundStyle(isSelected ? .white.opacity(0.8) : .secondary)
-                .frame(width: 14)
+                .frame(width: appState.sf(14))
 
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: appState.sf(1)) {
                 Text(binding.action.displayName)
                     .font(.system(size: appState.sf(13)))
                     .foregroundStyle(isSelected ? .white : .primary)
@@ -617,8 +619,8 @@ private struct CommandPaletteRow: View {
                     .foregroundStyle(isSelected ? .white.opacity(0.8) : .secondary)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.horizontal, appState.sf(12))
+        .padding(.vertical, appState.sf(6))
         .background(isSelected ? Color.accentColor : Color.clear)
         .contentShape(Rectangle())
     }
@@ -633,13 +635,13 @@ private struct SymbolPaletteRow: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
-        HStack(spacing: 8) {
-            Color.clear.frame(width: CGFloat(depth) * 14, height: 1)
+        HStack(spacing: appState.sf(8)) {
+            Color.clear.frame(width: appState.sf(CGFloat(depth) * 14), height: 1)
 
             Image(systemName: symbol.iconName)
                 .font(.system(size: appState.sf(11)))
                 .foregroundStyle(isSelected ? .white.opacity(0.8) : .secondary)
-                .frame(width: 14)
+                .frame(width: appState.sf(14))
 
             Text(symbol.name)
                 .font(.system(size: appState.sf(13)))
@@ -648,8 +650,8 @@ private struct SymbolPaletteRow: View {
 
             Spacer()
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.horizontal, appState.sf(12))
+        .padding(.vertical, appState.sf(6))
         .background(isSelected ? Color.accentColor : Color.clear)
         .contentShape(Rectangle())
     }

@@ -40,7 +40,7 @@ struct ChatView: View {
     // MARK: - Header
 
     private var chatHeader: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: appState.sf(6)) {
             Image(systemName: "sparkle")
                 .font(.system(size: appState.sf(11)))
                 .foregroundStyle(.purple)
@@ -48,7 +48,7 @@ struct ChatView: View {
             Text("CLAUDE")
                 .font(.system(size: appState.sf(11), weight: .semibold))
                 .foregroundStyle(.secondary)
-                .tracking(0.5)
+                .tracking(appState.sf(0.5))
 
             Spacer()
 
@@ -78,15 +78,15 @@ struct ChatView: View {
             .buttonStyle(.plain)
             .help("New session")
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .frame(height: 32)
+        .padding(.horizontal, appState.sf(10))
+        .padding(.vertical, appState.sf(6))
+        .frame(height: appState.sf(32))
     }
 
     // MARK: - Missing Key Banner
 
     private var missingKeyBanner: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: appState.sf(12)) {
             Spacer()
             Image(systemName: "key.slash")
                 .font(.system(size: appState.sf(28)))
@@ -104,7 +104,7 @@ struct ChatView: View {
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding()
+        .padding(appState.sf(16))
     }
 
     // MARK: - Message List
@@ -112,7 +112,7 @@ struct ChatView: View {
     private var messageList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 8) {
+                LazyVStack(spacing: appState.sf(8)) {
                     ForEach(appState.chatMessages) { message in
                         MessageBubble(message: message)
                             .id(message.id)
@@ -123,12 +123,12 @@ struct ChatView: View {
                             TypingIndicator()
                             Spacer()
                         }
-                        .padding(.horizontal, 12)
+                        .padding(.horizontal, appState.sf(12))
                         .id("typing-indicator")
                     }
                 }
-                .padding(.vertical, 10)
-                .padding(.horizontal, 6)
+                .padding(.vertical, appState.sf(10))
+                .padding(.horizontal, appState.sf(6))
             }
             .onChange(of: appState.chatMessages.count) { _, _ in
                 withAnimation(.easeOut(duration: 0.2)) {
@@ -153,12 +153,12 @@ struct ChatView: View {
 
     private var inputArea: some View {
         VStack(spacing: 0) {
-            HStack(alignment: .bottom, spacing: 8) {
+            HStack(alignment: .bottom, spacing: appState.sf(8)) {
                 // Multiline text editor
                 ZStack(alignment: .topLeading) {
                     TextEditor(text: $inputText)
                         .font(.system(size: appState.sf(13)))
-                        .frame(minHeight: 36, maxHeight: 120)
+                        .frame(minHeight: appState.sf(36), maxHeight: appState.sf(120))
                         .scrollContentBackground(.hidden)
                         .background(Color.clear)
                         .focused($inputFocused)
@@ -167,17 +167,17 @@ struct ChatView: View {
                         Text("Ask Claude…")
                             .font(.system(size: appState.sf(13)))
                             .foregroundStyle(.tertiary)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 8)
+                            .padding(.horizontal, appState.sf(5))
+                            .padding(.vertical, appState.sf(8))
                             .allowsHitTesting(false)
                     }
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
+                .padding(.horizontal, appState.sf(8))
+                .padding(.vertical, appState.sf(4))
                 .background(Color(nsColor: .textBackgroundColor))
-                .cornerRadius(8)
+                .cornerRadius(appState.sf(8))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 8)
+                    RoundedRectangle(cornerRadius: appState.sf(8))
                         .stroke(inputFocused ? Color.accentColor.opacity(0.6) : Color.secondary.opacity(0.25), lineWidth: 1)
                 )
 
@@ -215,11 +215,11 @@ struct ChatView: View {
                     .font(.system(size: appState.sf(10), design: .monospaced))
                     .foregroundStyle(count > 4000 ? Color.orange : Color.secondary.opacity(0.5))
             }
-            .padding(.horizontal, 4)
-            .padding(.top, 2)
+            .padding(.horizontal, appState.sf(4))
+            .padding(.top, appState.sf(2))
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
+        .padding(.horizontal, appState.sf(10))
+        .padding(.vertical, appState.sf(8))
         .background(Color(nsColor: .controlBackgroundColor))
     }
 
@@ -320,15 +320,15 @@ struct MessageBubble: View {
 
     private var userBubble: some View {
         HStack(alignment: .top, spacing: 0) {
-            Spacer(minLength: 40)
+            Spacer(minLength: appState.sf(40))
             Text(message.content)
                 .font(.system(size: appState.sf(13)))
                 .foregroundStyle(.white)
                 .textSelection(.enabled)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
+                .padding(.horizontal, appState.sf(10))
+                .padding(.vertical, appState.sf(7))
                 .background(Color.accentColor)
-                .cornerRadius(12)
+                .cornerRadius(appState.sf(12))
         }
     }
 
@@ -337,7 +337,7 @@ struct MessageBubble: View {
     private var assistantBubble: some View {
         HStack(alignment: .top, spacing: 0) {
             AssistantContent(content: message.content)
-            Spacer(minLength: 40)
+            Spacer(minLength: appState.sf(40))
         }
     }
 }
@@ -353,7 +353,7 @@ private struct AssistantContent: View {
         if content.isEmpty {
             Color.clear.frame(height: 1)
         } else {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: appState.sf(6)) {
                 ForEach(Array(parsedSegments.enumerated()), id: \.offset) { _, segment in
                     switch segment {
                     case .text(let t):
@@ -368,32 +368,32 @@ private struct AssistantContent: View {
                                 Text(lang)
                                     .font(.system(size: appState.sf(10), weight: .semibold, design: .monospaced))
                                     .foregroundStyle(.secondary)
-                                    .padding(.horizontal, 8)
-                                    .padding(.top, 5)
+                                    .padding(.horizontal, appState.sf(8))
+                                    .padding(.top, appState.sf(5))
                             }
                             ScrollView(.horizontal, showsIndicators: false) {
                                 Text(code)
                                     .font(.system(size: appState.sf(12), design: .monospaced))
                                     .foregroundStyle(.primary)
                                     .textSelection(.enabled)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 6)
+                                    .padding(.horizontal, appState.sf(8))
+                                    .padding(.vertical, appState.sf(6))
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(Color(nsColor: .textBackgroundColor).opacity(0.6))
-                        .cornerRadius(6)
+                        .cornerRadius(appState.sf(6))
                         .overlay(
-                            RoundedRectangle(cornerRadius: 6)
+                            RoundedRectangle(cornerRadius: appState.sf(6))
                                 .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
                         )
                     }
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
+            .padding(.horizontal, appState.sf(10))
+            .padding(.vertical, appState.sf(7))
             .background(Color(nsColor: .controlBackgroundColor))
-            .cornerRadius(12)
+            .cornerRadius(appState.sf(12))
         }
     }
 
@@ -460,25 +460,26 @@ private struct AssistantContent: View {
 // MARK: - TypingIndicator
 
 struct TypingIndicator: View {
+    @Environment(AppState.self) private var appState
     @State private var phase: Int = 0
 
     private let timer = Timer.publish(every: 0.4, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: appState.sf(4)) {
             ForEach(0..<3) { index in
                 Circle()
                     .fill(Color.secondary)
-                    .frame(width: 6, height: 6)
+                    .frame(width: appState.sf(6), height: appState.sf(6))
                     .opacity(phase == index ? 1.0 : 0.3)
                     .scaleEffect(phase == index ? 1.2 : 1.0)
                     .animation(.easeInOut(duration: 0.3), value: phase)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
+        .padding(.horizontal, appState.sf(10))
+        .padding(.vertical, appState.sf(8))
         .background(Color(nsColor: .controlBackgroundColor))
-        .cornerRadius(12)
+        .cornerRadius(appState.sf(12))
         .onReceive(timer) { _ in
             phase = (phase + 1) % 3
         }

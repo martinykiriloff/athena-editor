@@ -29,7 +29,7 @@ struct DebugSidebarView: View {
     // MARK: Launch section
 
     private var launchSection: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: appState.sf(6)) {
             // Config picker
             if !appState.launchConfigs.isEmpty {
                 Picker("", selection: Bindable(appState).selectedLaunchConfigId) {
@@ -40,11 +40,11 @@ struct DebugSidebarView: View {
                 }
                 .pickerStyle(.menu)
                 .font(.system(size: appState.sf(12)))
-                .padding(.horizontal, 8)
+                .padding(.horizontal, appState.sf(8))
             }
 
             // Start / Stop button
-            HStack(spacing: 8) {
+            HStack(spacing: appState.sf(8)) {
                 if appState.debugState == .idle || appState.debugState == .stopped {
                     Button {
                         Task { await appState.startDebugging() }
@@ -66,25 +66,25 @@ struct DebugSidebarView: View {
                     .buttonStyle(.bordered)
                 }
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, appState.sf(8))
 
             // Status pill
             statusPill
         }
-        .padding(.vertical, 8)
+        .padding(.vertical, appState.sf(8))
     }
 
     private var statusPill: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: appState.sf(6)) {
             Circle()
                 .fill(stateColor)
-                .frame(width: 7, height: 7)
+                .frame(width: appState.sf(7), height: appState.sf(7))
             Text(stateLabel)
                 .font(.system(size: appState.sf(11)))
                 .foregroundColor(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 12)
+        .padding(.horizontal, appState.sf(12))
     }
 
     private var stateColor: Color {
@@ -113,11 +113,11 @@ struct DebugSidebarView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 callStackSection
-                Divider().padding(.vertical, 4)
+                Divider().padding(.vertical, appState.sf(4))
                 variablesSection
-                Divider().padding(.vertical, 4)
+                Divider().padding(.vertical, appState.sf(4))
                 watchSection
-                Divider().padding(.vertical, 4)
+                Divider().padding(.vertical, appState.sf(4))
                 breakpointsSection
             }
         }
@@ -132,8 +132,8 @@ struct DebugSidebarView: View {
                 Text(appState.debugState == .running ? "Running…" : "No frames")
                     .font(.system(size: appState.sf(11)))
                     .foregroundColor(.secondary)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 4)
+                    .padding(.horizontal, appState.sf(12))
+                    .padding(.vertical, appState.sf(4))
             } else {
                 ForEach(appState.debugStackFrames) { frame in
                     frameRow(frame)
@@ -149,15 +149,15 @@ struct DebugSidebarView: View {
         // selects it without moving the arrow.
         let isTop = frame.id == appState.debugStackFrames.first?.id
         let isSelected = frame.id == (appState.selectedFrameId ?? appState.debugStackFrames.first?.id)
-        return HStack(spacing: 6) {
+        return HStack(spacing: appState.sf(6)) {
             if isTop {
                 Image(systemName: "arrow.right")
                     .font(.system(size: appState.sf(9)))
                     .foregroundColor(.orange)
             } else {
-                Color.clear.frame(width: 12)
+                Color.clear.frame(width: appState.sf(12))
             }
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: appState.sf(1)) {
                 Text(frame.name)
                     .font(.system(size: appState.sf(12)))
                     .foregroundColor(isTop ? .primary : .secondary)
@@ -170,8 +170,8 @@ struct DebugSidebarView: View {
             }
             Spacer()
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 3)
+        .padding(.horizontal, appState.sf(12))
+        .padding(.vertical, appState.sf(3))
         .background(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
         .contentShape(Rectangle())
         .onTapGesture {
@@ -188,8 +188,8 @@ struct DebugSidebarView: View {
                 Text("No variables")
                     .font(.system(size: appState.sf(11)))
                     .foregroundColor(.secondary)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 4)
+                    .padding(.horizontal, appState.sf(12))
+                    .padding(.vertical, appState.sf(4))
             } else {
                 ForEach(appState.debugVariables.prefix(50)) { variable in
                     variableRow(variable)
@@ -199,11 +199,11 @@ struct DebugSidebarView: View {
     }
 
     private func variableRow(_ variable: DebugVariable) -> some View {
-        HStack(spacing: 6) {
+        HStack(spacing: appState.sf(6)) {
             Text(variable.name)
                 .font(.system(size: appState.sf(12)))
                 .foregroundColor(.secondary)
-                .frame(width: 90, alignment: .leading)
+                .frame(width: appState.sf(90), alignment: .leading)
                 .lineLimit(1)
             Text(variable.value)
                 .font(.system(size: appState.sf(12), design: .monospaced))
@@ -218,8 +218,8 @@ struct DebugSidebarView: View {
                     .lineLimit(1)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 2)
+        .padding(.horizontal, appState.sf(12))
+        .padding(.vertical, appState.sf(2))
     }
 
     // MARK: Watch Expressions
@@ -228,7 +228,7 @@ struct DebugSidebarView: View {
         VStack(alignment: .leading, spacing: 0) {
             sectionHeader("WATCH")
 
-            HStack(spacing: 6) {
+            HStack(spacing: appState.sf(6)) {
                 Image(systemName: "plus")
                     .font(.system(size: appState.sf(10)))
                     .foregroundColor(.secondary)
@@ -240,16 +240,16 @@ struct DebugSidebarView: View {
                         newWatchExpression = ""
                     }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 3)
+            .padding(.horizontal, appState.sf(12))
+            .padding(.vertical, appState.sf(3))
 
             if appState.watchExpressions.isEmpty {
                 Text("No watch expressions.\nType above and press Return to add one.")
                     .font(.system(size: appState.sf(11)))
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.leading)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 4)
+                    .padding(.horizontal, appState.sf(12))
+                    .padding(.vertical, appState.sf(4))
             } else {
                 ForEach(appState.watchExpressions) { watch in
                     WatchExpressionRowView(watch: watch)
@@ -275,7 +275,7 @@ struct DebugSidebarView: View {
                     }
                     .buttonStyle(.plain)
                     .help("Remove all breakpoints")
-                    .padding(.trailing, 8)
+                    .padding(.trailing, appState.sf(8))
                 }
             }
 
@@ -288,7 +288,7 @@ struct DebugSidebarView: View {
                     .font(.system(size: appState.sf(11)))
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
-                    .padding(12)
+                    .padding(appState.sf(12))
                     .frame(maxWidth: .infinity)
             } else {
                 ForEach(Array(allBreakpoints.enumerated()), id: \.offset) { _, bp in
@@ -299,11 +299,11 @@ struct DebugSidebarView: View {
     }
 
     private func breakpointRow(filePath: String, line: Int) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: appState.sf(8)) {
             Circle()
                 .fill(Color.red)
-                .frame(width: 8, height: 8)
-            VStack(alignment: .leading, spacing: 1) {
+                .frame(width: appState.sf(8), height: appState.sf(8))
+            VStack(alignment: .leading, spacing: appState.sf(1)) {
                 Text(URL(fileURLWithPath: filePath).lastPathComponent)
                     .font(.system(size: appState.sf(12)))
                     .foregroundColor(.primary)
@@ -322,8 +322,8 @@ struct DebugSidebarView: View {
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 3)
+        .padding(.horizontal, appState.sf(12))
+        .padding(.vertical, appState.sf(3))
     }
 
     // MARK: Helpers
@@ -344,8 +344,8 @@ struct DebugSidebarView: View {
             .font(.system(size: appState.sf(10), weight: .semibold))
             .foregroundColor(.secondary)
             .tracking(0.5)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 5)
+            .padding(.horizontal, appState.sf(12))
+            .padding(.vertical, appState.sf(5))
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -362,8 +362,8 @@ private struct WatchExpressionRowView: View {
     @State private var isHovering: Bool = false
 
     var body: some View {
-        HStack(spacing: 6) {
-            VStack(alignment: .leading, spacing: 1) {
+        HStack(spacing: appState.sf(6)) {
+            VStack(alignment: .leading, spacing: appState.sf(1)) {
                 Text(watch.expression)
                     .font(.system(size: appState.sf(12), design: .monospaced))
                     .foregroundColor(.secondary)
@@ -390,7 +390,7 @@ private struct WatchExpressionRowView: View {
                     Image(systemName: "xmark")
                         .font(.system(size: appState.sf(9), weight: .medium))
                         .foregroundColor(.secondary)
-                        .frame(width: 14, height: 14)
+                        .frame(width: appState.sf(14), height: appState.sf(14))
                         .background(
                             Circle()
                                 .fill(Color.primary.opacity(0.1))
@@ -399,8 +399,8 @@ private struct WatchExpressionRowView: View {
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 3)
+        .padding(.horizontal, appState.sf(12))
+        .padding(.vertical, appState.sf(3))
         .contentShape(Rectangle())
         .onHover { isHovering = $0 }
     }

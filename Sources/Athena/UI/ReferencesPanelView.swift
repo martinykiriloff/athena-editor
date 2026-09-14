@@ -31,7 +31,7 @@ struct ReferencesPanelView: View {
             if appState.isFindingReferences {
                 ProgressView()
                     .scaleEffect(0.6)
-                    .frame(width: 14, height: 14)
+                    .frame(width: appState.sf(14), height: appState.sf(14))
                 Text("Finding references…")
                     .font(.system(size: appState.sf(11)))
                     .foregroundStyle(.secondary)
@@ -47,8 +47,8 @@ struct ReferencesPanelView: View {
             }
             Spacer()
         }
-        .padding(.horizontal, 10)
-        .frame(height: 22)
+        .padding(.horizontal, appState.sf(10))
+        .frame(height: appState.sf(22))
         .background(Color(nsColor: .controlBackgroundColor))
     }
 
@@ -70,14 +70,14 @@ struct ReferencesPanelView: View {
                         }
                     }
                 }
-                .padding(.vertical, 4)
+                .padding(.vertical, appState.sf(4))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
     private var emptyPrompt: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: appState.sf(10)) {
             Image(systemName: "arrow.triangle.branch")
                 .font(.system(size: appState.sf(28)))
                 .foregroundStyle(.secondary)
@@ -85,7 +85,7 @@ struct ReferencesPanelView: View {
                 .font(.system(size: appState.sf(12)))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, 16)
+                .padding(.horizontal, appState.sf(16))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

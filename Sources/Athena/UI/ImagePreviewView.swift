@@ -13,6 +13,7 @@ import SwiftUI
 /// .fileExtensions`'s `.image` case). Purely a viewer: image tabs never
 /// become dirty and have no `content` to edit, so there's no save path here.
 struct ImagePreviewView: View {
+    @Environment(AppState.self) private var appState
     let fileURL: URL?
 
     @State private var image: NSImage?
@@ -41,7 +42,7 @@ struct ImagePreviewView: View {
                 Image(nsImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
-                    .padding(24)
+                    .padding(appState.sf(24))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if failedToLoad {
@@ -60,7 +61,7 @@ struct ImagePreviewView: View {
     // MARK: - Info bar
 
     private var infoBar: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: appState.sf(14)) {
             if let info {
                 Label(
                     "\(Int(info.pixelSize.width.rounded())) × \(Int(info.pixelSize.height.rounded()))",
@@ -77,11 +78,11 @@ struct ImagePreviewView: View {
                     .truncationMode(.middle)
             }
         }
-        .font(.system(size: 11))
+        .font(.system(size: appState.sf(11)))
         .foregroundStyle(.secondary)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .frame(height: 26)
+        .padding(.horizontal, appState.sf(12))
+        .padding(.vertical, appState.sf(6))
+        .frame(height: appState.sf(26))
     }
 
     private static let byteCountFormatter: ByteCountFormatter = {

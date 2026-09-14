@@ -31,10 +31,10 @@ struct DiffViewerView: View {
                 content
             }
             .background(Color(nsColor: .windowBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .clipShape(RoundedRectangle(cornerRadius: appState.sf(10)))
             .shadow(color: .black.opacity(0.5), radius: 24, x: 0, y: 12)
-            .frame(width: 920, height: 640)
-            .padding(.top, 36)
+            .frame(width: appState.sf(920), height: appState.sf(640))
+            .padding(.top, appState.sf(36))
         }
         .onKeyPress(.escape) { appState.closeDiffViewer(); return .handled }
     }
@@ -42,7 +42,7 @@ struct DiffViewerView: View {
     // MARK: - Header
 
     private var header: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: appState.sf(8)) {
             Image(systemName: appState.diffViewerCommit != nil ? "clock.arrow.circlepath" : "doc.text.magnifyingglass")
                 .foregroundStyle(.secondary)
                 .font(.system(size: appState.sf(13)))
@@ -67,10 +67,10 @@ struct DiffViewerView: View {
                 Text("Staged")
                     .font(.system(size: appState.sf(10), weight: .semibold))
                     .foregroundStyle(.secondary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
+                    .padding(.horizontal, appState.sf(6))
+                    .padding(.vertical, appState.sf(2))
                     .background(Color.secondary.opacity(0.15))
-                    .cornerRadius(4)
+                    .cornerRadius(appState.sf(4))
             }
 
             Button {
@@ -83,9 +83,9 @@ struct DiffViewerView: View {
             .buttonStyle(.plain)
             .help("Close (Esc)")
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .frame(height: 40)
+        .padding(.horizontal, appState.sf(14))
+        .padding(.vertical, appState.sf(10))
+        .frame(height: appState.sf(40))
     }
 
     /// The commit's message when opened from `CommitHistoryView`, otherwise
@@ -142,16 +142,16 @@ struct DiffViewerView: View {
             let highlighter = SyntaxHighlighter(
                 language: language,
                 theme: appState.currentTheme,
-                fontSize: 12,
+                fontSize: appState.sf(12),
                 fontLigatures: false
             )
             ScrollView([.vertical, .horizontal]) {
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: appState.sf(10)) {
                     ForEach(Array(appState.diffViewerParsedDiff.hunks.enumerated()), id: \.offset) { _, hunk in
                         DiffHunkView(hunk: hunk, highlighter: highlighter)
                     }
                 }
-                .padding(.vertical, 8)
+                .padding(.vertical, appState.sf(8))
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
@@ -179,8 +179,8 @@ private struct DiffHunkView: View {
             Text(hunk.header)
                 .font(.system(size: appState.sf(11), weight: .medium, design: .monospaced))
                 .foregroundStyle(.secondary)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
+                .padding(.horizontal, appState.sf(10))
+                .padding(.vertical, appState.sf(4))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.secondary.opacity(0.1))
 
@@ -252,16 +252,16 @@ private struct DiffLineRowView: View {
     var body: some View {
         HStack(spacing: 0) {
             Text(line.oldLineNumber.map(String.init) ?? "")
-                .frame(width: 42, alignment: .trailing)
+                .frame(width: appState.sf(42), alignment: .trailing)
                 .foregroundStyle(.secondary)
 
             Text(line.newLineNumber.map(String.init) ?? "")
-                .frame(width: 42, alignment: .trailing)
+                .frame(width: appState.sf(42), alignment: .trailing)
                 .foregroundStyle(.secondary)
-                .padding(.trailing, 6)
+                .padding(.trailing, appState.sf(6))
 
             Text(marker)
-                .frame(width: 14, alignment: .center)
+                .frame(width: appState.sf(14), alignment: .center)
                 .foregroundStyle(markerColor)
                 .fontWeight(.bold)
 
@@ -269,10 +269,10 @@ private struct DiffLineRowView: View {
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
 
-            Spacer(minLength: 24)
+            Spacer(minLength: appState.sf(24))
         }
         .font(.system(size: appState.sf(12), design: .monospaced))
-        .padding(.vertical, 1)
+        .padding(.vertical, appState.sf(1))
         .background(rowBackground)
     }
 }

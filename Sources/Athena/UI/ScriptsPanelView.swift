@@ -23,7 +23,7 @@ struct ScriptsPanelView: View {
     // MARK: Empty state
 
     private var emptyState: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: appState.sf(8)) {
             Image(systemName: "doc.text.magnifyingglass")
                 .font(.system(size: appState.sf(28)))
                 .foregroundColor(.secondary)
@@ -38,7 +38,7 @@ struct ScriptsPanelView: View {
     // MARK: Toolbar
 
     private var toolbar: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: appState.sf(6)) {
 
             // Package selector — only shown when workspace has multiple packages.
             if appState.npmPackages.count > 1 {
@@ -48,7 +48,7 @@ struct ScriptsPanelView: View {
                     }
                 }
                 .pickerStyle(.menu)
-                .frame(maxWidth: 130)
+                .frame(maxWidth: appState.sf(130))
                 .font(.system(size: appState.sf(12)))
                 .help("Select package")
             }
@@ -61,7 +61,7 @@ struct ScriptsPanelView: View {
                 }
             }
             .pickerStyle(.menu)
-            .frame(maxWidth: 190)
+            .frame(maxWidth: appState.sf(190))
             .font(.system(size: appState.sf(12)))
             .help("Select npm script")
 
@@ -70,10 +70,10 @@ struct ScriptsPanelView: View {
                 Text(pm.rawValue)
                     .font(.system(size: appState.sf(10), weight: .semibold))
                     .foregroundColor(.secondary)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
+                    .padding(.horizontal, appState.sf(5))
+                    .padding(.vertical, appState.sf(2))
                     .background(Color.secondary.opacity(0.12))
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                    .clipShape(RoundedRectangle(cornerRadius: appState.sf(4)))
             }
 
             Spacer()
@@ -89,7 +89,7 @@ struct ScriptsPanelView: View {
                     Image(systemName: "stop.fill")
                         .font(.system(size: appState.sf(12)))
                         .foregroundColor(.red)
-                        .frame(width: 28, height: 26)
+                        .frame(width: appState.sf(28), height: appState.sf(26))
                 }
                 .buttonStyle(.plain)
                 .help("Stop script")
@@ -103,7 +103,7 @@ struct ScriptsPanelView: View {
                     Image(systemName: "play.fill")
                         .font(.system(size: appState.sf(12)))
                         .foregroundColor(appState.selectedNPMScriptName == nil ? .secondary : .green)
-                        .frame(width: 28, height: 26)
+                        .frame(width: appState.sf(28), height: appState.sf(26))
                 }
                 .buttonStyle(.plain)
                 .disabled(appState.selectedNPMScriptName == nil)
@@ -118,14 +118,14 @@ struct ScriptsPanelView: View {
                     Image(systemName: "trash")
                         .font(.system(size: appState.sf(11)))
                         .foregroundColor(.secondary)
-                        .frame(width: 28, height: 26)
+                        .frame(width: appState.sf(28), height: appState.sf(26))
                 }
                 .buttonStyle(.plain)
                 .help("Clear output")
             }
         }
-        .padding(.horizontal, 8)
-        .frame(height: 32)
+        .padding(.horizontal, appState.sf(8))
+        .frame(height: appState.sf(32))
         .background(Color(nsColor: .controlBackgroundColor))
     }
 
@@ -140,7 +140,7 @@ struct ScriptsPanelView: View {
                     .font(.system(size: appState.sf(12), design: .monospaced))
                     .foregroundColor(appState.scriptOutput.isEmpty ? .secondary : .primary)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
+                    .padding(appState.sf(8))
                     .id("scriptsEnd")
             }
             .onChange(of: appState.scriptOutput) { _, _ in

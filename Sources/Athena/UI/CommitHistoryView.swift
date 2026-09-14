@@ -29,7 +29,7 @@ struct CommitHistoryView: View {
 
     /// "File History" scope chip — the history below is one file's.
     private func fileFilterBar(_ path: String) -> some View {
-        HStack(spacing: 6) {
+        HStack(spacing: appState.sf(6)) {
             Image(systemName: "doc.text.magnifyingglass")
                 .font(.system(size: appState.sf(10)))
                 .foregroundStyle(.secondary)
@@ -49,8 +49,8 @@ struct CommitHistoryView: View {
             .buttonStyle(.plain)
             .help("Show whole-repository history")
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
+        .padding(.horizontal, appState.sf(10))
+        .padding(.vertical, appState.sf(5))
     }
 
     @ViewBuilder
@@ -81,7 +81,7 @@ struct CommitHistoryView: View {
             .font(.system(size: appState.sf(12)))
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(.top, 40)
+            .padding(.top, appState.sf(40))
     }
 }
 
@@ -104,20 +104,20 @@ private struct CommitRow: View {
     }()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: appState.sf(3)) {
             Text(commit.message)
                 .font(.system(size: appState.sf(12), weight: .medium))
                 .lineLimit(2)
                 .foregroundStyle(.primary)
 
-            HStack(spacing: 6) {
+            HStack(spacing: appState.sf(6)) {
                 Text(commit.shortHash)
                     .font(.system(size: appState.sf(10), weight: .semibold, design: .monospaced))
                     .foregroundStyle(.secondary)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 1)
+                    .padding(.horizontal, appState.sf(4))
+                    .padding(.vertical, appState.sf(1))
                     .background(Color.secondary.opacity(0.15))
-                    .cornerRadius(3)
+                    .cornerRadius(appState.sf(3))
 
                 Text(commit.author)
                     .font(.system(size: appState.sf(10)))
@@ -125,7 +125,7 @@ private struct CommitRow: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
 
-                Spacer(minLength: 8)
+                Spacer(minLength: appState.sf(8))
 
                 Text(Self.dateFormatter.string(from: commit.date))
                     .font(.system(size: appState.sf(10)))
@@ -133,8 +133,8 @@ private struct CommitRow: View {
                     .lineLimit(1)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
+        .padding(.horizontal, appState.sf(10))
+        .padding(.vertical, appState.sf(6))
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(isHovering ? Color.primary.opacity(0.07) : Color.clear)
         .contentShape(Rectangle())

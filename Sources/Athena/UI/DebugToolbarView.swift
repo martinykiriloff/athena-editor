@@ -8,7 +8,7 @@ struct DebugToolbarView: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: appState.sf(2)) {
             // Continue / Pause
             if case .paused = appState.debugState {
                 debugButton(icon: "play.fill",       tint: .green,    help: "Continue (F5)")  { Task { await appState.debugContinue()  } }
@@ -20,18 +20,18 @@ struct DebugToolbarView: View {
             debugButton(icon: "arrow.turn.up.left",  tint: .primary,  help: "Step Out (⇧F11)") { Task { await appState.debugStepOut()  } }
 
             Divider()
-                .frame(height: 18)
-                .padding(.horizontal, 2)
+                .frame(height: appState.sf(18))
+                .padding(.horizontal, appState.sf(2))
 
             // Current location
             if let file = appState.debugCurrentFile, let line = appState.debugCurrentLine {
                 Text("\(file.lastPathComponent):\(line)")
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(.system(size: appState.sf(11), design: .monospaced))
                     .foregroundColor(.secondary)
                     .lineLimit(1)
             } else {
                 Text(debugStateText)
-                    .font(.system(size: 11))
+                    .font(.system(size: appState.sf(11)))
                     .foregroundColor(.secondary)
             }
 
@@ -39,8 +39,8 @@ struct DebugToolbarView: View {
 
             debugButton(icon: "stop.fill", tint: .red, help: "Stop Debugging") { Task { await appState.stopDebugging() } }
         }
-        .padding(.horizontal, 10)
-        .frame(height: 32)
+        .padding(.horizontal, appState.sf(10))
+        .frame(height: appState.sf(32))
         .background(.ultraThinMaterial)
         .overlay(alignment: .bottom) { Divider() }
     }
@@ -57,9 +57,9 @@ struct DebugToolbarView: View {
     private func debugButton(icon: String, tint: Color, help: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: icon)
-                .font(.system(size: 12))
+                .font(.system(size: appState.sf(12)))
                 .foregroundColor(tint == .primary ? Color.primary : tint)
-                .frame(width: 26, height: 26)
+                .frame(width: appState.sf(26), height: appState.sf(26))
         }
         .buttonStyle(.plain)
         .help(help)

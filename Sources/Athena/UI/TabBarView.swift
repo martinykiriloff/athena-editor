@@ -23,13 +23,13 @@ struct TabBarView: View {
                     ForEach(appState.tabs(in: side)) { tab in
                         TabItemView(tab: tab, side: side)
                         Divider()
-                            .frame(height: 16)
+                            .frame(height: appState.sf(16))
                     }
                 }
             }
 
             Divider()
-                .frame(height: 16)
+                .frame(height: appState.sf(16))
 
             // Add-tab button
             Button {
@@ -38,7 +38,7 @@ struct TabBarView: View {
                 Image(systemName: "plus")
                     .font(.system(size: appState.sf(12), weight: .medium))
                     .foregroundColor(.secondary)
-                    .frame(width: 32, height: tabBarHeight)
+                    .frame(width: appState.sf(32), height: tabBarHeight)
             }
             .buttonStyle(.plain)
             .help("New Tab")
@@ -47,7 +47,7 @@ struct TabBarView: View {
         .background(Color(nsColor: .controlBackgroundColor))
     }
 
-    private let tabBarHeight: CGFloat = 36
+    private var tabBarHeight: CGFloat { appState.sf(36) }
 }
 
 // MARK: - TabItemView
@@ -64,11 +64,11 @@ private struct TabItemView: View {
     }
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: appState.sf(6)) {
             // Language icon
             languageIcon
                 .font(.system(size: appState.sf(12)))
-                .frame(width: 14)
+                .frame(width: appState.sf(14))
 
             // Title — an unsaved file is coloured, the way JetBrains marks a
             // modified tab, so the state reads from the title itself rather
@@ -83,7 +83,7 @@ private struct TabItemView: View {
                 if TabAppearance.showsDirtyDot(isDirty: tab.isDirty, isHovering: isHovering) {
                     Circle()
                         .fill(Color.accentColor)
-                        .frame(width: 7, height: 7)
+                        .frame(width: appState.sf(7), height: appState.sf(7))
                 }
 
                 if TabAppearance.showsCloseButton(isDirty: tab.isDirty, isHovering: isHovering, isActive: isActive) {
@@ -93,7 +93,7 @@ private struct TabItemView: View {
                         Image(systemName: "xmark")
                             .font(.system(size: appState.sf(10), weight: .medium))
                             .foregroundColor(.secondary)
-                            .frame(width: 14, height: 14)
+                            .frame(width: appState.sf(14), height: appState.sf(14))
                             .background(
                                 Circle()
                                     .fill(Color.primary.opacity(isHovering ? 0.1 : 0))
@@ -102,11 +102,11 @@ private struct TabItemView: View {
                     .buttonStyle(.plain)
                 }
             }
-            .frame(width: 14, height: 14)
+            .frame(width: appState.sf(14), height: appState.sf(14))
         }
-        .padding(.horizontal, 10)
-        .frame(minWidth: 100, maxWidth: 200, alignment: .leading)
-        .frame(height: 36)
+        .padding(.horizontal, appState.sf(10))
+        .frame(minWidth: appState.sf(100), maxWidth: appState.sf(200), alignment: .leading)
+        .frame(height: appState.sf(36))
         .background(tabBackground)
         .overlay(alignment: .bottom) {
             if isActive {
@@ -144,11 +144,13 @@ private struct TabItemView: View {
         }
     }
 
-    @ViewBuilder
     private var languageIcon: some View {
         let lang = tab.fileURL.map { Language.detect(from: $0) } ?? .plaintext
-        Image(systemName: languageIconName(for: lang))
-            .foregroundColor(languageIconColor(for: lang))
+        return MaterialFileIcon(
+            url: tab.fileURL, size: appState.sf(14),
+            fallbackSystemName: languageIconName(for: lang),
+            fallbackColor: languageIconColor(for: lang)
+        )
     }
 
     private func languageIconName(for language: Language) -> String {

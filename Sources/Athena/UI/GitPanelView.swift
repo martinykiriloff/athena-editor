@@ -38,7 +38,7 @@ struct GitPanelView: View {
                         emptyState
                         if !appState.gitStashes.isEmpty {
                             StashSection(stashes: appState.gitStashes)
-                                .padding(.vertical, 4)
+                                .padding(.vertical, appState.sf(4))
                         }
                     } else {
                         changeSections
@@ -62,7 +62,7 @@ struct GitPanelView: View {
     // MARK: - Header
 
     private var gitHeader: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: appState.sf(6)) {
             Text(showHistory ? "HISTORY" : "SOURCE CONTROL")
                 .font(.system(size: appState.sf(11), weight: .semibold))
                 .foregroundStyle(.secondary)
@@ -134,9 +134,9 @@ struct GitPanelView: View {
             .buttonStyle(.plain)
             .help("Refresh")
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .frame(height: 32)
+        .padding(.horizontal, appState.sf(10))
+        .padding(.vertical, appState.sf(6))
+        .frame(height: appState.sf(32))
     }
 
     private func headerButton(_ systemImage: String, help: String, action: @escaping () -> Void) -> some View {
@@ -152,7 +152,7 @@ struct GitPanelView: View {
     // MARK: - Commit Section
 
     private var commitSection: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: appState.sf(6)) {
             // TextEditor with placeholder overlay
             ZStack(alignment: .topLeading) {
                 TextEditor(text: Binding(
@@ -160,13 +160,13 @@ struct GitPanelView: View {
                     set: { appState.commitMessage = $0 }
                 ))
                 .font(.system(size: appState.sf(12)))
-                .frame(minHeight: 60)
+                .frame(minHeight: appState.sf(60))
                 .scrollContentBackground(.hidden)
                 .background(Color(nsColor: .textBackgroundColor))
-                .cornerRadius(4)
+                .cornerRadius(appState.sf(4))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 4)
-                        .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: appState.sf(4))
+                        .stroke(Color.secondary.opacity(0.3), lineWidth: appState.sf(1))
                 )
 
                 // Placeholder
@@ -174,13 +174,13 @@ struct GitPanelView: View {
                     Text("Message (Cmd+Return to commit)")
                         .font(.system(size: appState.sf(12)))
                         .foregroundStyle(.tertiary)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 8)
+                        .padding(.horizontal, appState.sf(5))
+                        .padding(.vertical, appState.sf(8))
                         .allowsHitTesting(false)
                 }
             }
 
-            HStack(spacing: 6) {
+            HStack(spacing: appState.sf(6)) {
                 // Commit button
                 Button {
                     Task { await appState.commitStaged() }
@@ -216,8 +216,8 @@ struct GitPanelView: View {
                 .disabled(appState.gitStatus.isClean)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
+        .padding(.horizontal, appState.sf(10))
+        .padding(.vertical, appState.sf(8))
     }
 
     // MARK: - Change Sections
@@ -263,13 +263,13 @@ struct GitPanelView: View {
                 StashSection(stashes: appState.gitStashes)
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, appState.sf(4))
     }
 
     // MARK: - Empty State
 
     private var emptyState: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: appState.sf(8)) {
             Image(systemName: "checkmark.seal")
                 .font(.system(size: appState.sf(28)))
                 .foregroundStyle(.tertiary)
@@ -278,14 +278,14 @@ struct GitPanelView: View {
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.top, 40)
+        .padding(.top, appState.sf(40))
     }
 
     // MARK: - Ahead / Behind Bar
 
     @ViewBuilder
     private func aheadBehindBar(workspace: WorkspaceModel) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: appState.sf(8)) {
             // Branch name
             Image(systemName: "arrow.triangle.branch")
                 .font(.system(size: appState.sf(10)))
@@ -309,9 +309,9 @@ struct GitPanelView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .frame(height: 26)
+        .padding(.horizontal, appState.sf(10))
+        .padding(.vertical, appState.sf(5))
+        .frame(height: appState.sf(26))
     }
 }
 
@@ -332,7 +332,7 @@ private struct ChangeSection: View {
                 GitFileRow(change: change, isStaged: isStaged)
             }
         } label: {
-            HStack(spacing: 4) {
+            HStack(spacing: appState.sf(4)) {
                 Text(title)
                     .font(.system(size: appState.sf(11), weight: .semibold))
                     .foregroundStyle(.secondary)
@@ -342,8 +342,8 @@ private struct ChangeSection: View {
                 Spacer()
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 2)
+        .padding(.horizontal, appState.sf(10))
+        .padding(.vertical, appState.sf(2))
     }
 }
 
@@ -360,7 +360,7 @@ private struct StashSection: View {
                 StashRow(stash: stash)
             }
         } label: {
-            HStack(spacing: 4) {
+            HStack(spacing: appState.sf(4)) {
                 Text("Stashes")
                     .font(.system(size: appState.sf(11), weight: .semibold))
                     .foregroundStyle(.secondary)
@@ -370,8 +370,8 @@ private struct StashSection: View {
                 Spacer()
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 2)
+        .padding(.horizontal, appState.sf(10))
+        .padding(.vertical, appState.sf(2))
     }
 }
 
@@ -382,7 +382,7 @@ private struct StashRow: View {
     @State private var showDropConfirmation = false
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: appState.sf(6)) {
             Image(systemName: "tray.full")
                 .font(.system(size: appState.sf(10)))
                 .foregroundStyle(.secondary)
@@ -403,8 +403,8 @@ private struct StashRow: View {
                 .help("Pop (apply and remove)")
             }
         }
-        .padding(.leading, 12)
-        .padding(.vertical, 3)
+        .padding(.leading, appState.sf(12))
+        .padding(.vertical, appState.sf(3))
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(isHovering ? Color.primary.opacity(0.07) : Color.clear)
         .contentShape(Rectangle())
@@ -436,15 +436,15 @@ private struct GitFileRow: View {
     @State private var showDiscardConfirmation: Bool = false
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: appState.sf(6)) {
             // Status badge
             Text(change.status)
                 .font(.system(size: appState.sf(10), weight: .bold, design: .monospaced))
                 .foregroundStyle(.white)
-                .padding(.horizontal, 4)
-                .padding(.vertical, 1)
+                .padding(.horizontal, appState.sf(4))
+                .padding(.vertical, appState.sf(1))
                 .background(statusColor(change.status))
-                .cornerRadius(3)
+                .cornerRadius(appState.sf(3))
 
             // Filename
             VStack(alignment: .leading, spacing: 0) {
@@ -485,8 +485,8 @@ private struct GitFileRow: View {
                 .help(isStaged ? "Unstage" : "Stage")
             }
         }
-        .padding(.leading, 12)
-        .padding(.vertical, 3)
+        .padding(.leading, appState.sf(12))
+        .padding(.vertical, appState.sf(3))
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(isHovering ? Color.primary.opacity(0.07) : Color.clear)
         .contentShape(Rectangle())

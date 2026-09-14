@@ -29,7 +29,7 @@ struct SFCCLogView: View {
     // MARK: Toolbar
 
     private var toolbar: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: appState.sf(8)) {
             Picker("Pane", selection: $pane) {
                 ForEach(Pane.allCases, id: \.self) { p in
                     Text(p.rawValue).tag(p)
@@ -58,8 +58,8 @@ struct SFCCLogView: View {
                 Spacer()
             }
         }
-        .padding(.horizontal, 8)
-        .frame(height: 28)
+        .padding(.horizontal, appState.sf(8))
+        .frame(height: appState.sf(28))
         .background(Color(nsColor: .controlBackgroundColor))
     }
 
@@ -79,7 +79,7 @@ struct SFCCLogView: View {
                 }
             }
             .labelsHidden()
-            .frame(maxWidth: 300)
+            .frame(maxWidth: appState.sf(300))
         } else {
             Text("Loading logs…")
                 .font(.system(size: appState.sf(11)))
@@ -136,7 +136,7 @@ struct SFCCLogView: View {
                     .font(.system(size: appState.sf(11), design: .monospaced))
                     .foregroundStyle(.primary)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
+                    .padding(appState.sf(8))
                     .id("logEnd")
             }
             .onChange(of: appState.sfccLogContent) { _, _ in
@@ -152,7 +152,7 @@ struct SFCCLogView: View {
     private var uploadsContent: some View {
         Group {
             if appState.sfccUploadLog.isEmpty {
-                VStack(spacing: 10) {
+                VStack(spacing: appState.sf(10)) {
                     Image(systemName: "arrow.up.circle")
                         .font(.system(size: appState.sf(28)))
                         .foregroundStyle(.tertiary)
@@ -163,7 +163,7 @@ struct SFCCLogView: View {
                         .font(.system(size: appState.sf(11)))
                         .foregroundStyle(.tertiary)
                         .multilineTextAlignment(.center)
-                        .frame(maxWidth: 420)
+                        .frame(maxWidth: appState.sf(420))
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -189,13 +189,13 @@ private struct SFCCUploadRow: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: appState.sf(8)) {
             Image(systemName: iconName)
                 .font(.system(size: appState.sf(12)))
                 .foregroundStyle(iconColor)
-                .frame(width: 16)
+                .frame(width: appState.sf(16))
 
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: appState.sf(1)) {
                 Text(record.relativePath)
                     .font(.system(size: appState.sf(11), design: .monospaced))
                     .foregroundStyle(.primary)
@@ -233,8 +233,8 @@ private struct SFCCUploadRow: View {
                 .font(.system(size: appState.sf(10), design: .monospaced))
                 .foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
+        .padding(.horizontal, appState.sf(10))
+        .padding(.vertical, appState.sf(4))
         .help(record.failureMessage ?? record.relativePath)
     }
 

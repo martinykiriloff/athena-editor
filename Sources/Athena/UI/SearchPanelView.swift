@@ -38,7 +38,7 @@ struct SearchPanelView: View {
     // MARK: - Search Bar
 
     private var searchBar: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: appState.sf(4)) {
             Button {
                 withAnimation(.easeInOut(duration: 0.15)) { showReplace.toggle() }
             } label: {
@@ -91,8 +91,8 @@ struct SearchPanelView: View {
                 .help("Clear search")
             }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
+        .padding(.horizontal, appState.sf(8))
+        .padding(.vertical, appState.sf(6))
         .background(Color(nsColor: .controlBackgroundColor))
     }
 
@@ -101,7 +101,7 @@ struct SearchPanelView: View {
     @ViewBuilder
     private var replaceRow: some View {
         if showReplace {
-            HStack(spacing: 6) {
+            HStack(spacing: appState.sf(6)) {
                 Image(systemName: "arrow.turn.down.right")
                     .font(.system(size: appState.sf(11)))
                     .foregroundStyle(.secondary)
@@ -117,7 +117,7 @@ struct SearchPanelView: View {
                     if isReplacing {
                         ProgressView()
                             .scaleEffect(0.5)
-                            .frame(width: 14, height: 14)
+                            .frame(width: appState.sf(14), height: appState.sf(14))
                     } else {
                         Text("Replace All")
                             .font(.system(size: appState.sf(11)))
@@ -128,8 +128,8 @@ struct SearchPanelView: View {
                 .disabled(!canReplaceAll || isReplacing)
                 .help(replaceAllHelpText)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
+            .padding(.horizontal, appState.sf(8))
+            .padding(.vertical, appState.sf(6))
             .background(Color(nsColor: .controlBackgroundColor))
         }
     }
@@ -175,7 +175,7 @@ struct SearchPanelView: View {
                 placeholder: "e.g. *.swift, src",
                 text: $includePattern
             )
-            Divider().padding(.leading, 8)
+            Divider().padding(.leading, appState.sf(8))
             filterRow(
                 label: "Exclude",
                 placeholder: "e.g. node_modules, .build, *.lock",
@@ -187,19 +187,19 @@ struct SearchPanelView: View {
     }
 
     private func filterRow(label: String, placeholder: String, text: Binding<String>) -> some View {
-        HStack(spacing: 6) {
+        HStack(spacing: appState.sf(6)) {
             Text(label)
                 .font(.system(size: appState.sf(10)))
                 .foregroundStyle(.secondary)
-                .frame(width: 44, alignment: .trailing)
+                .frame(width: appState.sf(44), alignment: .trailing)
             TextField(placeholder, text: text)
                 .textFieldStyle(.plain)
                 .font(.system(size: appState.sf(12)))
                 .onSubmit { triggerSearch() }
                 .onChange(of: text.wrappedValue) { _, _ in scheduleDebounce() }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
+        .padding(.horizontal, appState.sf(8))
+        .padding(.vertical, appState.sf(5))
     }
 
     // MARK: - Toggle Button Helper
@@ -216,9 +216,9 @@ struct SearchPanelView: View {
             Text(symbol)
                 .font(.system(size: appState.sf(11), weight: .medium, design: .monospaced))
                 .foregroundStyle(isOn.wrappedValue ? Color.accentColor : Color.secondary)
-                .frame(width: 24, height: 20)
+                .frame(width: appState.sf(24), height: appState.sf(20))
                 .background(
-                    RoundedRectangle(cornerRadius: 4)
+                    RoundedRectangle(cornerRadius: appState.sf(4))
                         .fill(isOn.wrappedValue
                               ? Color.accentColor.opacity(0.15)
                               : Color.clear)
@@ -236,7 +236,7 @@ struct SearchPanelView: View {
             if isSearching {
                 ProgressView()
                     .scaleEffect(0.6)
-                    .frame(width: 14, height: 14)
+                    .frame(width: appState.sf(14), height: appState.sf(14))
                 Text("Searching…")
                     .font(.system(size: appState.sf(11)))
                     .foregroundStyle(.secondary)
@@ -253,8 +253,8 @@ struct SearchPanelView: View {
             }
             Spacer()
         }
-        .padding(.horizontal, 10)
-        .frame(height: 22)
+        .padding(.horizontal, appState.sf(10))
+        .frame(height: appState.sf(22))
         .background(Color(nsColor: .controlBackgroundColor))
     }
 
@@ -286,7 +286,7 @@ struct SearchPanelView: View {
                         }
                     }
                 }
-                .padding(.vertical, 4)
+                .padding(.vertical, appState.sf(4))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -303,7 +303,7 @@ struct SearchPanelView: View {
     // MARK: - Helpers
 
     private func emptyPrompt(icon: String, message: String) -> some View {
-        VStack(spacing: 10) {
+        VStack(spacing: appState.sf(10)) {
             Image(systemName: icon)
                 .font(.system(size: appState.sf(28)))
                 .foregroundStyle(.secondary)
@@ -311,7 +311,7 @@ struct SearchPanelView: View {
                 .font(.system(size: appState.sf(12)))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, 16)
+                .padding(.horizontal, appState.sf(16))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

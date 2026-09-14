@@ -73,11 +73,11 @@ private struct SplitEditorPanesView: View {
     /// Primary pane's fraction of the total available width.
     @State private var splitFraction: CGFloat = 0.5
 
-    private static let handleWidth: CGFloat = 4
+    private var handleWidth: CGFloat { appState.sf(4) }
 
     var body: some View {
         GeometryReader { geo in
-            let totalWidth = max(1, geo.size.width - Self.handleWidth)
+            let totalWidth = max(1, geo.size.width - handleWidth)
             HStack(spacing: 0) {
                 EditorPaneView(side: .primary)
                     .frame(width: totalWidth * splitFraction)
@@ -95,6 +95,7 @@ private struct SplitEditorPanesView: View {
 private struct SplitterHandleView: View {
     @Binding var fraction: CGFloat
     let totalWidth: CGFloat
+    @Environment(AppState.self) private var appState
     @State private var isHovering = false
     @State private var dragStartFraction: CGFloat?
 
@@ -104,13 +105,13 @@ private struct SplitterHandleView: View {
     var body: some View {
         Rectangle()
             .fill(isHovering ? Color.accentColor.opacity(0.6) : Color(nsColor: .separatorColor))
-            .frame(width: 4)
+            .frame(width: appState.sf(4))
             // Widen the actual hit target beyond the thin visible line
             // (dragging a literal 4pt strip is fiddly) without affecting
             // layout — `.overlay` content isn't clipped to the base view.
             .overlay(
                 Color.clear
-                    .frame(width: 10)
+                    .frame(width: appState.sf(10))
                     .contentShape(Rectangle())
             )
             .onHover { isHovering = $0 }
@@ -276,11 +277,11 @@ struct CodeEditorView: View {
     /// row height/background), the closest existing precedent in this
     /// codebase for "one view, two mutually-exclusive render modes."
     private var markdownToolbar: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: appState.sf(6)) {
             Text(tab.isMarkdownPreview ? "PREVIEW" : "SOURCE")
                 .font(.system(size: appState.sf(10), weight: .semibold))
                 .foregroundStyle(.secondary)
-                .tracking(0.5)
+                .tracking(appState.sf(0.5))
 
             Spacer()
 
@@ -294,9 +295,9 @@ struct CodeEditorView: View {
             .buttonStyle(.plain)
             .help(tab.isMarkdownPreview ? "Show Source" : "Show Preview")
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
-        .frame(height: 26)
+        .padding(.horizontal, appState.sf(10))
+        .padding(.vertical, appState.sf(4))
+        .frame(height: appState.sf(26))
         .background(Color(nsColor: .controlBackgroundColor))
         .overlay(alignment: .bottom) { Divider() }
     }
@@ -440,8 +441,8 @@ struct CodeEditorView: View {
             .overlay(alignment: .topTrailing) {
                 if let controller = findReplaceController, controller.isVisible {
                     FindReplaceBarView(controller: controller)
-                        .padding(.top, 8)
-                        .padding(.trailing, 16)
+                        .padding(.top, appState.sf(8))
+                        .padding(.trailing, appState.sf(16))
                 }
             }
             .overlay(alignment: .top) {
@@ -459,7 +460,7 @@ struct CodeEditorView: View {
                         scrollProxy?.scrollTo(fraction: fraction)
                     }
                 )
-                .frame(width: 100)
+                .frame(width: appState.sf(100))
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -486,7 +487,7 @@ private struct BreadcrumbBarView: View {
     var body: some View {
         let path = appState.breadcrumbPath
         if !path.isEmpty {
-            HStack(spacing: 4) {
+            HStack(spacing: appState.sf(4)) {
                 ForEach(Array(path.enumerated()), id: \.element.id) { index, symbol in
                     if index > 0 {
                         Image(systemName: "chevron.right")
@@ -496,7 +497,7 @@ private struct BreadcrumbBarView: View {
                     Button {
                         jump(to: symbol)
                     } label: {
-                        HStack(spacing: 3) {
+                        HStack(spacing: appState.sf(3)) {
                             Image(systemName: symbol.iconName)
                                 .font(.system(size: appState.sf(10)))
                             Text(symbol.name)
@@ -509,8 +510,8 @@ private struct BreadcrumbBarView: View {
                 }
                 Spacer()
             }
-            .padding(.horizontal, 10)
-            .frame(height: 22)
+            .padding(.horizontal, appState.sf(10))
+            .frame(height: appState.sf(22))
             .frame(maxWidth: .infinity)
             .background(Color(nsColor: .controlBackgroundColor))
             .overlay(alignment: .bottom) { Divider() }
@@ -554,7 +555,7 @@ private struct StickyScrollBarView: View {
     @Environment(AppState.self) private var appState
 
     private static let maxLevels = 4
-    private static let rowHeight: CGFloat = 20
+    private var rowHeight: CGFloat { appState.sf(20) }
 
     private var rows: [DocumentSymbol] {
         guard tab.id == appState.focusedTab?.id, !tab.content.isEmpty else { return [] }
@@ -573,7 +574,7 @@ private struct StickyScrollBarView: View {
                     Button {
                         jump(to: symbol)
                     } label: {
-                        HStack(spacing: 4) {
+                        HStack(spacing: appState.sf(4)) {
                             Image(systemName: symbol.iconName)
                                 .font(.system(size: appState.sf(10)))
                             Text(symbol.name)
@@ -581,9 +582,9 @@ private struct StickyScrollBarView: View {
                                 .lineLimit(1)
                             Spacer(minLength: 0)
                         }
-                        .padding(.leading, 10 + CGFloat(index) * 12)
-                        .padding(.trailing, 10)
-                        .frame(height: Self.rowHeight)
+                        .padding(.leading, appState.sf(10 + CGFloat(index) * 12))
+                        .padding(.trailing, appState.sf(10))
+                        .frame(height: rowHeight)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .contentShape(Rectangle())
                     }
@@ -613,11 +614,11 @@ private struct ExternalChangeBanner: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: appState.sf(10)) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundColor(.orange)
             Text("\(tab.title) changed on disk.")
-                .font(.system(size: 12))
+                .font(.system(size: appState.sf(12)))
                 .lineLimit(1)
 
             Spacer()
@@ -627,7 +628,7 @@ private struct ExternalChangeBanner: View {
             }
             .buttonStyle(.plain)
             .foregroundColor(.secondary)
-            .font(.system(size: 12))
+            .font(.system(size: appState.sf(12)))
 
             Button("Reload") {
                 Task { await appState.reloadTabFromDisk(tab.id) }
@@ -635,8 +636,8 @@ private struct ExternalChangeBanner: View {
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
         }
-        .padding(.horizontal, 10)
-        .frame(height: 32)
+        .padding(.horizontal, appState.sf(10))
+        .frame(height: appState.sf(32))
         .background(Color.orange.opacity(0.15))
         .overlay(alignment: .bottom) { Divider() }
     }

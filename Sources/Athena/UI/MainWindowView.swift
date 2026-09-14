@@ -82,7 +82,7 @@ private struct EditorSplitView: View {
                 HStack(spacing: 0) {
                     Spacer(minLength: 0)
                     EditorContainerView()
-                        .frame(maxWidth: 1000)
+                        .frame(maxWidth: appState.sf(1000))
                     Spacer(minLength: 0)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -94,7 +94,9 @@ private struct EditorSplitView: View {
             if appState.showBottomPanel && !appState.isZenMode {
                 ResizeDivider(axis: .horizontal) { delta in
                     // Dragging upward (negative delta) should increase panel height.
-                    let newHeight = (dragBaseHeight - delta)
+                    // Drag deltas are in screen points; the stored height is in
+                    // unzoomed points so it survives a zoom change unchanged.
+                    let newHeight = (dragBaseHeight - delta / appState.uiScale)
                         .clamped(to: 100...600)
                     appState.bottomPanelHeight = newHeight
                 }
@@ -104,7 +106,7 @@ private struct EditorSplitView: View {
                 }
 
                 BottomPanelView()
-                    .frame(height: appState.bottomPanelHeight)
+                    .frame(height: appState.sf(appState.bottomPanelHeight))
             }
         }
     }
@@ -137,14 +139,14 @@ struct MainWindowView: View {
             HStack(spacing: 0) {
                 if !appState.isZenMode {
                     ActivityBarView()
-                        .frame(width: 48)
+                        .frame(width: appState.sf(48))
                 }
 
                 if appState.showSidebar && !appState.isZenMode {
                     SidebarView()
-                        .frame(width: appState.sidebarWidth)
+                        .frame(width: appState.sf(appState.sidebarWidth))
                     ResizeDivider(axis: .vertical) { delta in
-                        appState.sidebarWidth = (dragBaseSidebarWidth + delta).clamped(to: 160...600)
+                        appState.sidebarWidth = (dragBaseSidebarWidth + delta / appState.uiScale).clamped(to: 160...600)
                     }
                     .onAppear { dragBaseSidebarWidth = appState.sidebarWidth }
                     .onChange(of: appState.sidebarWidth) { _, v in dragBaseSidebarWidth = v }
@@ -155,13 +157,13 @@ struct MainWindowView: View {
 
                 if appState.showClaudePanel {
                     ResizeDivider(axis: .vertical) { delta in
-                        appState.claudePanelWidth = (dragBaseClaudeWidth - delta).clamped(to: 240...700)
+                        appState.claudePanelWidth = (dragBaseClaudeWidth - delta / appState.uiScale).clamped(to: 240...700)
                     }
                     .onAppear { dragBaseClaudeWidth = appState.claudePanelWidth }
                     .onChange(of: appState.claudePanelWidth) { _, v in dragBaseClaudeWidth = v }
 
                     ClaudePanel()
-                        .frame(width: appState.claudePanelWidth)
+                        .frame(width: appState.sf(appState.claudePanelWidth))
                         .background(Color(nsColor: .controlBackgroundColor))
                 }
             }
@@ -169,7 +171,7 @@ struct MainWindowView: View {
 
             if !appState.isZenMode {
                 StatusBarView()
-                    .frame(height: 22)
+                    .frame(height: appState.sf(22))
             }
         }
     }

@@ -22,13 +22,13 @@ struct ClaudeToolRow: View {
             header
             if isExpanded {
                 body_
-                    .padding(.leading, 24)
-                    .padding(.trailing, 10)
-                    .padding(.bottom, 6)
+                    .padding(.leading, appState.sf(24))
+                    .padding(.trailing, appState.sf(10))
+                    .padding(.bottom, appState.sf(6))
             }
         }
         .background(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: appState.sf(6))
                 .fill(Color.secondary.opacity(0.06))
         )
         .overlay(alignment: .leading) {
@@ -36,11 +36,11 @@ struct ClaudeToolRow: View {
             if call.parentToolUseId != nil {
                 Rectangle()
                     .fill(Color.accentColor.opacity(0.35))
-                    .frame(width: 2)
+                    .frame(width: appState.sf(2))
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 2)
+        .padding(.horizontal, appState.sf(10))
+        .padding(.vertical, appState.sf(2))
     }
 
     // MARK: Header
@@ -49,9 +49,9 @@ struct ClaudeToolRow: View {
         Button {
             isExpanded.toggle()
         } label: {
-            HStack(spacing: 6) {
+            HStack(spacing: appState.sf(6)) {
                 statusGlyph
-                    .frame(width: 14)
+                    .frame(width: appState.sf(14))
 
                 Text(call.displayName)
                     .font(.system(size: appState.sf(11), weight: .medium))
@@ -65,7 +65,7 @@ struct ClaudeToolRow: View {
                         .truncationMode(.middle)
                 }
 
-                Spacer(minLength: 4)
+                Spacer(minLength: appState.sf(4))
 
                 if let duration = call.duration, duration > 0.6 {
                     Text(Self.durationText(duration))
@@ -79,8 +79,8 @@ struct ClaudeToolRow: View {
                         .foregroundStyle(.tertiary)
                 }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
+            .padding(.horizontal, appState.sf(8))
+            .padding(.vertical, appState.sf(5))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -137,7 +137,7 @@ struct ClaudeToolRow: View {
 
     @ViewBuilder
     private var body_: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: appState.sf(6)) {
             switch call.detail {
             case .none:
                 EmptyView()
@@ -190,7 +190,7 @@ struct ClaudeCodeBlock: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: appState.sf(2)) {
             ScrollView(.horizontal, showsIndicators: false) {
                 Text(displayed)
                     .font(.system(size: appState.sf(10.5), design: .monospaced))
@@ -208,9 +208,9 @@ struct ClaudeCodeBlock: View {
                 .foregroundStyle(Color.accentColor)
             }
         }
-        .padding(6)
+        .padding(appState.sf(6))
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(nsColor: .textBackgroundColor).opacity(0.5), in: RoundedRectangle(cornerRadius: 4))
+        .background(Color(nsColor: .textBackgroundColor).opacity(0.5), in: RoundedRectangle(cornerRadius: appState.sf(4)))
     }
 }
 
@@ -227,11 +227,11 @@ struct ClaudeDiffBlock: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                HStack(alignment: .top, spacing: 4) {
+                HStack(alignment: .top, spacing: appState.sf(4)) {
                     Text(row.marker)
                         .font(.system(size: appState.sf(10.5), design: .monospaced))
                         .foregroundStyle(row.color)
-                        .frame(width: 10, alignment: .leading)
+                        .frame(width: appState.sf(10), alignment: .leading)
                     Text(row.text.isEmpty ? " " : row.text)
                         .font(.system(size: appState.sf(10.5), design: .monospaced))
                         .foregroundStyle(row.isChange ? .primary : .secondary)
@@ -239,14 +239,14 @@ struct ClaudeDiffBlock: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(.horizontal, 4)
-                .padding(.vertical, 0.5)
+                .padding(.horizontal, appState.sf(4))
+                .padding(.vertical, appState.sf(0.5))
                 .background(row.color.opacity(row.isChange ? 0.12 : 0))
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, appState.sf(4))
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(nsColor: .textBackgroundColor).opacity(0.5), in: RoundedRectangle(cornerRadius: 4))
+        .background(Color(nsColor: .textBackgroundColor).opacity(0.5), in: RoundedRectangle(cornerRadius: appState.sf(4)))
     }
 
     // MARK: Diff rows
@@ -307,9 +307,9 @@ struct ClaudeTodoList: View {
     let items: [ClaudeTodoItem]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: appState.sf(3)) {
             ForEach(items) { item in
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: appState.sf(6)) {
                     Image(systemName: glyph(for: item))
                         .font(.system(size: appState.sf(10)))
                         .foregroundStyle(item.isDone ? Color.green : item.isInProgress ? Color.accentColor : Color.secondary)
@@ -346,8 +346,8 @@ struct ClaudePermissionCard: View {
     @FocusState private var denyFocused: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: appState.sf(8)) {
+            HStack(spacing: appState.sf(6)) {
                 Image(systemName: "hand.raised.fill")
                     .font(.system(size: appState.sf(11)))
                     .foregroundStyle(.orange)
@@ -371,15 +371,15 @@ struct ClaudePermissionCard: View {
                 buttons
             }
         }
-        .padding(10)
+        .padding(appState.sf(10))
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+        .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: appState.sf(8)))
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: appState.sf(8))
                 .strokeBorder(Color.orange.opacity(0.45), lineWidth: 1)
         )
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
+        .padding(.horizontal, appState.sf(10))
+        .padding(.vertical, appState.sf(4))
     }
 
     // MARK: Preview of what is being approved
@@ -405,8 +405,8 @@ struct ClaudePermissionCard: View {
     // MARK: Actions
 
     private var buttons: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: appState.sf(6)) {
+            HStack(spacing: appState.sf(6)) {
                 Button("Allow") { onDecision(.allowOnce) }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
@@ -426,7 +426,7 @@ struct ClaudePermissionCard: View {
                 Button {
                     onDecision(.allowAlways(suggestion: suggestion))
                 } label: {
-                    HStack(spacing: 4) {
+                    HStack(spacing: appState.sf(4)) {
                         Image(systemName: "checkmark.shield")
                         Text(suggestion.label)
                             .lineLimit(1)
@@ -441,7 +441,7 @@ struct ClaudePermissionCard: View {
     }
 
     private var denyEditor: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: appState.sf(6)) {
             TextField("Tell Claude what to do instead (optional)", text: $denyMessage, axis: .vertical)
                 .textFieldStyle(.roundedBorder)
                 .font(.system(size: appState.sf(11)))
@@ -449,7 +449,7 @@ struct ClaudePermissionCard: View {
                 .focused($denyFocused)
                 .onSubmit { submitDenial() }
 
-            HStack(spacing: 6) {
+            HStack(spacing: appState.sf(6)) {
                 Button("Send denial") { submitDenial() }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
@@ -476,7 +476,7 @@ struct ClaudeNoticeRow: View {
     let level: ClaudeNoticeLevel
 
     var body: some View {
-        HStack(alignment: .top, spacing: 6) {
+        HStack(alignment: .top, spacing: appState.sf(6)) {
             Image(systemName: glyph)
                 .font(.system(size: appState.sf(10)))
                 .foregroundStyle(tint)
@@ -487,10 +487,10 @@ struct ClaudeNoticeRow: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(8)
-        .background(tint.opacity(level == .info ? 0.06 : 0.12), in: RoundedRectangle(cornerRadius: 6))
-        .padding(.horizontal, 10)
-        .padding(.vertical, 2)
+        .padding(appState.sf(8))
+        .background(tint.opacity(level == .info ? 0.06 : 0.12), in: RoundedRectangle(cornerRadius: appState.sf(6)))
+        .padding(.horizontal, appState.sf(10))
+        .padding(.vertical, appState.sf(2))
     }
 
     private var glyph: String {
@@ -522,11 +522,11 @@ struct ClaudeThinkingRow: View {
     @State private var isExpanded = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: appState.sf(4)) {
             Button {
                 isExpanded.toggle()
             } label: {
-                HStack(spacing: 5) {
+                HStack(spacing: appState.sf(5)) {
                     Image(systemName: "brain")
                         .font(.system(size: appState.sf(9.5)))
                     Text(isStreaming ? "Thinking…" : "Thought process")
@@ -548,11 +548,11 @@ struct ClaudeThinkingRow: View {
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.leading, 14)
+                    .padding(.leading, appState.sf(14))
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 3)
+        .padding(.horizontal, appState.sf(12))
+        .padding(.vertical, appState.sf(3))
     }
 }
 
@@ -565,7 +565,7 @@ struct ClaudeTurnSummaryRow: View {
     let result: ClaudeTurnResult
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: appState.sf(8)) {
             Rectangle().fill(Color.secondary.opacity(0.15)).frame(height: 1)
             Text(label)
                 .font(.system(size: appState.sf(9)))
@@ -573,8 +573,8 @@ struct ClaudeTurnSummaryRow: View {
                 .fixedSize()
             Rectangle().fill(Color.secondary.opacity(0.15)).frame(height: 1)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.horizontal, appState.sf(12))
+        .padding(.vertical, appState.sf(6))
     }
 
     private var label: String {

@@ -17,9 +17,19 @@ final class HoverWindowController: NSObject {
 
     private let panel: NSPanel
     private let textField = NSTextField(wrappingLabelWithString: "")
-    private let maxWidth: CGFloat = 420
-    private let maxHeight: CGFloat = 280
-    private let padding: CGFloat = 10
+    /// Point size of the panel's text; `EditorView` sets it from the editor
+    /// font so the popup zooms with Cmd+= / Cmd+-. The panel's max size and
+    /// padding scale with it (420×280 / 10 pt at the 12 pt default).
+    var fontSize: CGFloat = 12 {
+        didSet {
+            guard fontSize != oldValue else { return }
+            textField.font = .monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        }
+    }
+    private var scale: CGFloat { fontSize / 12 }
+    private var maxWidth: CGFloat { 420 * scale }
+    private var maxHeight: CGFloat { 280 * scale }
+    private var padding: CGFloat { 10 * scale }
 
     // MARK: Init
 
@@ -94,7 +104,7 @@ final class HoverWindowController: NSObject {
         effect.layer?.cornerRadius  = 8
         effect.layer?.masksToBounds = true
 
-        textField.font                 = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        textField.font                 = .monospacedSystemFont(ofSize: fontSize, weight: .regular)
         textField.textColor            = .labelColor
         textField.backgroundColor      = .clear
         textField.isBordered           = false

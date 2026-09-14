@@ -57,8 +57,8 @@ struct ActivityBarView: View {
                 openSettings()
             }
         }
-        .padding(.vertical, 4)
-        .frame(width: 48)
+        .padding(.vertical, appState.sf(4))
+        .frame(width: appState.sf(48))
         .background(Color(nsColor: .controlBackgroundColor))
         .overlay(alignment: .trailing) {
             Divider()
@@ -79,7 +79,7 @@ private struct ActivityBarButton: View {
             Image(systemName: systemImage)
                 .font(.system(size: appState.sf(20)))
                 .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
-                .frame(width: 44, height: 44)
+                .frame(width: appState.sf(44), height: appState.sf(44))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

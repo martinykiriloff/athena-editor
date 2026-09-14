@@ -115,6 +115,7 @@ struct MarkdownBlock: Identifiable, Sendable {
 /// not live-as-you-type — per the task's accepted simpler scope; switching
 /// back to Source and re-toggling to Preview re-parses the latest content.
 struct MarkdownPreviewView: View {
+    @Environment(AppState.self) private var appState
     let markdown: String
 
     private var blocks: [MarkdownBlock] {
@@ -123,12 +124,16 @@ struct MarkdownPreviewView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: appState.sf(10)) {
                 ForEach(blocks) { block in
                     blockView(block)
                 }
             }
-            .padding(20)
+            // Base body size for paragraphs/quotes/list items; headings and
+            // code blocks override it below. Reading `appState.sf` here also
+            // re-renders the preview whenever the UI zoom changes.
+            .font(.system(size: appState.sf(13)))
+            .padding(appState.sf(20))
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(Color(nsColor: .textBackgroundColor))
@@ -141,34 +146,34 @@ struct MarkdownPreviewView: View {
             Text(block.text)
                 .font(headingFont(level))
                 .fontWeight(.bold)
-                .padding(.top, level <= 2 ? 6 : 2)
+                .padding(.top, appState.sf(level <= 2 ? 6 : 2))
 
         case .codeBlock:
             Text(block.text)
-                .font(.system(.body, design: .monospaced))
+                .font(.system(size: appState.sf(13), design: .monospaced))
                 .textSelection(.enabled)
-                .padding(10)
+                .padding(appState.sf(10))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.primary.opacity(0.06))
-                .cornerRadius(6)
+                .cornerRadius(appState.sf(6))
 
         case .blockQuote:
-            HStack(alignment: .top, spacing: 8) {
+            HStack(alignment: .top, spacing: appState.sf(8)) {
                 Rectangle()
                     .fill(Color.secondary.opacity(0.5))
-                    .frame(width: 3)
+                    .frame(width: appState.sf(3))
                 Text(block.text)
                     .italic()
                     .foregroundStyle(.secondary)
             }
 
         case .listItem(let ordinal, let ordered):
-            HStack(alignment: .top, spacing: 6) {
+            HStack(alignment: .top, spacing: appState.sf(6)) {
                 Text(ordered ? "\(ordinal ?? 1)." : "•")
                     .foregroundStyle(.secondary)
                 Text(block.text)
             }
-            .padding(.leading, 8)
+            .padding(.leading, appState.sf(8))
 
         case .paragraph:
             Text(block.text)
@@ -178,10 +183,10 @@ struct MarkdownPreviewView: View {
 
     private func headingFont(_ level: Int) -> Font {
         switch level {
-        case 1:  return .system(size: 22)
-        case 2:  return .system(size: 19)
-        case 3:  return .system(size: 16)
-        default: return .system(size: 14)
+        case 1:  return .system(size: appState.sf(22))
+        case 2:  return .system(size: appState.sf(19))
+        case 3:  return .system(size: appState.sf(16))
+        default: return .system(size: appState.sf(14))
         }
     }
 }

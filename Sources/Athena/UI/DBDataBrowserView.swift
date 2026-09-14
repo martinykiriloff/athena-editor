@@ -26,9 +26,10 @@ struct DBDataBrowserView: View {
         NavigationSplitView {
             List(appState.dbBrowserTables, selection: $selectedTableId) { table in
                 Label(table.name, systemImage: "tablecells")
+                    .font(.system(size: appState.sf(13)))
                     .tag(table.id)
             }
-            .navigationSplitViewColumnWidth(min: 160, ideal: 220)
+            .navigationSplitViewColumnWidth(min: appState.sf(160), ideal: appState.sf(220))
         } detail: {
             VStack(spacing: 0) {
                 Picker("Mode", selection: $mode) {
@@ -36,8 +37,8 @@ struct DBDataBrowserView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .frame(width: 200)
-                .padding(8)
+                .frame(width: appState.sf(200))
+                .padding(appState.sf(8))
                 Divider()
                 switch mode {
                 case .browse: browseContent
@@ -45,7 +46,7 @@ struct DBDataBrowserView: View {
                 }
             }
         }
-        .frame(minWidth: 940, minHeight: 580)
+        .frame(minWidth: appState.sf(940), minHeight: appState.sf(580))
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button("Done") { dismiss() }
@@ -99,14 +100,14 @@ private struct DBQueryConsoleView: View {
                 TextEditor(text: $queryText)
                     .font(.system(size: appState.sf(13), design: .monospaced))
                     .scrollContentBackground(.hidden)
-                    .padding(6)
+                    .padding(appState.sf(6))
                     .onAppear {
                         if queryText.isEmpty, let table = selectedTable {
                             queryText = "SELECT * FROM \(table.qualifiedSQL) LIMIT 100;"
                         }
                     }
                 Divider()
-                HStack(spacing: 8) {
+                HStack(spacing: appState.sf(8)) {
                     Button {
                         Task { await appState.runDBQuery(queryText) }
                     } label: {
@@ -115,22 +116,22 @@ private struct DBQueryConsoleView: View {
                     .keyboardShortcut(.return, modifiers: .command)
                     .disabled(appState.dbQueryIsRunning || queryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     Text("⌘↩")
-                        .font(.caption)
+                        .font(.system(size: appState.sf(11)))
                         .foregroundStyle(.tertiary)
                     if appState.dbQueryIsRunning {
                         ProgressView().controlSize(.small)
                     }
                     Spacer()
                     Text("One statement per run")
-                        .font(.caption)
+                        .font(.system(size: appState.sf(11)))
                         .foregroundStyle(.tertiary)
                 }
-                .padding(8)
+                .padding(appState.sf(8))
             }
-            .frame(minHeight: 120)
+            .frame(minHeight: appState.sf(120))
 
             resultContent
-                .frame(minHeight: 160)
+                .frame(minHeight: appState.sf(160))
         }
     }
 
@@ -166,6 +167,7 @@ private struct DBQueryConsoleView: View {
 // MARK: - DBResultGridView (read-only)
 
 private struct DBResultGridView: View {
+    @Environment(AppState.self) private var appState
     let columns: [DBColumn]
     let rows: [DBRow]
     let footer: String
@@ -177,17 +179,18 @@ private struct DBResultGridView: View {
                     TableColumn(column.name) { row in
                         let value = row.values[column.name] ?? .null
                         Text(value == .null ? "NULL" : value.displayString)
+                            .font(.system(size: appState.sf(13)))
                             .foregroundStyle(value == .null ? .tertiary : .primary)
                     }
                 }
             }
             Divider()
             HStack {
-                Text(footer).font(.caption).foregroundStyle(.secondary)
+                Text(footer).font(.system(size: appState.sf(11))).foregroundStyle(.secondary)
                 Spacer()
                 DBExportButton(columns: columns, rows: rows, suggestedName: "query-result")
             }
-            .padding(8)
+            .padding(appState.sf(8))
         }
     }
 }
@@ -195,6 +198,7 @@ private struct DBResultGridView: View {
 // MARK: - DBTableGridView
 
 private struct DBTableGridView: View {
+    @Environment(AppState.self) private var appState
     let data: DBTableData
 
     private var isEditable: Bool { data.columns.contains(where: \.isPrimaryKey) }
@@ -216,17 +220,17 @@ private struct DBTableGridView: View {
     private var footer: some View {
         HStack {
             Text(footerText)
-                .font(.caption)
+                .font(.system(size: appState.sf(11)))
                 .foregroundStyle(.secondary)
             Spacer()
             if !isEditable {
                 Label("Read-only — no primary key", systemImage: "lock")
-                    .font(.caption)
+                    .font(.system(size: appState.sf(11)))
                     .foregroundStyle(.secondary)
             }
             DBExportButton(columns: data.columns, rows: data.rows, suggestedName: data.table.name)
         }
-        .padding(8)
+        .padding(appState.sf(8))
     }
 
     private var footerText: String {
@@ -241,6 +245,7 @@ private struct DBTableGridView: View {
 /// "Export…" → save panel → CSV or JSON by the chosen extension. The grid's
 /// rows are exported as fetched (same limit the grid shows).
 private struct DBExportButton: View {
+    @Environment(AppState.self) private var appState
     let columns: [DBColumn]
     let rows: [DBRow]
     let suggestedName: String
@@ -252,6 +257,7 @@ private struct DBExportButton: View {
             }
         } label: {
             Label("Export", systemImage: "square.and.arrow.up")
+                .font(.system(size: appState.sf(13)))
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
@@ -291,6 +297,7 @@ private struct DBCellView: View {
         Group {
             if isEditing {
                 TextField("", text: $text, onCommit: commit)
+                    .font(.system(size: appState.sf(13)))
                     .textFieldStyle(.plain)
                     .focused($isFocused)
                     // Table cells never receive keyboard focus on their own
@@ -301,6 +308,7 @@ private struct DBCellView: View {
                     .onExitCommand { isEditing = false }
             } else {
                 Text(currentValue == .null ? "NULL" : currentValue.displayString)
+                    .font(.system(size: appState.sf(13)))
                     .foregroundStyle(currentValue == .null ? .tertiary : .primary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())

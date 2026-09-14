@@ -11,12 +11,14 @@ import Synchronization
 struct TerminalView: NSViewRepresentable {
     let session: TerminalSession
     var isActive: Bool
+    /// Follows the UI zoom (`AppState.sf(13)`) so Cmd+= / Cmd+- resize the
+    /// terminal together with the rest of the window.
+    var fontSize: CGFloat = 13
 
     func makeNSView(context: Context) -> LocalProcessTerminalView {
         let tv = LocalProcessTerminalView(frame: .zero)
 
-        tv.font = NSFont(name: "JetBrains Mono", size: 13)
-            ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        tv.font = Self.font(ofSize: fontSize)
 
         tv.nativeBackgroundColor = NSColor(calibratedRed: 0.118, green: 0.133, blue: 0.161, alpha: 1)
         tv.nativeForegroundColor = NSColor(calibratedRed: 0.678, green: 0.733, blue: 0.820, alpha: 1)
@@ -43,6 +45,10 @@ struct TerminalView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: LocalProcessTerminalView, context: Context) {
+        if nsView.font.pointSize != fontSize {
+            nsView.font = Self.font(ofSize: fontSize)
+        }
+
         // Focus the active session's shell so typing reaches it right after
         // switching tabs. `BottomPanelView` keeps every session's view
         // mounted (just hidden via opacity) so this fires on every relevant
@@ -66,6 +72,11 @@ struct TerminalView: NSViewRepresentable {
         coordinator.cancelPendingRetry()
         nsView.processDelegate = nil
         nsView.terminate()
+    }
+
+    private static func font(ofSize size: CGFloat) -> NSFont {
+        NSFont(name: "JetBrains Mono", size: size)
+            ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
     }
 
     func makeCoordinator() -> Coordinator {

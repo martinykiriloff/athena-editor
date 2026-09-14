@@ -561,24 +561,31 @@ actor LSPManager {
     /// GUI-launched app only inherits a minimal `PATH`
     /// (`/usr/bin:/bin:/usr/sbin:/sbin`), which none of nvm/pyenv/rbenv ever
     /// touch — they only extend `PATH` via shell rc files.
+    ///
+    /// Fallbacks list `/opt/homebrew` (native arm64) before `/usr/local` (the
+    /// Intel Homebrew prefix, which runs under Rosetta after a migration).
     private func executablePath(for language: Language) async -> String? {
         switch language {
         case .typescript, .javascript:
             return await firstExecutable(named: "typescript-language-server") ?? firstExecutable(at: [
-                "/usr/local/bin/typescript-language-server",
                 "/opt/homebrew/bin/typescript-language-server",
+                "/usr/local/bin/typescript-language-server",
             ])
         case .python:
-            return await firstExecutable(named: "pylsp") ?? firstExecutable(at: ["/usr/local/bin/pylsp"])
+            return await firstExecutable(named: "pylsp") ?? firstExecutable(at: [
+                "/opt/homebrew/bin/pylsp",
+                "/usr/local/bin/pylsp",
+            ])
         case .rust:
             return await firstExecutable(named: "rust-analyzer") ?? firstExecutable(at: [
+                "/opt/homebrew/bin/rust-analyzer",
                 "/usr/local/bin/rust-analyzer",
                 (NSHomeDirectory() as NSString).appendingPathComponent(".cargo/bin/rust-analyzer"),
             ])
         case .go:
             return await firstExecutable(named: "gopls") ?? firstExecutable(at: [
-                "/usr/local/bin/gopls",
                 "/opt/homebrew/bin/gopls",
+                "/usr/local/bin/gopls",
             ])
         case .swift:
             if let path = firstExecutable(at: ["/usr/bin/sourcekit-lsp"]) {

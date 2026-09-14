@@ -936,7 +936,9 @@ actor DebugService {
     }
 
     private func findPythonDebugPy() throws -> String {
-        for path in ["/usr/local/bin/python3", "/usr/bin/python3", "/opt/homebrew/bin/python3"] {
+        // Native Apple Silicon Homebrew first: /usr/local is the Intel prefix,
+        // and a migrated Intel install there would run under Rosetta.
+        for path in ["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"] {
             if FileManager.default.fileExists(atPath: path) { return path }
         }
         throw DAPError.adapterNotFound("python3 not found.")
@@ -1045,7 +1047,8 @@ actor DebugService {
     private func findNodeBinary() -> String? {
         if let cached = cachedNodePath { return cached }
         let home = NSHomeDirectory()
-        var candidates = ["/usr/local/bin/node", "/opt/homebrew/bin/node", "/usr/bin/node"]
+        // /opt/homebrew (native arm64) before /usr/local (Intel Homebrew prefix).
+        var candidates = ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"]
 
         // nvm keeps one directory per installed version; prefer the newest,
         // compared numerically so v26 beats v9.
@@ -1067,8 +1070,8 @@ actor DebugService {
     /// `@vscode/js-debug`'s DAP server script, when the user has it installed.
     nonisolated static func jsDebugServerPath() -> String? {
         let candidates = [
-            "/usr/local/lib/node_modules/@vscode/js-debug/src/dapDebugServer.js",
             "/opt/homebrew/lib/node_modules/@vscode/js-debug/src/dapDebugServer.js",
+            "/usr/local/lib/node_modules/@vscode/js-debug/src/dapDebugServer.js",
             "/usr/lib/node_modules/@vscode/js-debug/src/dapDebugServer.js",
         ]
         return candidates.first { FileManager.default.fileExists(atPath: $0) }

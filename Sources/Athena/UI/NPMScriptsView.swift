@@ -38,7 +38,7 @@ struct NPMScriptsView: View {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: appState.sf(13)))
                     .foregroundColor(.secondary)
-                    .frame(width: 28, height: 28)
+                    .frame(width: appState.sf(28), height: appState.sf(28))
             }
             .buttonStyle(.plain)
             .help("Refresh scripts")
@@ -50,21 +50,21 @@ struct NPMScriptsView: View {
                     Image(systemName: "trash")
                         .font(.system(size: appState.sf(13)))
                         .foregroundColor(.secondary)
-                        .frame(width: 28, height: 28)
+                        .frame(width: appState.sf(28), height: appState.sf(28))
                 }
                 .buttonStyle(.plain)
                 .help("Clear output")
             }
         }
-        .padding(.horizontal, 6)
-        .frame(height: 28)
+        .padding(.horizontal, appState.sf(6))
+        .frame(height: appState.sf(28))
         .background(Color(nsColor: .controlBackgroundColor))
     }
 
     // MARK: Empty state
 
     private func emptyState(message: String, icon: String) -> some View {
-        VStack(spacing: 8) {
+        VStack(spacing: appState.sf(8)) {
             Image(systemName: icon)
                 .font(.system(size: appState.sf(28)))
                 .foregroundColor(.secondary)
@@ -74,7 +74,7 @@ struct NPMScriptsView: View {
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding()
+        .padding(appState.sf(16))
     }
 
     // MARK: Package list
@@ -112,11 +112,11 @@ private struct PackageGroupView: View {
             Button {
                 withAnimation(.easeInOut(duration: 0.15)) { isExpanded.toggle() }
             } label: {
-                HStack(spacing: 6) {
+                HStack(spacing: appState.sf(6)) {
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                         .font(.system(size: appState.sf(10)))
                         .foregroundColor(.secondary)
-                        .frame(width: 12)
+                        .frame(width: appState.sf(12))
 
                     Image(systemName: "shippingbox.fill")
                         .font(.system(size: appState.sf(12)))
@@ -130,20 +130,20 @@ private struct PackageGroupView: View {
                     Text(package.packageManager.rawValue)
                         .font(.system(size: appState.sf(10)))
                         .foregroundColor(pmColor)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
+                        .padding(.horizontal, appState.sf(4))
+                        .padding(.vertical, appState.sf(1))
                         .background(pmColor.opacity(0.15))
-                        .cornerRadius(3)
+                        .cornerRadius(appState.sf(3))
 
                     Spacer()
 
                     Text("\(package.scripts.count)")
                         .font(.system(size: appState.sf(10)))
                         .foregroundColor(.secondary)
-                        .padding(.trailing, 4)
+                        .padding(.trailing, appState.sf(4))
                 }
-                .padding(.horizontal, 12)
-                .frame(height: 30)
+                .padding(.horizontal, appState.sf(12))
+                .frame(height: appState.sf(30))
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -171,15 +171,15 @@ private struct ScriptRowView: View {
     private var isRunning: Bool { appState.runningScriptKeys.contains(runKey) }
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: appState.sf(6)) {
             // indentation
-            Color.clear.frame(width: 28)
+            Color.clear.frame(width: appState.sf(28))
 
             Image(systemName: "arrowtriangle.right.fill")
                 .font(.system(size: appState.sf(8)))
                 .foregroundColor(.secondary)
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: appState.sf(2)) {
                 Text(script.name)
                     .font(.system(size: appState.sf(12)))
                     .foregroundColor(.primary)
@@ -207,20 +207,20 @@ private struct ScriptRowView: View {
                     Image(systemName: isRunning ? "stop.fill" : "play.fill")
                         .font(.system(size: appState.sf(11)))
                         .foregroundColor(isRunning ? .red : Color.green)
-                        .frame(width: 26, height: 26)
+                        .frame(width: appState.sf(26), height: appState.sf(26))
                         .background(
-                            RoundedRectangle(cornerRadius: 4)
+                            RoundedRectangle(cornerRadius: appState.sf(4))
                                 .fill((isRunning ? Color.red : Color.green).opacity(0.15))
                         )
                 }
                 .buttonStyle(.plain)
                 .help(isRunning ? "Stop \(script.name)" : "Run \(script.name)")
-                .padding(.trailing, 4)
+                .padding(.trailing, appState.sf(4))
             }
         }
-        .padding(.horizontal, 12)
-        .frame(minHeight: 28)
-        .padding(.vertical, (isHovering || isRunning) ? 4 : 0)
+        .padding(.horizontal, appState.sf(12))
+        .frame(minHeight: appState.sf(28))
+        .padding(.vertical, (isHovering || isRunning) ? appState.sf(4) : 0)
         .background(
             isRunning
                 ? Color.green.opacity(0.08)

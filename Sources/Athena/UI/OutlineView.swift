@@ -65,13 +65,13 @@ private struct OutlineSymbolRow: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
-        HStack(spacing: 6) {
-            Color.clear.frame(width: CGFloat(depth) * 14, height: 1)
+        HStack(spacing: appState.sf(6)) {
+            Color.clear.frame(width: CGFloat(depth) * appState.sf(14), height: 1)
 
             Image(systemName: symbol.iconName)
                 .font(.system(size: appState.sf(11)))
                 .foregroundColor(.secondary)
-                .frame(width: 14)
+                .frame(width: appState.sf(14))
 
             Text(symbol.name)
                 .font(.system(size: appState.sf(12)))
@@ -80,8 +80,8 @@ private struct OutlineSymbolRow: View {
 
             Spacer()
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 3)
+        .padding(.horizontal, appState.sf(8))
+        .padding(.vertical, appState.sf(3))
         .contentShape(Rectangle())
         .onTapGesture { onTap() }
     }

@@ -9,7 +9,7 @@ import SwiftUI
 struct BottomPanelView: View {
     @Environment(AppState.self) private var appState
 
-    private let tabBarHeight: CGFloat = 28
+    private var tabBarHeight: CGFloat { appState.sf(28) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -35,7 +35,7 @@ struct BottomPanelView: View {
                 Image(systemName: "xmark")
                     .font(.system(size: appState.sf(11)))
                     .foregroundColor(.secondary)
-                    .frame(width: 28, height: tabBarHeight)
+                    .frame(width: appState.sf(28), height: tabBarHeight)
             }
             .buttonStyle(.plain)
             .help("Close Panel")
@@ -54,13 +54,13 @@ struct BottomPanelView: View {
             Text(panelLabel(panel))
                 .font(.system(size: appState.sf(12), weight: isActive ? .medium : .regular))
                 .foregroundColor(isActive ? .primary : .secondary)
-                .padding(.horizontal, 12)
+                .padding(.horizontal, appState.sf(12))
                 .frame(height: tabBarHeight)
                 .overlay(alignment: .bottom) {
                     if isActive {
                         Rectangle()
                             .fill(Color.accentColor)
-                            .frame(height: 2)
+                            .frame(height: appState.sf(2))
                     }
                 }
         }
@@ -128,7 +128,7 @@ private struct TerminalPanelView: View {
                 ZStack {
                     ForEach(appState.terminalSessions) { session in
                         let isActive = session.id == appState.activeTerminalSessionId
-                        TerminalView(session: session, isActive: isActive)
+                        TerminalView(session: session, isActive: isActive, fontSize: appState.sf(13))
                             .opacity(isActive ? 1 : 0)
                             .allowsHitTesting(isActive)
                     }
@@ -138,7 +138,7 @@ private struct TerminalPanelView: View {
     }
 
     private var emptyState: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: appState.sf(8)) {
             Text("No terminal sessions")
                 .font(.system(size: appState.sf(13)))
                 .foregroundColor(.secondary)
@@ -171,7 +171,7 @@ struct ProblemsView: View {
     }
 
     private var emptyState: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: appState.sf(8)) {
             Image(systemName: "checkmark.circle")
                 .font(.system(size: appState.sf(28)))
                 .foregroundColor(.secondary)
@@ -210,11 +210,11 @@ private struct DiagnosticRowView: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
+        HStack(alignment: .top, spacing: appState.sf(8)) {
             severityIcon
                 .font(.system(size: appState.sf(13)))
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: appState.sf(2)) {
                 Text(diagnostic.message)
                     .font(.system(size: appState.sf(12)))
                     .foregroundColor(.primary)
@@ -226,7 +226,7 @@ private struct DiagnosticRowView: View {
 
             Spacer()
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, appState.sf(2))
     }
 
     @ViewBuilder
@@ -266,13 +266,13 @@ struct OutputView: View {
                         Image(systemName: "trash")
                             .font(.system(size: appState.sf(12)))
                             .foregroundColor(.secondary)
-                            .frame(width: 28, height: 24)
+                            .frame(width: appState.sf(28), height: appState.sf(24))
                     }
                     .buttonStyle(.plain)
                     .help("Clear output")
                 }
             }
-            .frame(height: 24)
+            .frame(height: appState.sf(24))
             .background(Color(nsColor: .controlBackgroundColor))
 
             Divider()
@@ -285,7 +285,7 @@ struct OutputView: View {
                         .font(.system(size: appState.sf(12), design: .monospaced))
                         .foregroundColor(appState.scriptOutput.isEmpty ? .secondary : .primary)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(8)
+                        .padding(appState.sf(8))
                         .id("bottom")
                 }
                 .onChange(of: appState.scriptOutput) { _, _ in

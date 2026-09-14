@@ -13,7 +13,7 @@ import SwiftUI
 struct TerminalTabStripView: View {
     @Environment(AppState.self) private var appState
 
-    private let stripHeight: CGFloat = 28
+    private var stripHeight: CGFloat { appState.sf(28) }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -22,13 +22,13 @@ struct TerminalTabStripView: View {
                     ForEach(appState.terminalSessions) { session in
                         TerminalTabItemView(session: session)
                         Divider()
-                            .frame(height: 14)
+                            .frame(height: appState.sf(14))
                     }
                 }
             }
 
             Divider()
-                .frame(height: 14)
+                .frame(height: appState.sf(14))
 
             Button {
                 appState.newTerminalSession()
@@ -36,7 +36,7 @@ struct TerminalTabStripView: View {
                 Image(systemName: "plus")
                     .font(.system(size: appState.sf(11), weight: .medium))
                     .foregroundColor(.secondary)
-                    .frame(width: 28, height: stripHeight)
+                    .frame(width: appState.sf(28), height: stripHeight)
             }
             .buttonStyle(.plain)
             .help("New Terminal")
@@ -61,7 +61,7 @@ private struct TerminalTabItemView: View {
     }
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: appState.sf(6)) {
             Image(systemName: "terminal")
                 .font(.system(size: appState.sf(11)))
                 .foregroundColor(isActive ? .primary : .secondary)
@@ -79,25 +79,25 @@ private struct TerminalTabItemView: View {
                     Image(systemName: "xmark")
                         .font(.system(size: appState.sf(9), weight: .medium))
                         .foregroundColor(.secondary)
-                        .frame(width: 14, height: 14)
+                        .frame(width: appState.sf(14), height: appState.sf(14))
                         .background(
                             Circle()
                                 .fill(Color.primary.opacity(isHovering ? 0.1 : 0))
                         )
                 }
                 .buttonStyle(.plain)
-                .frame(width: 14, height: 14)
+                .frame(width: appState.sf(14), height: appState.sf(14))
             }
         }
-        .padding(.horizontal, 10)
-        .frame(minWidth: 90, maxWidth: 160, alignment: .leading)
-        .frame(height: 28)
+        .padding(.horizontal, appState.sf(10))
+        .frame(minWidth: appState.sf(90), maxWidth: appState.sf(160), alignment: .leading)
+        .frame(height: appState.sf(28))
         .background(tabBackground)
         .overlay(alignment: .bottom) {
             if isActive {
                 Rectangle()
                     .fill(Color.accentColor)
-                    .frame(height: 2)
+                    .frame(height: appState.sf(2))
             }
         }
         .contentShape(Rectangle())

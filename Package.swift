@@ -29,6 +29,10 @@ let package = Package(
                 .product(name: "PostgresNIO", package: "postgres-nio"),
             ],
             path: "Sources/Athena",
+            // Material Icon Theme (MIT, © Material Extensions) — the SVG set
+            // and its file/folder mapping, bundled so the file tree can show
+            // the same icons VS Code users know. Licence text ships with it.
+            resources: [.copy("Resources/MaterialIcons")],
             swiftSettings: [
                 .swiftLanguageMode(.v6)
             ]

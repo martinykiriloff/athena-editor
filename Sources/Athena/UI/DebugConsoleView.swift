@@ -35,7 +35,7 @@ struct DebugConsoleView: View {
     private var transcript: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: appState.sf(6)) {
                     // The session's own transcript: what was launched, the
                     // debuggee's stdout/stderr, and why a launch failed.
                     // This was collected but displayed by no view at all, so
@@ -55,7 +55,7 @@ struct DebugConsoleView: View {
                                  : "Start debugging and pause execution to evaluate expressions.")
                                 .font(.system(size: appState.sf(12)))
                                 .foregroundColor(.secondary)
-                                .padding(8)
+                                .padding(appState.sf(8))
                         }
                     } else {
                         ForEach(appState.debugConsoleEntries) { entry in
@@ -64,7 +64,7 @@ struct DebugConsoleView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(8)
+                .padding(appState.sf(8))
                 .id("bottom")
             }
             .onChange(of: appState.debugConsoleEntries.count) { _, _ in
@@ -77,7 +77,7 @@ struct DebugConsoleView: View {
     }
 
     private func consoleEntryRow(_ entry: DebugConsoleEntry) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: appState.sf(2)) {
             Text("› \(entry.expression)")
                 .font(.system(size: appState.sf(12), design: .monospaced))
                 .foregroundColor(.secondary)
@@ -92,7 +92,7 @@ struct DebugConsoleView: View {
     // MARK: Input row
 
     private var inputRow: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: appState.sf(6)) {
             Image(systemName: "chevron.right")
                 .font(.system(size: appState.sf(11)))
                 .foregroundColor(.secondary)
@@ -107,8 +107,8 @@ struct DebugConsoleView: View {
                     Task { await appState.evaluateInConsole(expression) }
                 }
         }
-        .padding(.horizontal, 10)
-        .frame(height: 30)
+        .padding(.horizontal, appState.sf(10))
+        .frame(height: appState.sf(30))
         .background(Color(nsColor: .controlBackgroundColor))
     }
 }

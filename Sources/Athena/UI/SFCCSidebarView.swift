@@ -53,7 +53,7 @@ struct SFCCSidebarView: View {
         HStack {
             Spacer()
             if appState.isUploadingCartridges {
-                ProgressView().controlSize(.mini).padding(.trailing, 6)
+                ProgressView().controlSize(.mini).padding(.trailing, appState.sf(6))
             } else {
                 Button { showUploadAllConfirmation = true } label: {
                     Image(systemName: "arrow.up.doc.on.clipboard")
@@ -63,7 +63,7 @@ struct SFCCSidebarView: View {
                 .buttonStyle(.plain)
                 .help("Upload all cartridges to the active sandbox")
                 .disabled(!appState.sfccConnections.contains(where: \.isActive))
-                .padding(.trailing, 6)
+                .padding(.trailing, appState.sf(6))
             }
 
             Button { showAddSheet = true } label: {
@@ -73,15 +73,15 @@ struct SFCCSidebarView: View {
             }
             .buttonStyle(.plain)
             .help("Add Sandbox")
-            .padding(.trailing, 8)
+            .padding(.trailing, appState.sf(8))
         }
-        .frame(height: 28)
+        .frame(height: appState.sf(28))
         .background(Color(nsColor: .controlBackgroundColor))
         .overlay(alignment: .bottom) { Divider() }
     }
 
     private var emptyState: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: appState.sf(12)) {
             Image(systemName: "cloud")
                 .font(.system(size: appState.sf(32)))
                 .foregroundStyle(.tertiary)
@@ -138,12 +138,12 @@ private struct SFCCConnectionRow: View {
     @State private var isHovered = false
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: appState.sf(10)) {
             Circle()
                 .fill(connection.isActive ? Color.green : Color.secondary.opacity(0.4))
-                .frame(width: 7, height: 7)
+                .frame(width: appState.sf(7), height: appState.sf(7))
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: appState.sf(2)) {
                 Text(connection.name)
                     .font(.system(size: appState.sf(12), weight: .medium))
                     .foregroundStyle(.primary)
@@ -157,7 +157,7 @@ private struct SFCCConnectionRow: View {
             Spacer()
 
             if isHovered {
-                HStack(spacing: 2) {
+                HStack(spacing: appState.sf(2)) {
                     sfccIconButton("pencil",      help: "Edit",                         action: onEdit)
                     sfccIconButton(connection.isActive ? "stop.fill" : "bolt.fill",
                                   help: connection.isActive ? "Deactivate" : "Activate", action: onToggle)
@@ -165,8 +165,8 @@ private struct SFCCConnectionRow: View {
                 }
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
+        .padding(.horizontal, appState.sf(10))
+        .padding(.vertical, appState.sf(7))
         .contentShape(Rectangle())
         .onHover { isHovered = $0 }
     }
@@ -177,7 +177,7 @@ private struct SFCCConnectionRow: View {
             Image(systemName: name)
                 .font(.system(size: appState.sf(11)))
                 .foregroundStyle(.secondary)
-                .frame(width: 22, height: 22)
+                .frame(width: appState.sf(22), height: appState.sf(22))
         }
         .buttonStyle(.plain)
         .help(help)
@@ -188,6 +188,7 @@ private struct SFCCConnectionRow: View {
 
 struct SFCCConnectionFormView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(AppState.self) private var appState
     private let original: SFCCConnection?
     private let onSave: (SFCCConnection) -> Void
 
@@ -214,14 +215,14 @@ struct SFCCConnectionFormView: View {
         VStack(spacing: 0) {
             HStack {
                 Text(original == nil ? "New Sandbox" : "Edit Sandbox")
-                    .font(.headline)
+                    .font(.system(size: appState.sf(13), weight: .semibold))
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("Save")   { save()    }.keyboardShortcut(.defaultAction)
                     .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty ||
                               hostname.trimmingCharacters(in: .whitespaces).isEmpty)
             }
-            .padding()
+            .padding(appState.sf(16))
             Divider()
 
             Form {
@@ -257,7 +258,7 @@ struct SFCCConnectionFormView: View {
             }
             .formStyle(.grouped)
         }
-        .frame(width: 460)
+        .frame(width: appState.sf(460))
         .fixedSize(horizontal: false, vertical: true)
     }
 

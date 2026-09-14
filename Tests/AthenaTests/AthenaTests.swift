@@ -4164,3 +4164,108 @@ struct BundledBreakpointTests {
         #expect(pattern.hasSuffix("app\\.js$"))
     }
 }
+
+// MARK: - Material file icons
+
+@Suite("MaterialIconTheme")
+@MainActor
+struct MaterialIconThemeTests {
+    private let theme = MaterialIconTheme.shared
+
+    @Test func theIconSetIsBundled() {
+        #expect(theme.isAvailable, "the Material icon resources should ship with the app")
+    }
+
+    @Test func commonSourceFilesGetTheirLanguageIcon() {
+        #expect(theme.iconName(forFileNamed: "index.ts") == "typescript")
+        #expect(theme.iconName(forFileNamed: "App.tsx") == "react_ts")
+        #expect(theme.iconName(forFileNamed: "main.swift") == "swift")
+        #expect(theme.iconName(forFileNamed: "styles.css") == "css")
+        #expect(theme.iconName(forFileNamed: "README.md") == "readme")
+    }
+
+    /// A longer extension wins: a Storybook story is not just a React file,
+    /// and a declaration file is not just TypeScript.
+    @Test func theLongestExtensionWins() {
+        #expect(theme.iconName(forFileNamed: "Button.stories.tsx") == "storybook")
+        #expect(theme.iconName(forFileNamed: "types.d.ts") == "typescript-def")
+        #expect(theme.iconName(forFileNamed: "app.test.ts") == "test-ts")
+    }
+
+    /// An exact file name beats any extension rule.
+    @Test func anExactNameBeatsTheExtension() {
+        #expect(theme.iconName(forFileNamed: "package.json") == "nodejs")
+        #expect(theme.iconName(forFileNamed: "tsconfig.json") == "tsconfig")
+        #expect(theme.iconName(forFileNamed: "Dockerfile") == "docker")
+        // …while a plain .json file still gets the generic JSON icon.
+        #expect(theme.iconName(forFileNamed: "data.json") == "json")
+    }
+
+    @Test func unknownAndExtensionlessFilesFallBack() {
+        #expect(theme.iconName(forFileNamed: "notes.zzzzz") == "file")
+        #expect(theme.iconName(forFileNamed: "LICENSE-ish") == "file")
+        #expect(theme.iconName(forFileNamed: "") == "file")
+    }
+
+    @Test func foldersHaveOpenAndClosedForms() {
+        #expect(theme.iconName(forFolderNamed: "src", isExpanded: false) == "folder-src")
+        #expect(theme.iconName(forFolderNamed: "src", isExpanded: true) == "folder-src-open")
+        #expect(theme.iconName(forFolderNamed: "node_modules", isExpanded: false) == "folder-node")
+        // An unremarkable folder gets the generic pair.
+        #expect(theme.iconName(forFolderNamed: "zzz-unknown", isExpanded: false) == "folder")
+        #expect(theme.iconName(forFolderNamed: "zzz-unknown", isExpanded: true) == "folder-open")
+    }
+
+    @Test func matchingIgnoresCase() {
+        #expect(theme.iconName(forFileNamed: "INDEX.TS") == "typescript")
+        #expect(theme.iconName(forFolderNamed: "SRC", isExpanded: false) == "folder-src")
+    }
+
+    /// Every icon the mapping can return must actually render, including the
+    /// 72 whose file name isn't derived from the icon name.
+    @Test func theIconsThemselvesRender() throws {
+        for name in ["typescript", "react_ts", "swift", "folder-src", "folder-src-open", "file", "latex"] {
+            let image = try #require(theme.image(named: name), "\(name) should load")
+            #expect(image.size.width > 0 && image.size.height > 0)
+        }
+        #expect(theme.image(named: "definitely-not-an-icon") == nil)
+    }
+
+    @Test func imagesAreResolvedFromRealFilenames() throws {
+        let image = try #require(theme.image(forFileNamed: "server.ts"))
+        #expect(image.size.width > 0)
+        let folder = try #require(theme.image(forFolderNamed: "src", isExpanded: true))
+        #expect(folder.size.width > 0)
+    }
+}
+
+// MARK: - Icon resources reach the shipped app
+
+@Suite("Material icon packaging")
+@MainActor
+struct MaterialIconPackagingTests {
+    /// The app is assembled by the Makefile, which copies the binary by
+    /// hand — a resource bundle it forgets to copy would leave the shipped
+    /// build with no icons while every test still passed.
+    @Test func theBuiltAppCarriesTheIconSet() throws {
+        let app = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent("Athena.app")
+        try #require(FileManager.default.fileExists(atPath: app.path),
+                     "run `make bundle` before this test")
+
+        let mapping = app.appendingPathComponent(
+            "Contents/Resources/Athena_Athena.bundle/MaterialIcons/material-icons.json")
+        let alternative = app.appendingPathComponent(
+            "Contents/Resources/Athena_Athena.bundle/Contents/Resources/MaterialIcons/material-icons.json")
+        #expect(FileManager.default.fileExists(atPath: mapping.path)
+                || FileManager.default.fileExists(atPath: alternative.path),
+                "the packaged app is missing the Material icon mapping")
+
+        // The licence must ship with the icons: they are MIT, not ours.
+        let licence = mapping.deletingLastPathComponent().appendingPathComponent("LICENSE")
+        let licenceAlt = alternative.deletingLastPathComponent().appendingPathComponent("LICENSE")
+        #expect(FileManager.default.fileExists(atPath: licence.path)
+                || FileManager.default.fileExists(atPath: licenceAlt.path),
+                "the Material Icon Theme licence must be redistributed with its icons")
+    }
+}

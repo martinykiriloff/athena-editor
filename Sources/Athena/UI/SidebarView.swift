@@ -77,8 +77,8 @@ private struct SidebarHeaderView: View {
                 // gives the same visual result universally.
             Spacer()
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .frame(height: 30)
+        .padding(.horizontal, appState.sf(12))
+        .padding(.vertical, appState.sf(6))
+        .frame(height: appState.sf(30))
     }
 }

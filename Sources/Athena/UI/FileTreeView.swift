@@ -67,7 +67,7 @@ struct FileTreeView: View {
     // MARK: Header
 
     private var headerBar: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: appState.sf(4)) {
             Text(appState.workspace?.name ?? "No Workspace")
                 .font(.system(size: appState.sf(11), weight: .semibold))
                 .foregroundColor(.secondary)
@@ -105,9 +105,9 @@ struct FileTreeView: View {
                 collapseAll(&appState.fileTree)
             }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .frame(height: 32)
+        .padding(.horizontal, appState.sf(8))
+        .padding(.vertical, appState.sf(6))
+        .frame(height: appState.sf(32))
     }
 
     @ViewBuilder
@@ -283,10 +283,10 @@ private struct FileNodeRow: View {
     @State private var isHovering: Bool = false
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: appState.sf(4)) {
             // Indentation
             Color.clear
-                .frame(width: CGFloat(node.depth) * 14, height: 1)
+                .frame(width: CGFloat(node.depth) * appState.sf(14), height: 1)
 
             // Chevron (directories only)
             if node.isDirectory {
@@ -295,15 +295,15 @@ private struct FileNodeRow: View {
                     .foregroundColor(.secondary)
                     .rotationEffect(node.isExpanded ? .degrees(90) : .degrees(0))
                     .animation(.easeInOut(duration: 0.15), value: node.isExpanded)
-                    .frame(width: 14)
+                    .frame(width: appState.sf(14))
             } else {
-                Color.clear.frame(width: 14)
+                Color.clear.frame(width: appState.sf(14))
             }
 
             // File/folder icon
             fileIcon
                 .font(.system(size: appState.sf(13)))
-                .frame(width: 16)
+                .frame(width: appState.sf(16))
 
             // Filename
             Text(node.name)
@@ -314,8 +314,8 @@ private struct FileNodeRow: View {
 
             Spacer(minLength: 0)
         }
-        .padding(.leading, 4)
-        .padding(.vertical, 2)
+        .padding(.leading, appState.sf(4))
+        .padding(.vertical, appState.sf(2))
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(isHovering ? Color.primary.opacity(0.07) : Color.clear)
         .contentShape(Rectangle())
@@ -334,12 +334,17 @@ private struct FileNodeRow: View {
     @ViewBuilder
     private var fileIcon: some View {
         if node.isDirectory {
-            Image(systemName: "folder.fill")
-                .foregroundColor(.orange)
+            MaterialFileIcon(
+                url: node.url, isDirectory: true, isExpanded: node.isExpanded,
+                size: appState.sf(14),
+                fallbackSystemName: "folder.fill", fallbackColor: .orange
+            )
         } else {
             let lang = Language.detect(from: node.url)
-            Image(systemName: iconName(for: lang))
-                .foregroundColor(iconColor(for: lang))
+            MaterialFileIcon(
+                url: node.url, size: appState.sf(14),
+                fallbackSystemName: iconName(for: lang), fallbackColor: iconColor(for: lang)
+            )
         }
     }
 
@@ -386,11 +391,12 @@ private struct RenameSheet: View {
     let onConfirm: (String) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(AppState.self) private var appState
 
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: appState.sf(16)) {
             Text("Rename \"\(originalName)\"")
-                .font(.headline)
+                .font(.system(size: appState.sf(13), weight: .semibold))
 
             TextField("New name", text: $renameText)
                 .textFieldStyle(.roundedBorder)
@@ -405,8 +411,8 @@ private struct RenameSheet: View {
                     .disabled(renameText.isEmpty)
             }
         }
-        .padding(20)
-        .frame(width: 320)
+        .padding(appState.sf(20))
+        .frame(width: appState.sf(320))
     }
 
     private func commit() {

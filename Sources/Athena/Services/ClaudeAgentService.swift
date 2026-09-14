@@ -288,11 +288,12 @@ actor ClaudeAgentService {
     // MARK: - Private: launch details
 
     /// Common install locations — apps launched from Finder inherit a stripped
-    /// PATH that omits every one of them.
+    /// PATH that omits every one of them. `/opt/homebrew` (native arm64)
+    /// precedes `/usr/local` (Intel Homebrew prefix, runs under Rosetta).
     private static let searchPaths: [String] = [
         "\(NSHomeDirectory())/.local/bin",
-        "/usr/local/bin",
         "/opt/homebrew/bin",
+        "/usr/local/bin",
         "\(NSHomeDirectory())/.npm-global/bin",
         "\(NSHomeDirectory())/.bun/bin",
     ]

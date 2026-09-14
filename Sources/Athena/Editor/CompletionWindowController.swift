@@ -32,6 +32,19 @@ final class CompletionWindowController: NSObject {
     private var items: [CompletionItem] = []
     private(set) var wordRange: NSRange = NSRange(location: 0, length: 0)
 
+    /// Point size of the list's text; `EditorView` sets it from the editor
+    /// font so the popup zooms with Cmd+= / Cmd+-. Row height and panel
+    /// width scale with it (22 pt rows / 360 pt wide at the 12 pt default).
+    var fontSize: CGFloat = 12 {
+        didSet {
+            guard fontSize != oldValue else { return }
+            tableView.rowHeight = Self.rowHeight(for: fontSize)
+            tableView.reloadData()
+        }
+    }
+    private var scale: CGFloat { fontSize / 12 }
+    private static func rowHeight(for fontSize: CGFloat) -> CGFloat { (fontSize / 12 * 22).rounded() }
+
     // MARK: Init
 
     override init() {
@@ -64,7 +77,7 @@ final class CompletionWindowController: NSObject {
 
         let maxRows = min(items.count, 8)
         let height  = CGFloat(maxRows) * tableView.rowHeight + 2
-        let width: CGFloat = 360
+        let width: CGFloat = (360 * scale).rounded()
         let x = screenRect.minX
         let y = screenRect.minY - height - 4  // show below cursor
         panel.setFrame(NSRect(x: x, y: y, width: width, height: height), display: false)
@@ -116,7 +129,7 @@ final class CompletionWindowController: NSObject {
         tableView.style                  = .plain
         tableView.headerView             = nil
         tableView.focusRingType          = .none
-        tableView.rowHeight              = 22
+        tableView.rowHeight              = Self.rowHeight(for: fontSize)
         tableView.backgroundColor        = .clear
         tableView.intercellSpacing       = NSSize(width: 0, height: 0)
         tableView.selectionHighlightStyle = .regular
@@ -206,11 +219,11 @@ extension CompletionWindowController: NSTableViewDelegate {
         } else {
             cell = NSTextField(labelWithString: "")
             cell.identifier      = ident
-            cell.font            = .monospacedSystemFont(ofSize: 12, weight: .regular)
             cell.lineBreakMode   = .byTruncatingTail
             cell.drawsBackground = false
             cell.isBordered      = false
         }
+        cell.font = .monospacedSystemFont(ofSize: fontSize, weight: .regular)
 
         let badge   = kindLabel(item.kind)
         let detail  = item.detail.map { "  \($0)" } ?? ""

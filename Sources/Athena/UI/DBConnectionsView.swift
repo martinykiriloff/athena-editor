@@ -57,15 +57,15 @@ struct DBConnectionsView: View {
             }
             .buttonStyle(.plain)
             .help("Add Connection")
-            .padding(.trailing, 8)
+            .padding(.trailing, appState.sf(8))
         }
-        .frame(height: 28)
+        .frame(height: appState.sf(28))
         .background(Color(nsColor: .controlBackgroundColor))
         .overlay(alignment: .bottom) { Divider() }
     }
 
     private var emptyState: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: appState.sf(12)) {
             Image(systemName: "cylinder.split.1x2")
                 .font(.system(size: appState.sf(32)))
                 .foregroundStyle(.tertiary)
@@ -171,23 +171,23 @@ private struct DBConnectionRow: View {
     @State private var isHovered = false
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: appState.sf(10)) {
             // Status dot
             Circle()
                 .fill(connection.isConnected ? Color.green : Color.secondary.opacity(0.4))
-                .frame(width: 7, height: 7)
+                .frame(width: appState.sf(7), height: appState.sf(7))
 
             // Type badge
             Text(connection.type.rawValue.prefix(2).uppercased())
                 .font(.system(size: appState.sf(9), weight: .bold, design: .monospaced))
                 .foregroundStyle(.white)
-                .padding(.horizontal, 4)
-                .padding(.vertical, 2)
+                .padding(.horizontal, appState.sf(4))
+                .padding(.vertical, appState.sf(2))
                 .background(dbColor(connection.type).opacity(0.85))
-                .clipShape(RoundedRectangle(cornerRadius: 3))
+                .clipShape(RoundedRectangle(cornerRadius: appState.sf(3)))
 
             // Name + host
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: appState.sf(1)) {
                 Text(connection.name)
                     .font(.system(size: appState.sf(12), weight: .medium))
                     .foregroundStyle(.primary)
@@ -214,7 +214,7 @@ private struct DBConnectionRow: View {
 
             // Action buttons (visible on hover)
             if isHovered {
-                HStack(spacing: 2) {
+                HStack(spacing: appState.sf(2)) {
                     IconButton("pencil", help: "Edit", action: onEdit)
                     if connection.isConnected {
                         IconButton("tablecells", help: "Browse Data", action: onBrowse)
@@ -230,8 +230,8 @@ private struct DBConnectionRow: View {
                 }
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
+        .padding(.horizontal, appState.sf(10))
+        .padding(.vertical, appState.sf(7))
         .contentShape(Rectangle())
         .onHover { isHovered = $0 }
     }
@@ -252,6 +252,7 @@ private struct DBConnectionRow: View {
 
 struct DBConnectionFormView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(AppState.self) private var appState
 
     // Pre-populate with an existing connection for edits; nil for new.
     private let original: DBConnection?
@@ -283,7 +284,7 @@ struct DBConnectionFormView: View {
             // Title bar
             HStack {
                 Text(original == nil ? "New Connection" : "Edit Connection")
-                    .font(.headline)
+                    .font(.system(size: appState.sf(13), weight: .semibold))
                 Spacer()
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
@@ -291,7 +292,7 @@ struct DBConnectionFormView: View {
                     .keyboardShortcut(.defaultAction)
                     .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
             }
-            .padding()
+            .padding(appState.sf(16))
 
             Divider()
 
@@ -355,7 +356,7 @@ struct DBConnectionFormView: View {
             }
             .formStyle(.grouped)
         }
-        .frame(width: 420)
+        .frame(width: appState.sf(420))
         .fixedSize(horizontal: false, vertical: true)
     }
 
@@ -405,7 +406,7 @@ private struct IconButton: View {
             Image(systemName: name)
                 .font(.system(size: appState.sf(11)))
                 .foregroundStyle(.secondary)
-                .frame(width: 22, height: 22)
+                .frame(width: appState.sf(22), height: appState.sf(22))
         }
         .buttonStyle(.plain)
         .help(help)

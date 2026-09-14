@@ -28,7 +28,7 @@ struct ClaudePanel: View {
         .overlay {
             if isDropTargeted {
                 Rectangle()
-                    .strokeBorder(Color.accentColor, lineWidth: 2)
+                    .strokeBorder(Color.accentColor, lineWidth: appState.sf(2))
                     .background(Color.accentColor.opacity(0.06))
                     .allowsHitTesting(false)
             }
@@ -55,14 +55,14 @@ struct ClaudePanel: View {
     // MARK: - Session bar
 
     private var sessionBar: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: appState.sf(6)) {
             ForEach(ClaudeAccount.all) { account in
                 AccountChip(account: account, isActive: appState.activeClaudeAccount == account) {
                     appState.switchClaudeAccount(account)
                 }
             }
 
-            Spacer(minLength: 4)
+            Spacer(minLength: appState.sf(4))
 
             modelMenu
             permissionModeMenu
@@ -78,8 +78,8 @@ struct ClaudePanel: View {
             .buttonStyle(.plain)
             .help("New conversation")
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
+        .padding(.horizontal, appState.sf(10))
+        .padding(.vertical, appState.sf(7))
     }
 
     private var modelMenu: some View {
@@ -96,7 +96,7 @@ struct ClaudePanel: View {
                 }
             }
         } label: {
-            HStack(spacing: 3) {
+            HStack(spacing: appState.sf(3)) {
                 Text(appState.claudeModel.name)
                     .font(.system(size: appState.sf(10), weight: .medium))
                 Image(systemName: "chevron.down")
@@ -124,7 +124,7 @@ struct ClaudePanel: View {
                 }
             }
         } label: {
-            HStack(spacing: 3) {
+            HStack(spacing: appState.sf(3)) {
                 Image(systemName: appState.claudePermissionMode.icon)
                     .font(.system(size: appState.sf(9)))
                 Text(appState.claudePermissionMode.shortTitle)
@@ -180,7 +180,7 @@ struct ClaudePanel: View {
                     }
                     Color.clear.frame(height: 1).id("bottom")
                 }
-                .padding(.vertical, 8)
+                .padding(.vertical, appState.sf(8))
             }
             .onChange(of: appState.claudeTimeline.count) { _, _ in
                 withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo("bottom", anchor: .bottom) }
@@ -222,26 +222,26 @@ struct ClaudePanel: View {
     }
 
     private var statusRow: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: appState.sf(6)) {
             ProgressView().controlSize(.mini).scaleEffect(0.6)
             Text(appState.claudeStatus)
                 .font(.system(size: appState.sf(10.5)))
                 .foregroundStyle(.secondary)
             Spacer()
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 4)
+        .padding(.horizontal, appState.sf(14))
+        .padding(.vertical, appState.sf(4))
     }
 
     private var emptyState: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: appState.sf(10)) {
             Image(systemName: "sparkles")
                 .font(.system(size: appState.sf(28)))
                 .foregroundStyle(.tertiary)
             Text("Ask Claude anything")
                 .font(.system(size: appState.sf(13)))
                 .foregroundStyle(.secondary)
-            VStack(spacing: 3) {
+            VStack(spacing: appState.sf(3)) {
                 Text("/ for commands · @ to add files")
                     .font(.system(size: appState.sf(11)))
                     .foregroundStyle(.tertiary)
@@ -253,7 +253,7 @@ struct ClaudePanel: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(.top, 48)
+        .padding(.top, appState.sf(48))
     }
 
     // MARK: - Composer
@@ -280,7 +280,7 @@ struct ClaudePanel: View {
     @ViewBuilder
     private var queueBar: some View {
         if !appState.claudeQueuedMessages.isEmpty {
-            HStack(spacing: 6) {
+            HStack(spacing: appState.sf(6)) {
                 Image(systemName: "clock")
                     .font(.system(size: appState.sf(9)))
                 Text("\(appState.claudeQueuedMessages.count) message\(appState.claudeQueuedMessages.count == 1 ? "" : "s") queued")
@@ -292,8 +292,8 @@ struct ClaudePanel: View {
                     .foregroundStyle(Color.accentColor)
             }
             .foregroundStyle(.secondary)
-            .padding(.horizontal, 10)
-            .padding(.top, 6)
+            .padding(.horizontal, appState.sf(10))
+            .padding(.top, appState.sf(6))
         }
     }
 
@@ -307,20 +307,20 @@ struct ClaudePanel: View {
 
         if hasChips {
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
+                HStack(spacing: appState.sf(6)) {
                     if let suggestion = suggestedContext {
                         Button {
                             appState.addClaudeContext(suggestion)
                         } label: {
-                            HStack(spacing: 3) {
+                            HStack(spacing: appState.sf(3)) {
                                 Image(systemName: "plus")
                                 Text(suggestion.label)
                             }
                             .font(.system(size: appState.sf(10)))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 3)
+                            .padding(.horizontal, appState.sf(6))
+                            .padding(.vertical, appState.sf(3))
                             .overlay(
-                                RoundedRectangle(cornerRadius: 4)
+                                RoundedRectangle(cornerRadius: appState.sf(4))
                                     .strokeBorder(Color.secondary.opacity(0.35), style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
                             )
                         }
@@ -339,9 +339,9 @@ struct ClaudePanel: View {
                         }
                     }
                 }
-                .padding(.horizontal, 10)
+                .padding(.horizontal, appState.sf(10))
             }
-            .padding(.top, 8)
+            .padding(.top, appState.sf(8))
         }
     }
 
@@ -354,7 +354,7 @@ struct ClaudePanel: View {
     // MARK: Input
 
     private var inputBar: some View {
-        HStack(alignment: .bottom, spacing: 8) {
+        HStack(alignment: .bottom, spacing: appState.sf(8)) {
             Button(action: presentAttachmentPicker) {
                 Image(systemName: "paperclip")
                     .font(.system(size: appState.sf(14)))
@@ -381,8 +381,8 @@ struct ClaudePanel: View {
 
             sendButton
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
+        .padding(.horizontal, appState.sf(10))
+        .padding(.vertical, appState.sf(8))
     }
 
     private var placeholder: String {
@@ -424,10 +424,10 @@ struct ClaudePanel: View {
     // MARK: Footer
 
     private var footer: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: appState.sf(6)) {
             Circle()
                 .fill(appState.claudeSessionIsLive ? Color.green : Color.secondary.opacity(0.5))
-                .frame(width: 5, height: 5)
+                .frame(width: appState.sf(5), height: appState.sf(5))
 
             Text(footerLabel)
                 .font(.system(size: appState.sf(9)))
@@ -444,8 +444,8 @@ struct ClaudePanel: View {
                     .help("Session cost")
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.bottom, 6)
+        .padding(.horizontal, appState.sf(10))
+        .padding(.bottom, appState.sf(6))
     }
 
     private var footerLabel: String {
@@ -614,7 +614,7 @@ private struct CompletionList: View {
                     }
                 }
             }
-            .frame(maxHeight: 260)
+            .frame(maxHeight: appState.sf(260))
             .background(Color(nsColor: .controlBackgroundColor))
             .onChange(of: selectedIndex) { _, _ in
                 guard let id = selectedId else { return }
@@ -634,7 +634,7 @@ private struct CompletionList: View {
         Button {
             onSelect(.command(command))
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: appState.sf(8)) {
                 Text(command.trigger)
                     .font(.system(size: appState.sf(11), design: .monospaced))
                     .foregroundStyle(.primary)
@@ -645,8 +645,8 @@ private struct CompletionList: View {
                     .lineLimit(1)
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
+            .padding(.horizontal, appState.sf(10))
+            .padding(.vertical, appState.sf(4))
             .contentShape(Rectangle())
             .background(isSelected ? Color.accentColor.opacity(0.14) : Color.clear)
         }
@@ -657,7 +657,7 @@ private struct CompletionList: View {
         Button {
             onSelect(.file(entry))
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: appState.sf(8)) {
                 Image(systemName: "doc")
                     .font(.system(size: appState.sf(10)))
                     .foregroundStyle(.secondary)
@@ -671,8 +671,8 @@ private struct CompletionList: View {
                     .truncationMode(.head)
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
+            .padding(.horizontal, appState.sf(10))
+            .padding(.vertical, appState.sf(4))
             .contentShape(Rectangle())
             .background(isSelected ? Color.accentColor.opacity(0.14) : Color.clear)
         }
@@ -690,9 +690,9 @@ private struct UserTurnRow: View {
     let contexts: [ClaudeContextRef]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: appState.sf(5)) {
             if !contexts.isEmpty || !attachments.isEmpty {
-                HStack(spacing: 4) {
+                HStack(spacing: appState.sf(4)) {
                     ForEach(contexts) { ref in
                         tag(ref.label, icon: ref.kind == .selection ? "text.viewfinder" : "doc")
                     }
@@ -712,23 +712,23 @@ private struct UserTurnRow: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
+        .padding(.horizontal, appState.sf(10))
+        .padding(.vertical, appState.sf(8))
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.accentColor.opacity(0.09), in: RoundedRectangle(cornerRadius: 8))
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
+        .background(Color.accentColor.opacity(0.09), in: RoundedRectangle(cornerRadius: appState.sf(8)))
+        .padding(.horizontal, appState.sf(10))
+        .padding(.vertical, appState.sf(4))
     }
 
     private func tag(_ label: String, icon: String) -> some View {
-        HStack(spacing: 3) {
+        HStack(spacing: appState.sf(3)) {
             Image(systemName: icon).font(.system(size: appState.sf(8)))
             Text(label).font(.system(size: appState.sf(9.5)))
         }
         .foregroundStyle(.secondary)
-        .padding(.horizontal, 5)
-        .padding(.vertical, 2)
-        .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 3))
+        .padding(.horizontal, appState.sf(5))
+        .padding(.vertical, appState.sf(2))
+        .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: appState.sf(3)))
     }
 }
 
@@ -751,8 +751,8 @@ private struct AssistantTextRow: View {
         .textSelection(.enabled)
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 4)
+        .padding(.horizontal, appState.sf(12))
+        .padding(.vertical, appState.sf(4))
         .contextMenu {
             Button("Copy") {
                 NSPasteboard.general.clearContents()
@@ -786,10 +786,10 @@ private struct AccountChip: View {
             Text(account.name)
                 .font(.system(size: appState.sf(10), weight: isActive ? .semibold : .regular))
                 .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
-                .padding(.horizontal, 7)
-                .padding(.vertical, 3)
+                .padding(.horizontal, appState.sf(7))
+                .padding(.vertical, appState.sf(3))
                 .background(
-                    RoundedRectangle(cornerRadius: 4)
+                    RoundedRectangle(cornerRadius: appState.sf(4))
                         .fill(isActive ? Color.accentColor.opacity(0.14) : Color.clear)
                 )
         }
@@ -807,7 +807,7 @@ private struct ContextChip: View {
     let onRemove: () -> Void
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: appState.sf(4)) {
             Image(systemName: ref.kind == .selection ? "text.viewfinder" : "doc")
                 .font(.system(size: appState.sf(9)))
             Text(ref.label)
@@ -820,9 +820,9 @@ private struct ContextChip: View {
             .buttonStyle(.plain)
         }
         .foregroundStyle(.secondary)
-        .padding(.horizontal, 6)
-        .padding(.vertical, 3)
-        .background(Color.secondary.opacity(0.14), in: RoundedRectangle(cornerRadius: 4))
+        .padding(.horizontal, appState.sf(6))
+        .padding(.vertical, appState.sf(3))
+        .background(Color.secondary.opacity(0.14), in: RoundedRectangle(cornerRadius: appState.sf(4)))
     }
 }
 
@@ -835,7 +835,7 @@ private struct AttachmentChip: View {
     let onRemove: () -> Void
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: appState.sf(4)) {
             Image(systemName: attachment.iconName)
                 .font(.system(size: appState.sf(9)))
             Text(attachment.fileName)
@@ -848,8 +848,8 @@ private struct AttachmentChip: View {
             .buttonStyle(.plain)
         }
         .foregroundStyle(.secondary)
-        .padding(.horizontal, 6)
-        .padding(.vertical, 3)
-        .background(Color.secondary.opacity(0.14), in: RoundedRectangle(cornerRadius: 4))
+        .padding(.horizontal, appState.sf(6))
+        .padding(.vertical, appState.sf(3))
+        .background(Color.secondary.opacity(0.14), in: RoundedRectangle(cornerRadius: appState.sf(4)))
     }
 }

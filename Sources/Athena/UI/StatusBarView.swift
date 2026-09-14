@@ -30,7 +30,7 @@ struct StatusBarView: View {
     var body: some View {
         HStack(spacing: 0) {
             // ── Left cluster ──────────────────────────────────────────────
-            HStack(spacing: 8) {
+            HStack(spacing: appState.sf(8)) {
                 // Git branch — clickable, opens the branch-switcher menu
                 // (plan.md item 20 point 1).
                 if let branch = gitBranch {
@@ -75,7 +75,7 @@ struct StatusBarView: View {
                 switch updateService.state {
                 case .available(let version, _):
                     StatusBarItem {
-                        HStack(spacing: 4) {
+                        HStack(spacing: appState.sf(4)) {
                             ProgressView().controlSize(.mini)
                             Text("Update \(version) found…")
                         }
@@ -83,7 +83,7 @@ struct StatusBarView: View {
                     }
                 case .downloading:
                     StatusBarItem {
-                        HStack(spacing: 4) {
+                        HStack(spacing: appState.sf(4)) {
                             ProgressView().controlSize(.mini)
                             let label = updateService.pendingVersion.map { "Downloading v\($0)…" } ?? "Downloading update…"
                             Text(label)
@@ -92,7 +92,7 @@ struct StatusBarView: View {
                     }
                 case .readyToInstall:
                     StatusBarItem {
-                        HStack(spacing: 4) {
+                        HStack(spacing: appState.sf(4)) {
                             ProgressView().controlSize(.mini)
                             Text("Restarting…")
                         }
@@ -114,12 +114,12 @@ struct StatusBarView: View {
                         .foregroundStyle(warningCount > 0 ? Color.yellow : Color.secondary)
                 }
             }
-            .padding(.leading, 8)
+            .padding(.leading, appState.sf(8))
 
             Spacer()
 
             // ── Right cluster ─────────────────────────────────────────────
-            HStack(spacing: 12) {
+            HStack(spacing: appState.sf(12)) {
                 // Generic status message
                 if !appState.statusMessage.isEmpty {
                     Text(appState.statusMessage)
@@ -138,12 +138,12 @@ struct StatusBarView: View {
                     Text(tab.language.rawValue.capitalized)
                 }
             }
-            .padding(.trailing, 12)
+            .padding(.trailing, appState.sf(12))
         }
         .font(.system(size: appState.sf(11), design: .monospaced))
         .foregroundStyle(.secondary)
         .frame(maxWidth: .infinity)
-        .frame(height: 22)
+        .frame(height: appState.sf(22))
         .background(Color(nsColor: .windowBackgroundColor))
         .overlay(alignment: .top) {
             Divider()

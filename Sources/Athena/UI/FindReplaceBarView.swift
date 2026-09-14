@@ -15,23 +15,23 @@ struct FindReplaceBarView: View {
     @FocusState private var queryFieldFocused: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: appState.sf(4)) {
             findRow
             if controller.showReplace {
                 replaceRow
             }
         }
-        .padding(8)
+        .padding(appState.sf(8))
         .background(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: appState.sf(8))
                 .fill(Color(nsColor: .controlBackgroundColor))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: appState.sf(8))
                 .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.25), radius: 8, y: 2)
-        .frame(width: 380)
+        .frame(width: appState.sf(380))
         .onAppear { queryFieldFocused = true }
         .onChange(of: controller.focusRequestToken) { _, _ in queryFieldFocused = true }
         .onExitCommand { controller.dismiss() }
@@ -40,7 +40,7 @@ struct FindReplaceBarView: View {
     // MARK: - Find row
 
     private var findRow: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: appState.sf(6)) {
             TextField("Find", text: $controller.query)
                 .textFieldStyle(.plain)
                 .font(.system(size: appState.sf(12)))
@@ -53,18 +53,18 @@ struct FindReplaceBarView: View {
                     }
                 }
                 .onChange(of: controller.query) { _, _ in controller.updateMatches() }
-                .frame(minWidth: 110, maxWidth: .infinity)
+                .frame(minWidth: appState.sf(110), maxWidth: .infinity)
 
             optionToggle(symbol: ".*", help: "Use Regular Expression", isOn: $controller.useRegex)
             optionToggle(symbol: "Aa", help: "Match Case", isOn: $controller.caseSensitive)
             optionToggle(symbol: "ab", help: "Match Whole Word", isOn: $controller.wholeWord, underline: true)
 
-            Divider().frame(height: 14)
+            Divider().frame(height: appState.sf(14))
 
             Text(controller.statusText)
                 .font(.system(size: appState.sf(11)))
                 .foregroundStyle(controller.isPatternInvalid ? Color.red : Color.secondary)
-                .frame(minWidth: 60, alignment: .trailing)
+                .frame(minWidth: appState.sf(60), alignment: .trailing)
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
 
@@ -85,12 +85,12 @@ struct FindReplaceBarView: View {
     // MARK: - Replace row
 
     private var replaceRow: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: appState.sf(6)) {
             TextField("Replace", text: $controller.replacement)
                 .textFieldStyle(.plain)
                 .font(.system(size: appState.sf(12)))
                 .onSubmit { controller.replaceCurrent() }
-                .frame(minWidth: 110, maxWidth: .infinity)
+                .frame(minWidth: appState.sf(110), maxWidth: .infinity)
 
             iconButton("arrow.turn.down.right", help: "Replace") { controller.replaceCurrent() }
                 .disabled(controller.matches.isEmpty)
@@ -116,9 +116,9 @@ struct FindReplaceBarView: View {
                 .font(.system(size: appState.sf(11), weight: .medium, design: .monospaced))
                 .underline(underline)
                 .foregroundStyle(isOn.wrappedValue ? Color.accentColor : Color.secondary)
-                .frame(width: 22, height: 18)
+                .frame(width: appState.sf(22), height: appState.sf(18))
                 .background(
-                    RoundedRectangle(cornerRadius: 4)
+                    RoundedRectangle(cornerRadius: appState.sf(4))
                         .fill(isOn.wrappedValue ? Color.accentColor.opacity(0.15) : Color.clear)
                 )
         }
@@ -131,7 +131,7 @@ struct FindReplaceBarView: View {
             Image(systemName: symbol)
                 .font(.system(size: appState.sf(11), weight: .medium))
                 .foregroundStyle(Color.secondary)
-                .frame(width: 18, height: 18)
+                .frame(width: appState.sf(18), height: appState.sf(18))
         }
         .buttonStyle(.plain)
         .help(help)

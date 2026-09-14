@@ -13,8 +13,14 @@ APP_NAME    := Athena
 VERSION     := $(shell /usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" \
                    XcodeConfig/Info.plist 2>/dev/null || echo "1.0")
 BUILD_DIR   := .build
-RELEASE_BIN := $(BUILD_DIR)/release/$(APP_NAME)
-DEBUG_BIN   := $(BUILD_DIR)/debug/$(APP_NAME)
+# Apple Silicon only. Pinning the triple keeps a build on an Intel Mac or an
+# Intel CI runner from silently producing an x86_64 app.
+ARCH        := arm64
+TRIPLE      := $(ARCH)-apple-macosx
+RELEASE_DIR := $(BUILD_DIR)/$(TRIPLE)/release
+DEBUG_DIR   := $(BUILD_DIR)/$(TRIPLE)/debug
+RELEASE_BIN := $(RELEASE_DIR)/$(APP_NAME)
+DEBUG_BIN   := $(DEBUG_DIR)/$(APP_NAME)
 APP_BUNDLE  := $(APP_NAME).app
 DMG_NAME    := $(APP_NAME)-$(VERSION).dmg
 
@@ -73,6 +79,7 @@ run: build-debug
 	@cp XcodeConfig/Info.plist                "$(APP_BUNDLE)/Contents/"
 	@cp XcodeConfig/AppIcon.icns              "$(APP_BUNDLE)/Contents/Resources/"
 	@cp XcodeConfig/Athena.entitlements       "$(APP_BUNDLE)/Contents/Resources/"
+	@cp -R "$(DEBUG_DIR)/"*.bundle            "$(APP_BUNDLE)/Contents/Resources/" 2>/dev/null || true
 	@printf 'APPL????'                      > "$(APP_BUNDLE)/Contents/PkgInfo"
 	@codesign --force --deep --sign "$(SIGN_ID)" \
 	    --entitlements XcodeConfig/Athena.entitlements \
@@ -95,11 +102,11 @@ icon:
 
 build-debug:
 	@echo "🔨 Building debug…"
-	$(SWIFT_ENV) swift build
+	$(SWIFT_ENV) swift build --triple $(TRIPLE)
 
 build-release:
 	@echo "🔨 Building release…"
-	$(SWIFT_ENV) swift build -c release
+	$(SWIFT_ENV) swift build -c release --triple $(TRIPLE)
 
 # ── .app bundle ───────────────────────────────────────────────────────────────
 
@@ -112,7 +119,12 @@ bundle: build-release
 	@cp XcodeConfig/Info.plist                "$(APP_BUNDLE)/Contents/"
 	@cp XcodeConfig/AppIcon.icns              "$(APP_BUNDLE)/Contents/Resources/"
 	@cp XcodeConfig/Athena.entitlements       "$(APP_BUNDLE)/Contents/Resources/"
+	@# SwiftPM resource bundles (Material icon set). Without this the app
+	@# launches with no file icons.
+	@cp -R "$(RELEASE_DIR)/"*.bundle          "$(APP_BUNDLE)/Contents/Resources/" 2>/dev/null || true
 	@printf 'APPL????'                      > "$(APP_BUNDLE)/Contents/PkgInfo"
+	@test "$$(lipo -archs "$(APP_BUNDLE)/Contents/MacOS/$(APP_NAME)")" = "$(ARCH)" || \
+	    { echo "❌ $(APP_NAME) binary is not $(ARCH)-only"; exit 1; }
 	@echo "✍️  Code-signing ($(SIGN_ID))…"
 	@codesign --force --deep --sign "$(SIGN_ID)" \
 	    --entitlements XcodeConfig/Athena.entitlements \

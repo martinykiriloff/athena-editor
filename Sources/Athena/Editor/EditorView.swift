@@ -1004,6 +1004,7 @@ extension EditorView {
         private func showHoverTooltip(_ text: String, at charIndex: Int, in tv: NSTextView) {
             var actual = NSRange()
             let rect = tv.firstRect(forCharacterRange: NSRange(location: charIndex, length: 1), actualRange: &actual)
+            hoverController.fontSize = max(parent.fontSize - 2, 9)
             hoverController.show(text: text, near: rect)
         }
 
@@ -2191,6 +2192,7 @@ extension EditorView {
                 actualRange: &actual
             )
 
+            completionController.fontSize = max(parent.fontSize - 2, 9)
             completionController.show(items: items, wordRange: wordRange, screenRect: screenRect)
             completionController.onAccept = { [weak self, weak tv] item, range in
                 guard let self, let textView = tv else { return }
@@ -2231,6 +2233,7 @@ extension EditorView {
 
         private func showCompletionDoc(_ text: String) {
             guard completionController.isVisible else { return }
+            completionDocController.fontSize = max(parent.fontSize - 2, 9)
             completionDocController.show(text: text, near: completionController.screenFrame, placement: .rightOf)
         }
 
