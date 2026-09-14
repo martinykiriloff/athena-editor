@@ -38,8 +38,8 @@ enum VSCodeThemeImporter {
     ///     unique against existing built-in/custom theme ids.
     ///   - fallback: base theme supplying every color this file doesn't
     ///     specify. Defaults to the closest built-in theme by the file's
-    ///     own declared `"type"` (`"light"` → `.githubLight`, anything else
-    ///     — `"dark"`, `"hc"`, or missing — → `.darcula`).
+    ///     own declared `"type"` (`"light"` → `.athenaLight`, anything else
+    ///     — `"dark"`, `"hc"`, or missing — → `.athenaDracula`).
     static func parse(_ jsonString: String, id: String, fallback: EditorTheme? = nil) throws -> EditorTheme {
         let cleaned = stripJSONCArtifacts(jsonString)
         guard let data = cleaned.data(using: .utf8) else {
@@ -57,7 +57,7 @@ enum VSCodeThemeImporter {
             throw VSCodeThemeImportError.emptyTheme
         }
 
-        let base = fallback ?? (file.type?.lowercased() == "light" ? EditorTheme.githubLight : EditorTheme.darcula)
+        let base = fallback ?? (file.type?.lowercased() == "light" ? EditorTheme.athenaLight : EditorTheme.athenaDracula)
 
         var overrides = mapColors(file.colors ?? [:])
         for (field, hex) in mapTokenColors(file.tokenColors ?? []) where overrides[field] == nil {

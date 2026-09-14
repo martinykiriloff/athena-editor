@@ -1874,25 +1874,83 @@ private func components(ofHex hex: UInt32) -> (UInt8, UInt8, UInt8) {
     (UInt8((hex >> 16) & 0xFF), UInt8((hex >> 8) & 0xFF), UInt8(hex & 0xFF))
 }
 
+@Suite("EditorTheme built-in light theme")
+struct EditorThemeAthenaLightTests {
+    @Test func athenaLightIsBuiltInAndResolvable() {
+        #expect(EditorTheme.all.contains(.athenaLight))
+        #expect(EditorTheme.named("athena-light") == .athenaLight)
+        #expect(EditorTheme.athenaLight.name == "Athena Light")
+    }
+
+    @Test func builtInsCarryTheAthenaNamesAndLegacyIdsStillResolve() {
+        #expect(EditorTheme.all.map(\.name) == ["Athena Dark", "Athena Dracula", "Athena Light"])
+        #expect(EditorTheme.named("darcula") == .athenaDracula)
+        #expect(EditorTheme.named("one-dark") == .athenaDark)
+        #expect(EditorTheme.named("soft-light") == .athenaLight)
+        #expect(EditorTheme.named("github-light") == .athenaLight)
+        #expect(EditorTheme.named("nonsense") == .athenaDark)
+    }
+
+    @Test func athenaLightUsesParchmentNotPureWhite() {
+        let (r, g, b) = hexComponents(EditorTheme.athenaLight.background)
+        #expect((r, g, b) != (255, 255, 255))
+        #expect(r > 230 && g > 225 && b > 215)
+        // Dimmer than a white page: the brightest channel stays under 0xF8.
+        #expect(r < 248)
+        // Background is warm: red channel ≥ green ≥ blue.
+        #expect(r >= g && g >= b)
+    }
+
+    @Test func darkAndLightThemesClassifyByBackgroundLuminance() {
+        #expect(EditorTheme.athenaDracula.isDark)
+        #expect(EditorTheme.athenaDark.isDark)
+        #expect(!EditorTheme.athenaLight.isDark)
+        // An imported theme inherits its classification from its own colours.
+        let imported = EditorTheme(id: "imp", name: "Imp", base: .athenaDracula, overrides: [.background: 0xFFFFF0])
+        #expect(!imported.isDark)
+        #expect(EditorTheme.isDark(color: EditorTheme.athenaDracula.background))
+        #expect(!EditorTheme.isDark(color: EditorTheme.athenaLight.background))
+    }
+
+    @Test func athenaLightTokensHaveReadableContrastOnItsBackground() {
+        // WCAG relative-luminance contrast ratio against the background.
+        func lum(_ c: NSColor) -> Double {
+            func lin(_ v: CGFloat) -> Double { let d = Double(v); return d <= 0.03928 ? d / 12.92 : pow((d + 0.055) / 1.055, 2.4) }
+            return 0.2126 * lin(c.redComponent) + 0.7152 * lin(c.greenComponent) + 0.0722 * lin(c.blueComponent)
+        }
+        let t = EditorTheme.athenaLight
+        let bg = lum(t.background)
+        func contrast(_ c: NSColor) -> Double { let l = lum(c); return (max(l, bg) + 0.05) / (min(l, bg) + 0.05) }
+        #expect(contrast(t.foreground) >= 4.5)   // body text: AA
+        #expect(contrast(t.keyword)    >= 4.5)
+        #expect(contrast(t.string)     >= 3.5)
+        #expect(contrast(t.function)   >= 3.5)
+        #expect(contrast(t.type)       >= 3.0)
+        #expect(contrast(t.number)     >= 3.0)
+        // Comments are deliberately quieter, but still legible.
+        #expect(contrast(t.comment)    >= 2.5)
+    }
+}
+
 @Suite("EditorTheme import-merge init")
 struct EditorThemeImportMergeTests {
     @Test func overriddenFieldsWinAndUntouchedFieldsFallBackToBase() {
         let theme = EditorTheme(
-            id: "merge-test", name: "Merge Test", base: .darcula,
+            id: "merge-test", name: "Merge Test", base: .athenaDracula,
             overrides: [.background: 0x111111, .keyword: 0x222222]
         )
         #expect(hexComponents(theme.background) == components(ofHex: 0x111111))
         #expect(hexComponents(theme.keyword) == components(ofHex: 0x222222))
         // Every field not present in `overrides` falls back to `base`.
-        #expect(hexComponents(theme.foreground) == hexComponents(EditorTheme.darcula.foreground))
-        #expect(hexComponents(theme.comment) == hexComponents(EditorTheme.darcula.comment))
-        #expect(hexComponents(theme.annotation) == hexComponents(EditorTheme.darcula.annotation))
+        #expect(hexComponents(theme.foreground) == hexComponents(EditorTheme.athenaDracula.foreground))
+        #expect(hexComponents(theme.comment) == hexComponents(EditorTheme.athenaDracula.comment))
+        #expect(hexComponents(theme.annotation) == hexComponents(EditorTheme.athenaDracula.annotation))
     }
 
     @Test func emptyOverridesReproducesBaseExactly() {
-        let theme = EditorTheme(id: "clone", name: "Clone", base: .githubLight, overrides: [:])
-        #expect(hexComponents(theme.background) == hexComponents(EditorTheme.githubLight.background))
-        #expect(hexComponents(theme.function) == hexComponents(EditorTheme.githubLight.function))
+        let theme = EditorTheme(id: "clone", name: "Clone", base: .athenaLight, overrides: [:])
+        #expect(hexComponents(theme.background) == hexComponents(EditorTheme.athenaLight.background))
+        #expect(hexComponents(theme.function) == hexComponents(EditorTheme.athenaLight.function))
     }
 }
 
@@ -1981,11 +2039,11 @@ struct VSCodeThemeImporterParseTests {
 
     @Test func fieldsMissingFromTheFileFallBackToTheDarkBaseTheme() throws {
         // No "annotation"-mapping scope and no lineHighlight color in the
-        // sample — both must fall back to `.darcula` (chosen because
+        // sample — both must fall back to `.athenaDracula` (chosen because
         // `"type": "dark"`), never left undefined.
         let theme = try VSCodeThemeImporter.parse(Self.sampleJSON, id: "sample-theme")
-        #expect(hexComponents(theme.annotation) == hexComponents(EditorTheme.darcula.annotation))
-        #expect(hexComponents(theme.lineHighlight) == hexComponents(EditorTheme.darcula.lineHighlight))
+        #expect(hexComponents(theme.annotation) == hexComponents(EditorTheme.athenaDracula.annotation))
+        #expect(hexComponents(theme.lineHighlight) == hexComponents(EditorTheme.athenaDracula.lineHighlight))
     }
 
     @Test func lightTypeFallsBackToGithubLightNotDarcula() throws {
@@ -1993,7 +2051,7 @@ struct VSCodeThemeImporterParseTests {
         { "name": "Light Sample", "type": "light", "colors": { "editor.foreground": "#000000" } }
         """
         let theme = try VSCodeThemeImporter.parse(json, id: "light-sample")
-        #expect(hexComponents(theme.background) == hexComponents(EditorTheme.githubLight.background))
+        #expect(hexComponents(theme.background) == hexComponents(EditorTheme.athenaLight.background))
         #expect(hexComponents(theme.foreground) == components(ofHex: 0x000000))
     }
 
@@ -2001,8 +2059,8 @@ struct VSCodeThemeImporterParseTests {
         let json = """
         { "name": "No Type", "colors": {} }
         """
-        let theme = try VSCodeThemeImporter.parse(json, id: "no-type", fallback: .oneDark)
-        #expect(hexComponents(theme.background) == hexComponents(EditorTheme.oneDark.background))
+        let theme = try VSCodeThemeImporter.parse(json, id: "no-type", fallback: .athenaDark)
+        #expect(hexComponents(theme.background) == hexComponents(EditorTheme.athenaDark.background))
     }
 
     @Test func firstMatchingTokenColorEntryWinsForARepeatedCategory() throws {
@@ -2040,7 +2098,7 @@ struct VSCodeThemeImporterParseTests {
         { "name": "Bad Color", "type": "dark", "colors": { "editor.background": "not-a-color" } }
         """
         let theme = try VSCodeThemeImporter.parse(json, id: "bad-color")
-        #expect(hexComponents(theme.background) == hexComponents(EditorTheme.darcula.background))
+        #expect(hexComponents(theme.background) == hexComponents(EditorTheme.athenaDracula.background))
     }
 
     @Test func doubleSlashInsideAStringValueSurvivesTheFullParse() throws {

@@ -13,7 +13,7 @@ struct EditorView: NSViewRepresentable {
 
     @Binding var content: String
     var language: Language
-    var theme: EditorTheme = .darcula
+    var theme: EditorTheme = .athenaDracula
     var fontSize:       CGFloat = 14
     var fontFamily:     String  = "JetBrains Mono"
     var fontLigatures:  Bool    = true

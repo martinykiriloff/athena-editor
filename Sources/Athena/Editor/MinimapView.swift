@@ -89,7 +89,7 @@ struct MinimapView: NSViewRepresentable {
     final class Coordinator {
         var lastContent:  String        = ""
         var lastLanguage: Language      = .plaintext
-        var lastTheme:    EditorTheme   = .darcula
+        var lastTheme:    EditorTheme   = .athenaDracula
         var highlighted:  NSAttributedString = NSAttributedString()
     }
 }
@@ -188,10 +188,13 @@ final class MinimapNSView: NSView {
         ctx.restoreGState()
 
         // ── Viewport highlight ───────────────────────────────────────────────
-        ctx.setFillColor(NSColor.white.withAlphaComponent(0.08).cgColor)
+        // Light ink on a dark theme, dark ink on a light one — a white
+        // wash is invisible on a paper background.
+        let ink: NSColor = EditorTheme.isDark(color: bgColor) ? .white : .black
+        ctx.setFillColor(ink.withAlphaComponent(0.08).cgColor)
         ctx.fill(CGRect(x: 0, y: indicatorY, width: bounds.width, height: indicatorH))
 
-        ctx.setStrokeColor(NSColor.white.withAlphaComponent(0.18).cgColor)
+        ctx.setStrokeColor(ink.withAlphaComponent(0.18).cgColor)
         ctx.setLineWidth(0.5)
         // Top border
         ctx.move(to: CGPoint(x: 0,             y: indicatorY))

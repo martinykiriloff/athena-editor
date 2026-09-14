@@ -33,7 +33,7 @@ struct AthenaApp: App {
                 .environment(updateService)
                 .onAppear {
                     NSWindow.allowsAutomaticWindowTabbing = false
-                    NSApplication.shared.appearance = NSAppearance(named: .darkAqua)
+                    appState.applyAppearance()
                 }
                 .task {
                     await appState.loadSettings()

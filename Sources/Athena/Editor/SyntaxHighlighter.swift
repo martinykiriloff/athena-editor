@@ -34,7 +34,7 @@ final class SyntaxHighlighter {
     // MARK: Init
 
     init(language: Language,
-         theme: EditorTheme = .darcula,
+         theme: EditorTheme = .athenaDracula,
          fontSize: CGFloat = 14,
          fontFamily: String = "JetBrains Mono",
          fontLigatures: Bool = true,

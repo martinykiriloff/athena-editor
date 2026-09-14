@@ -87,6 +87,27 @@ struct EditorTheme: Sendable, Equatable, Hashable, Codable {
     /// gutter, matching VS Code's green-vs-blue gutter convention.
     var diffModified:      NSColor { rgb(diffModHex) }
 
+    /// Whether the editor background is dark. Drives the window's system
+    /// appearance (`AppState.applyAppearance`) so the chrome — sidebar,
+    /// tabs, panels, popups — matches the editor instead of staying dark
+    /// around a light theme. Uses perceived luminance of the background,
+    /// so imported VS Code themes classify correctly too.
+    var isDark: Bool { EditorTheme.isDark(hex: bgHex) }
+
+    /// `isDark(hex:)` for an already-materialised colour (the minimap only
+    /// holds the theme's `NSColor`). Non-RGB colours count as dark.
+    static func isDark(color: NSColor) -> Bool {
+        guard let c = color.usingColorSpace(.sRGB) else { return true }
+        return (0.2126 * c.redComponent + 0.7152 * c.greenComponent + 0.0722 * c.blueComponent) < 0.5
+    }
+
+    static func isDark(hex v: UInt32) -> Bool {
+        let r = Double((v >> 16) & 0xFF) / 255.0
+        let g = Double((v >> 8)  & 0xFF) / 255.0
+        let b = Double( v        & 0xFF) / 255.0
+        return (0.2126 * r + 0.7152 * g + 0.0722 * b) < 0.5
+    }
+
     private func rgb(_ v: UInt32) -> NSColor {
         let r = CGFloat((v >> 16) & 0xFF) / 255.0
         let g = CGFloat((v >> 8)  & 0xFF) / 255.0
@@ -99,20 +120,9 @@ struct EditorTheme: Sendable, Equatable, Hashable, Codable {
 
 extension EditorTheme {
 
-    // Exact JetBrains Darcula palette — IntelliJ / Rider default dark theme.
-    static let darcula = EditorTheme(
-        id: "darcula", name: "Darcula",
-        bg: 0x2B2B2B, fg: 0xA9B7C6, cursor: 0xBBBBBB, selection: 0x214283, line: 0x323232,
-        keyword: 0xCC7832, string: 0x6A8759, number: 0x6897BB,
-        comment: 0x808080, type: 0xA9B7C6, function: 0xFFC66D, annotation: 0xBBB529,
-        whitespace: 0x4B5263,  // dim blue-grey — halfway between bg and comment
-        diagnosticError: 0xE05252, diagnosticWarning: 0xCC9C4B, diagnosticInfo: 0x5C8BB0,
-        diffAdded: 0x6A8759, diffRemoved: 0xE05252, diffModified: 0x3592C4
-    )
-
-    // One Dark — Atom-inspired dark theme.
-    static let oneDark = EditorTheme(
-        id: "one-dark", name: "One Dark",
+    // Athena Dark — the One Dark palette (Atom), Athena's default.
+    static let athenaDark = EditorTheme(
+        id: "athena-dark", name: "Athena Dark",
         bg: 0x282C34, fg: 0xABB2BF, cursor: 0x528BFF, selection: 0x3E4451, line: 0x2C323C,
         keyword: 0xC678DD, string: 0x98C379, number: 0xD19A66,
         comment: 0x5C6370, type: 0xE5C07B, function: 0x61AFEF, annotation: 0xE06C75,
@@ -121,25 +131,45 @@ extension EditorTheme {
         diffAdded: 0x98C379, diffRemoved: 0xE06C75, diffModified: 0x528BFF
     )
 
-    // GitHub Light — clean light theme.
-    static let githubLight = EditorTheme(
-        id: "github-light", name: "GitHub Light",
-        bg: 0xFFFFFF, fg: 0x24292E, cursor: 0x24292E, selection: 0xC8D1F0, line: 0xF6F8FA,
-        keyword: 0xD73A49, string: 0x032F62, number: 0x005CC5,
-        comment: 0x6A737D, type: 0x6F42C1, function: 0x6F42C1, annotation: 0x005CC5,
-        whitespace: 0xD0D7DE,
-        diagnosticError: 0xD73A49, diagnosticWarning: 0xB08800, diagnosticInfo: 0x005CC5,
-        diffAdded: 0x28A745, diffRemoved: 0xD73A49, diffModified: 0x0366D6
+    // Athena Dracula — the JetBrains Darcula palette (IntelliJ / Rider default).
+    static let athenaDracula = EditorTheme(
+        id: "athena-dracula", name: "Athena Dracula",
+        bg: 0x2B2B2B, fg: 0xA9B7C6, cursor: 0xBBBBBB, selection: 0x214283, line: 0x323232,
+        keyword: 0xCC7832, string: 0x6A8759, number: 0x6897BB,
+        comment: 0x808080, type: 0xA9B7C6, function: 0xFFC66D, annotation: 0xBBB529,
+        whitespace: 0x4B5263,  // dim blue-grey — halfway between bg and comment
+        diagnosticError: 0xE05252, diagnosticWarning: 0xCC9C4B, diagnosticInfo: 0x5C8BB0,
+        diffAdded: 0x6A8759, diffRemoved: 0xE05252, diffModified: 0x3592C4
     )
 
-    static let all: [EditorTheme] = [.darcula, .oneDark, .githubLight]
+    // Athena Light — a warm, low-glare light theme for long sessions.
+    // Parchment rather than white (the background sits well below full
+    // brightness, so a full-screen editor doesn't act as a lamp), an
+    // ink-blue foreground instead of black, and a muted palette with no
+    // saturated primaries. Every token clears the contrast floor enforced by
+    // `EditorThemeAthenaLightTests` while staying quieter than a typical
+    // light theme. Inspired by the Rosé Pine Dawn palette.
+    static let athenaLight = EditorTheme(
+        id: "athena-light", name: "Athena Light",
+        bg: 0xF4EEE4, fg: 0x4B4A5E, cursor: 0x4B4A5E, selection: 0xD9D2C7, line: 0xECE5DA,
+        keyword: 0x2E6B80, string: 0xA65A6E, number: 0xA8702B,
+        comment: 0x968F9A, type: 0x4E8A93, function: 0x76628F, annotation: 0xC4766F,
+        whitespace: 0xD9D2C7,
+        diagnosticError: 0xB4637A, diagnosticWarning: 0xD89A3A, diagnosticInfo: 0x4E8A93,
+        diffAdded: 0x4E8A5A, diffRemoved: 0xB4637A, diffModified: 0x2E6B80
+    )
 
+    static let all: [EditorTheme] = [.athenaDark, .athenaDracula, .athenaLight]
+
+    /// Resolves a built-in theme by id. Ids persisted by earlier versions
+    /// ("darcula", "one-dark", "soft-light", "github-light") map onto their
+    /// renamed successors so an existing `theme.json` keeps working.
     static func named(_ id: String) -> EditorTheme {
         switch id {
-        case "darcula":      return .darcula
-        case "one-dark":     return .oneDark
-        case "github-light": return .githubLight
-        default:             return .darcula
+        case "athena-dark", "one-dark":                     return .athenaDark
+        case "athena-dracula", "darcula":                   return .athenaDracula
+        case "athena-light", "soft-light", "github-light":  return .athenaLight
+        default:                                            return .athenaDark
         }
     }
 }

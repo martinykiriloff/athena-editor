@@ -19,9 +19,9 @@
     <key>CFBundleExecutable</key>
     <string>Athena</string>
     <key>CFBundleShortVersionString</key>
-    <string>2026.3</string>
+    <string>2026.4</string>
     <key>CFBundleVersion</key>
-    <string>2026.3</string>
+    <string>2026.4</string>
     <key>NSHumanReadableCopyright</key>
     <string>2026 CoderMate</string>
     <key>NSSupportsAutomaticTermination</key>

@@ -128,7 +128,7 @@ private struct TerminalPanelView: View {
                 ZStack {
                     ForEach(appState.terminalSessions) { session in
                         let isActive = session.id == appState.activeTerminalSessionId
-                        TerminalView(session: session, isActive: isActive, fontSize: appState.sf(13))
+                        TerminalView(session: session, isActive: isActive, fontSize: appState.sf(13), theme: appState.currentTheme)
                             .opacity(isActive ? 1 : 0)
                             .allowsHitTesting(isActive)
                     }

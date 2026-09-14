@@ -15,8 +15,9 @@ struct WelcomeView: View {
 
     var body: some View {
         ZStack {
-            // Darcula editor background — matches the surrounding chrome.
-            Color(NSColor(calibratedRed: 0.157, green: 0.173, blue: 0.204, alpha: 1.0))
+            // Editor background of the active theme, so the welcome screen
+            // reads as part of the editor in light and dark themes alike.
+            Color(nsColor: appState.currentTheme.background)
                 .ignoresSafeArea()
 
             VStack(spacing: 0) {
@@ -26,7 +27,7 @@ struct WelcomeView: View {
                 VStack(spacing: appState.sf(10)) {
                     Text("Athena")
                         .font(.system(size: appState.sf(48), weight: .bold, design: .default))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.primary)
 
                     Text("AI-first macOS code editor")
                         .font(.system(size: appState.sf(16), weight: .regular))
@@ -159,7 +160,7 @@ private struct QuickActionButton: View {
 
                 Text(title)
                     .font(.system(size: appState.sf(13), weight: .medium))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.primary)
 
                 if let shortcut {
                     Text(shortcut)
@@ -172,14 +173,14 @@ private struct QuickActionButton: View {
                 RoundedRectangle(cornerRadius: appState.sf(10), style: .continuous)
                     .fill(
                         isHovered
-                            ? Color(NSColor(calibratedRed: 0.26, green: 0.29, blue: 0.35, alpha: 1))
-                            : Color(NSColor(calibratedRed: 0.20, green: 0.22, blue: 0.27, alpha: 1))
+                            ? Color(nsColor: appState.currentTheme.selection)
+                            : Color(nsColor: appState.currentTheme.lineHighlight)
                     )
             )
             .overlay(
                 RoundedRectangle(cornerRadius: appState.sf(10), style: .continuous)
                     .strokeBorder(
-                        Color(NSColor(calibratedRed: 0.30, green: 0.33, blue: 0.40, alpha: 1)),
+                        Color(nsColor: appState.currentTheme.whitespace),
                         lineWidth: 1
                     )
             )
@@ -237,7 +238,7 @@ private struct ShortcutsGrid: View {
         .padding(.vertical, appState.sf(20))
         .background(
             RoundedRectangle(cornerRadius: appState.sf(12), style: .continuous)
-                .fill(Color(NSColor(calibratedRed: 0.18, green: 0.20, blue: 0.24, alpha: 1)))
+                .fill(Color(nsColor: appState.currentTheme.lineHighlight))
         )
         .frame(maxWidth: appState.sf(480))
     }
@@ -254,17 +255,17 @@ private struct ShortcutRow: View {
         HStack(spacing: appState.sf(10)) {
             Text(item.key)
                 .font(.system(size: appState.sf(12), weight: .medium, design: .monospaced))
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
                 .padding(.horizontal, appState.sf(6))
                 .padding(.vertical, appState.sf(3))
                 .background(
                     RoundedRectangle(cornerRadius: appState.sf(5), style: .continuous)
-                        .fill(Color(NSColor(calibratedRed: 0.26, green: 0.29, blue: 0.36, alpha: 1)))
+                        .fill(Color(nsColor: appState.currentTheme.selection))
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: appState.sf(5), style: .continuous)
                         .strokeBorder(
-                            Color(NSColor(calibratedRed: 0.36, green: 0.40, blue: 0.48, alpha: 1)),
+                            Color(nsColor: appState.currentTheme.whitespace),
                             lineWidth: 1
                         )
                 )

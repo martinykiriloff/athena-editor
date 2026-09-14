@@ -14,14 +14,16 @@ struct TerminalView: NSViewRepresentable {
     /// Follows the UI zoom (`AppState.sf(13)`) so Cmd+= / Cmd+- resize the
     /// terminal together with the rest of the window.
     var fontSize: CGFloat = 13
+    /// Terminal background/foreground follow the editor theme so a light
+    /// theme doesn't leave a dark terminal glowing under a light editor.
+    var theme: EditorTheme = .athenaDracula
 
     func makeNSView(context: Context) -> LocalProcessTerminalView {
         let tv = LocalProcessTerminalView(frame: .zero)
 
         tv.font = Self.font(ofSize: fontSize)
 
-        tv.nativeBackgroundColor = NSColor(calibratedRed: 0.118, green: 0.133, blue: 0.161, alpha: 1)
-        tv.nativeForegroundColor = NSColor(calibratedRed: 0.678, green: 0.733, blue: 0.820, alpha: 1)
+        Self.applyColors(theme, to: tv)
 
         tv.processDelegate = context.coordinator
 
@@ -47,6 +49,10 @@ struct TerminalView: NSViewRepresentable {
     func updateNSView(_ nsView: LocalProcessTerminalView, context: Context) {
         if nsView.font.pointSize != fontSize {
             nsView.font = Self.font(ofSize: fontSize)
+        }
+        if context.coordinator.appliedThemeId != theme.id {
+            Self.applyColors(theme, to: nsView)
+            context.coordinator.appliedThemeId = theme.id
         }
 
         // Focus the active session's shell so typing reaches it right after
@@ -74,6 +80,34 @@ struct TerminalView: NSViewRepresentable {
         nsView.terminate()
     }
 
+    private static func applyColors(_ theme: EditorTheme, to tv: LocalProcessTerminalView) {
+        tv.nativeBackgroundColor = theme.background
+        tv.nativeForegroundColor = theme.foreground
+        // The 16 ANSI colours: a light theme needs a darker palette or
+        // `ls`' yellows and greens vanish into the paper.
+        tv.installColors((theme.isDark ? darkANSI : lightANSI).map(ansiColor))
+    }
+
+    /// Standard bright-on-dark ANSI palette (One Dark's).
+    private static let darkANSI: [UInt32] = [
+        0x282C34, 0xE06C75, 0x98C379, 0xE5C07B, 0x61AFEF, 0xC678DD, 0x56B6C2, 0xABB2BF,
+        0x5C6370, 0xE06C75, 0x98C379, 0xE5C07B, 0x61AFEF, 0xC678DD, 0x56B6C2, 0xFFFFFF,
+    ]
+
+    /// Dark-on-light ANSI palette (GitHub Light's), readable on parchment.
+    private static let lightANSI: [UInt32] = [
+        0x24292E, 0xCF222E, 0x116329, 0x4D2D00, 0x0969DA, 0x8250DF, 0x1B7C83, 0x6E7781,
+        0x57606A, 0xA40E26, 0x1A7F37, 0x633C01, 0x218BFF, 0xA475F9, 0x3192AA, 0x8C959F,
+    ]
+
+    private static func ansiColor(_ hex: UInt32) -> SwiftTerm.Color {
+        SwiftTerm.Color(
+            red:   UInt16((hex >> 16) & 0xFF) * 257,
+            green: UInt16((hex >> 8)  & 0xFF) * 257,
+            blue:  UInt16( hex        & 0xFF) * 257
+        )
+    }
+
     private static func font(ofSize size: CGFloat) -> NSFont {
         NSFont(name: "JetBrains Mono", size: size)
             ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
@@ -87,6 +121,10 @@ struct TerminalView: NSViewRepresentable {
     final class Coordinator: NSObject, LocalProcessTerminalViewDelegate {
         let shell: String
         let currentDirectory: String?
+        /// Theme last pushed into the view by `updateNSView`; `makeNSView`
+        /// applies the initial one. Main-thread only (SwiftUI's representable
+        /// callbacks), so no synchronisation is needed.
+        var appliedThemeId: String = ""
         /// Consecutive exec failures (exit code 127 — "command not found",
         /// what the forked child reports when `execve` itself fails). A
         /// normal user-initiated `exit` doesn't produce 127, so this only

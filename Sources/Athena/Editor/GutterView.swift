@@ -26,7 +26,7 @@ final class GutterView: NSRulerView {
     var gitLineChanges: [Int: GitLineChangeType] = [:]
     /// Used to color the change bar (`diffAdded`/`diffModified`/`diffRemoved`)
     /// — kept in sync with the editor's theme by `EditorView`.
-    var theme: EditorTheme = .darcula
+    var theme: EditorTheme = .athenaDracula
     var onToggleBreakpoint: ((Int) -> Void)?
 
     /// Conflict regions found in the current buffer (plan.md item 23, "D5"),
@@ -71,7 +71,7 @@ final class GutterView: NSRulerView {
     private var numberAttrs: [NSAttributedString.Key: Any] {
         [
             .font:            NSFont.monospacedDigitSystemFont(ofSize: fontSize, weight: .regular),
-            .foregroundColor: NSColor(white: 0.45, alpha: 1)
+            .foregroundColor: theme.comment
         ]
     }
 
@@ -109,12 +109,14 @@ final class GutterView: NSRulerView {
               let tc = textView.textContainer
         else { return }
 
-        // Gutter background
-        NSColor(white: 0.14, alpha: 1).setFill()
+        // Gutter background — the editor's own, so the gutter reads as part
+        // of the text area in light and dark themes alike (VS Code does the
+        // same); the separator is the theme's whitespace tint.
+        theme.background.setFill()
         bounds.fill()
 
         // Right separator
-        NSColor(white: 0.22, alpha: 1).setFill()
+        theme.whitespace.withAlphaComponent(0.6).setFill()
         NSRect(x: bounds.maxX - 1, y: 0, width: 1, height: bounds.height).fill()
 
         let str           = textView.string as NSString

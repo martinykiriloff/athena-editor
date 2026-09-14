@@ -106,7 +106,9 @@ final class AppState {
     /// Source Control panel toggle between Changes and History — lives here
     /// (not in the view) so "File History" from a file row can switch it.
     var gitPanelShowsHistory: Bool = false
-    var currentTheme: EditorTheme = .darcula
+    var currentTheme: EditorTheme = .athenaDracula {
+        didSet { if currentTheme != oldValue { applyAppearance() } }
+    }
     /// User-imported VS Code themes (plan.md item 27, "G4"), persisted via
     /// `settingsService` under the `"customThemes"` key alongside every
     /// other setting. Combined with the built-ins for the theme picker via
@@ -984,7 +986,7 @@ final class AppState {
         async let fos  = settingsService.value(for: "editorFormatOnSave",      default: false)
         async let ai   = settingsService.value(for: "editorAutoIndent",        default: true)
         async let di   = settingsService.value(for: "editorDetectIndentation", default: true)
-        async let th   = settingsService.value(for: "theme",                   default: "darcula")
+        async let th   = settingsService.value(for: "theme",                   default: "athena-dark")
         async let ct   = settingsService.value(for: "customThemes",            default: [EditorTheme]())
 
         editorFontSize          = await fs
@@ -1052,6 +1054,18 @@ final class AppState {
     /// Every selectable theme — built-ins plus user-imported VS Code
     /// themes — for `SettingsView`'s theme picker.
     var allThemes: [EditorTheme] { EditorTheme.all + customThemes }
+
+    /// Switches the whole app between the light and dark system appearance
+    /// to match `currentTheme` — every view that uses system colours
+    /// (`controlBackgroundColor`, `.secondary`, …) follows automatically.
+    /// Called on launch (before settings load, so the first frame is right
+    /// for the default theme) and from `currentTheme`'s observer.
+    func applyAppearance() {
+        let name: NSAppearance.Name = currentTheme.isDark ? .darkAqua : .aqua
+        if NSApplication.shared.appearance?.name != name {
+            NSApplication.shared.appearance = NSAppearance(named: name)
+        }
+    }
 
     /// Reads `url`, parses it as a VS Code theme JSON file via
     /// `VSCodeThemeImporter`, and — on success — adds it to `customThemes`
