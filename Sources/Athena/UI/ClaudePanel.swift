@@ -25,6 +25,7 @@ struct ClaudePanel: View {
             composer
         }
         .overlay(alignment: .leading) { Divider() }
+        .claudeDropdownHost()
         .overlay {
             if isDropTargeted {
                 Rectangle()
@@ -119,23 +120,24 @@ struct ClaudePanel: View {
     /// Past conversations for this workspace, read from the CLI's own
     /// transcript store so the list matches `claude --resume` exactly.
     private var historyMenu: some View {
-        Menu {
-            if appState.claudeRecentSessions.isEmpty {
-                Text("No past conversations")
-            } else {
-                ForEach(appState.claudeRecentSessions) { session in
-                    Button(session.displayTitle) { appState.resumeClaudeSession(session) }
-                }
-            }
-        } label: {
-            Image(systemName: "clock.arrow.circlepath")
-                .font(.system(size: appState.sf(11)))
-                .foregroundStyle(.secondary)
+        let sessions = appState.claudeRecentSessions
+        return ClaudePickerButton(
+            icon: "clock.arrow.circlepath",
+            header: "Recent conversations",
+            options: sessions.map {
+                ClaudePickerOption(
+                    id: $0.id,
+                    title: $0.displayTitle,
+                    detail: $0.modifiedAt.formatted(.relative(presentation: .named))
+                )
+            },
+            emptyMessage: "No past conversations",
+            width: 300,
+            help: "Resume a past conversation"
+        ) { id in
+            guard let session = sessions.first(where: { $0.id == id }) else { return }
+            appState.resumeClaudeSession(session)
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("Resume a past conversation")
         .task(id: appState.claudeSessionGeneration) { await appState.loadClaudeRecentSessions() }
     }
 

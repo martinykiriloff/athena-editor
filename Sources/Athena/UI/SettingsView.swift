@@ -508,10 +508,11 @@ struct SettingsView: View {
                 Task { await updateService.checkForUpdates() }
             }
 
-        case .available(let version, _):
-            HStack(spacing: 8) {
-                ProgressView().controlSize(.small)
-                Text("Update \(version) found — downloading…").foregroundStyle(.secondary)
+        case .available(let release):
+            Label("Athena \(release.version) is available", systemImage: "arrow.down.circle.fill")
+                .foregroundStyle(Color.accentColor)
+            Button("Install and Restart") {
+                Task { await updateService.install { await appState.saveAllTabs() } }
             }
 
         case .downloading:

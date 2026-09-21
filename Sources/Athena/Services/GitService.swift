@@ -28,7 +28,7 @@ actor GitService {
     /// buffer (`git show` of a large commit). On failure the message is
     /// stderr, or stdout when stderr is empty — a conflicting merge/pull
     /// reports "CONFLICT …" on stdout with nothing on stderr.
-    private func run(args: [String], at url: URL) async throws -> String {
+    private func run(args: [String], at url: URL, allowedExitCodes: Set<Int32> = [0]) async throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         process.arguments = args
@@ -62,7 +62,7 @@ actor GitService {
         var status: Int32 = 0
         for await code in termination { status = code }
 
-        guard status == 0 else {
+        guard allowedExitCodes.contains(status) else {
             let message = stderr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? stdout : stderr
             throw GitError.commandFailed(message)
         }
@@ -327,6 +327,13 @@ actor GitService {
     /// ignores every line until it sees a hunk header, so it's harmless.
     func diff(commit: String, at url: URL) async throws -> String {
         try await run(args: ["show", commit], at: url)
+    }
+
+    /// Unified diff between two arbitrary files (`git diff --no-index`), for
+    /// the explorer's "Compare with Selected". Works outside a repo too.
+    /// Exit status 1 just means "the files differ", so it isn't a failure.
+    func diffFiles(_ lhs: URL, _ rhs: URL, at url: URL) async throws -> String {
+        try await run(args: ["diff", "--no-index", "--", lhs.path, rhs.path], at: url, allowedExitCodes: [0, 1])
     }
 
     // MARK: - Branches

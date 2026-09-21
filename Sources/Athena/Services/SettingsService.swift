@@ -6,8 +6,10 @@ actor SettingsService {
 
     private let settingsDirectory: URL
 
-    init() {
-        let base = FileManager.default
+    /// - Parameter directory: override for tests; defaults to
+    ///   `~/Library/Application Support/Athena/settings`.
+    init(directory: URL? = nil) {
+        let base = directory ?? FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)
             .first?
             .appendingPathComponent("Athena/settings")

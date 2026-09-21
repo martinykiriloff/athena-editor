@@ -74,11 +74,11 @@ actor LSPManager {
         startingLanguages.insert(language)
         defer { startingLanguages.remove(language) }
 
-        guard let exec = await executablePath(for: language) else { return }
+        guard let launch = await launchCommand(for: language) else { return }
 
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: exec)
-        process.arguments = ["--stdio"]
+        process.executableURL = URL(fileURLWithPath: launch.executable)
+        process.arguments = launch.arguments
 
         let stdinPipe  = Pipe()
         let stdoutPipe = Pipe()
@@ -553,6 +553,29 @@ actor LSPManager {
 
     // MARK: - Executable discovery
 
+    /// Resolves the executable *and* its arguments for `language`'s server.
+    /// Arguments are per-server, not a shared `--stdio`: only
+    /// `typescript-language-server` takes that flag. `sourcekit-lsp`, `pylsp`,
+    /// `rust-analyzer` and `gopls` all speak stdio by default and reject an
+    /// unknown option — `sourcekit-lsp` exits 64 on `--stdio`, which surfaced
+    /// as `serverTerminated` while awaiting `initialize`.
+    private func launchCommand(for language: Language) async -> (executable: String, arguments: [String])? {
+        switch language {
+        case .swift:
+            if let path = firstExecutable(at: ["/usr/bin/sourcekit-lsp"]) {
+                return (path, [])
+            }
+            if let xcrun = firstExecutable(at: ["/usr/bin/xcrun"]) {
+                return (xcrun, ["sourcekit-lsp"])
+            }
+            return nil
+        case .typescript, .javascript:
+            return await executablePath(for: language).map { ($0, ["--stdio"]) }
+        default:
+            return await executablePath(for: language).map { ($0, []) }
+        }
+    }
+
     /// Fixed install locations are checked first (cheap, no process spawn),
     /// then the user's real login-shell `$PATH` (see `resolvedUserPath()`) —
     /// this is what makes a version-manager-installed server (e.g.
@@ -587,15 +610,6 @@ actor LSPManager {
                 "/opt/homebrew/bin/gopls",
                 "/usr/local/bin/gopls",
             ])
-        case .swift:
-            if let path = firstExecutable(at: ["/usr/bin/sourcekit-lsp"]) {
-                return path
-            }
-            // Fall back to xcrun
-            if let xcrun = firstExecutable(at: ["/usr/bin/xcrun"]) {
-                return xcrun  // caller would need to pass ["sourcekit-lsp"] as args; handled below
-            }
-            return nil
         default:
             return nil
         }

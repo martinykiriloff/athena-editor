@@ -83,7 +83,7 @@ actor SearchService {
         if !caseSensitive { args.append("--ignore-case") }
         if !regex         { args.append("--fixed-strings") }
 
-        for item in filter.includeItems {
+        for item in filter.includeItems where item.contains("*") {
             args += ["--glob", item]
         }
         for item in filter.excludeItems {
@@ -92,7 +92,15 @@ actor SearchService {
             args += ["--glob", "!\(glob)"]
         }
 
-        args += [query, url.path]
+        // Folder includes ("src/components") scope the search path, same as
+        // the grep fallback — an rg `--glob` on a bare folder name doesn't
+        // reliably whitelist its contents.
+        let includeFolders = filter.includeItems.filter { !$0.contains("*") }
+        let searchPaths: [String] = includeFolders.isEmpty
+            ? [url.path]
+            : includeFolders.map { url.appendingPathComponent($0).path }
+
+        args += ["--", query] + searchPaths
         await runProcess(executableURL: URL(fileURLWithPath: rg), arguments: args, continuation: continuation)
     }
 

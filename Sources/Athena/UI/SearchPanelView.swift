@@ -33,6 +33,17 @@ struct SearchPanelView: View {
             resultsArea
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear { applyIncludePrefill() }
+        .onChange(of: appState.searchIncludePrefill) { _, _ in applyIncludePrefill() }
+    }
+
+    /// Consumes the explorer's "Find in Folder…" scope.
+    private func applyIncludePrefill() {
+        guard let prefill = appState.searchIncludePrefill else { return }
+        appState.searchIncludePrefill = nil
+        includePattern = prefill
+        showFilters = true
+        if !appState.searchQuery.isEmpty { triggerSearch() }
     }
 
     // MARK: - Search Bar

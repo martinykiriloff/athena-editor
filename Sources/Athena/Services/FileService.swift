@@ -106,6 +106,10 @@ actor FileService {
     // MARK: - Create / Delete / Rename
 
     func createFile(at url: URL) async throws {
+        // `FileManager.createFile` silently truncates an existing file.
+        guard !FileManager.default.fileExists(atPath: url.path) else {
+            throw FileServiceError.alreadyExists(url)
+        }
         let created = FileManager.default.createFile(atPath: url.path, contents: nil)
         if !created {
             throw FileServiceError.failedToCreateFile(url)
@@ -122,8 +126,59 @@ actor FileService {
 
     func rename(_ url: URL, to newName: String) async throws -> URL {
         let newURL = url.deletingLastPathComponent().appendingPathComponent(newName)
+        // A case-only rename ("readme.md" → "README.md") "exists" on a
+        // case-insensitive volume but is the same item, so let it through.
+        let isCaseOnlyRename = url.path.lowercased() == newURL.path.lowercased()
+        guard isCaseOnlyRename || !FileManager.default.fileExists(atPath: newURL.path) else {
+            throw FileServiceError.alreadyExists(newURL)
+        }
         try FileManager.default.moveItem(at: url, to: newURL)
         return newURL
+    }
+
+    // MARK: - Trash / Copy / Move
+
+    /// Moves `url` to the Trash (recoverable), matching VS Code's default
+    /// explorer delete.
+    func trash(_ url: URL) async throws {
+        try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+    }
+
+    func copyItem(from source: URL, to destination: URL) async throws {
+        try FileManager.default.copyItem(at: source, to: destination)
+    }
+
+    func moveItem(from source: URL, to destination: URL) async throws {
+        try FileManager.default.moveItem(at: source, to: destination)
+    }
+
+    func itemExists(_ url: URL) async -> Bool {
+        FileManager.default.fileExists(atPath: url.path)
+    }
+
+    /// First free "name copy.ext", "name copy 2.ext", … in `directory` for
+    /// `source` — or `source`'s own name when that isn't taken yet (a paste
+    /// into a different folder keeps the original name).
+    func uniqueDestination(for source: URL, in directory: URL) async -> URL {
+        Self.uniqueDestination(for: source, in: directory) { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
+    /// Pure core of `uniqueDestination(for:in:)`, parameterized over the
+    /// existence check so it's unit-testable without touching disk.
+    static func uniqueDestination(for source: URL, in directory: URL, exists: (URL) -> Bool) -> URL {
+        let original = directory.appendingPathComponent(source.lastPathComponent)
+        guard exists(original) else { return original }
+
+        let ext  = source.pathExtension
+        let stem = ext.isEmpty ? source.lastPathComponent : source.deletingPathExtension().lastPathComponent
+        var attempt = 1
+        while true {
+            let suffix = attempt == 1 ? " copy" : " copy \(attempt)"
+            let name = ext.isEmpty ? "\(stem)\(suffix)" : "\(stem)\(suffix).\(ext)"
+            let candidate = directory.appendingPathComponent(name)
+            if !exists(candidate) { return candidate }
+            attempt += 1
+        }
     }
 }
 
@@ -131,11 +186,14 @@ actor FileService {
 
 enum FileServiceError: Error, LocalizedError {
     case failedToCreateFile(URL)
+    case alreadyExists(URL)
 
     var errorDescription: String? {
         switch self {
         case .failedToCreateFile(let url):
             return "Failed to create file at \(url.path)"
+        case .alreadyExists(let url):
+            return "\"\(url.lastPathComponent)\" already exists"
         }
     }
 }

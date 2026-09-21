@@ -12,9 +12,7 @@ struct FileTreeView: View {
 
     @State private var nodeToDelete: FileNode?
     @State private var showDeleteConfirmation: Bool = false
-    @State private var nodeToRename: FileNode?
-    @State private var renameText: String = ""
-    @State private var showRenameSheet: Bool = false
+    @State private var nameEntry: NameEntry?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -23,43 +21,23 @@ struct FileTreeView: View {
             fileList
         }
         .onAppear {
-            Task {
-                if let ws = appState.workspace {
-                    let tree = try? await appState.fileService.buildFileTree(ws.rootURL)
-                    appState.fileTree = tree ?? []
-                }
-            }
+            Task { await appState.refreshFileTree() }
         }
         .alert("Delete \"\(nodeToDelete?.name ?? "")\"?", isPresented: $showDeleteConfirmation) {
-            Button("Delete", role: .destructive) {
+            Button("Move to Trash", role: .destructive) {
                 if let node = nodeToDelete {
-                    Task {
-                        try? await appState.fileService.delete(node.url)
-                        if let ws = appState.workspace {
-                            let tree = try? await appState.fileService.buildFileTree(ws.rootURL)
-                            appState.fileTree = tree ?? []
-                        }
-                    }
+                    Task { await appState.trashExplorerItem(node.url) }
                 }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This action cannot be undone.")
+            Text(nodeToDelete?.isDirectory == true
+                 ? "The folder and its contents will be moved to the Trash."
+                 : "The file will be moved to the Trash.")
         }
-        .sheet(isPresented: $showRenameSheet) {
-            RenameSheet(
-                originalName: nodeToRename?.name ?? "",
-                renameText: $renameText
-            ) { newName in
-                if let node = nodeToRename, !newName.isEmpty {
-                    Task {
-                        _ = try? await appState.fileService.rename(node.url, to: newName)
-                        if let ws = appState.workspace {
-                            let tree = try? await appState.fileService.buildFileTree(ws.rootURL)
-                            appState.fileTree = tree ?? []
-                        }
-                    }
-                }
+        .sheet(item: $nameEntry) { entry in
+            NameEntrySheet(entry: entry) { name in
+                Task { await commit(entry, name: name) }
             }
         }
     }
@@ -76,31 +54,18 @@ struct FileTreeView: View {
 
             Spacer()
 
-            // New file
-            headerButton(systemImage: "doc.badge.plus", tooltip: "New File") {
-                if let ws = appState.workspace {
-                    let newURL = ws.rootURL.appendingPathComponent("untitled")
-                    Task {
-                        try? await appState.fileService.createFile(at: newURL)
-                        let tree = try? await appState.fileService.buildFileTree(ws.rootURL)
-                        appState.fileTree = tree ?? []
-                    }
-                }
+            headerButton(systemImage: "doc.badge.plus", tooltip: "New File…") {
+                if let root = appState.workspace?.rootURL { nameEntry = .newFile(in: root) }
             }
 
-            // New folder
-            headerButton(systemImage: "folder.badge.plus", tooltip: "New Folder") {
-                if let ws = appState.workspace {
-                    let newURL = ws.rootURL.appendingPathComponent("untitled-folder")
-                    Task {
-                        try? await appState.fileService.createDirectory(at: newURL)
-                        let tree = try? await appState.fileService.buildFileTree(ws.rootURL)
-                        appState.fileTree = tree ?? []
-                    }
-                }
+            headerButton(systemImage: "folder.badge.plus", tooltip: "New Folder…") {
+                if let root = appState.workspace?.rootURL { nameEntry = .newFolder(in: root) }
             }
 
-            // Collapse all
+            headerButton(systemImage: "arrow.clockwise", tooltip: "Refresh Explorer") {
+                Task { await appState.refreshFileTree() }
+            }
+
             headerButton(systemImage: "arrow.up.to.line", tooltip: "Collapse All") {
                 collapseAll(&appState.fileTree)
             }
@@ -133,20 +98,65 @@ struct FileTreeView: View {
                 ForEach(flattenTree(appState.fileTree)) { node in
                     FileNodeRow(node: node) {
                         handleTap(node)
-                    } onNewFile: {
-                        handleNewFile(in: node)
-                    } onNewFolder: {
-                        handleNewFolder(in: node)
-                    } onRename: {
-                        nodeToRename = node
-                        renameText = node.name
-                        showRenameSheet = true
-                    } onDelete: {
-                        nodeToDelete = node
-                        showDeleteConfirmation = true
+                    } menu: {
+                        FileNodeContextMenu(node: node) { action in
+                            handle(action, for: node)
+                        }
                     }
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .top)
+        }
+        // Right-clicking empty space below the rows targets the workspace
+        // root (rows install their own, more specific menu).
+        .contentShape(Rectangle())
+        .contextMenu {
+            if let root = appState.workspace?.rootURL {
+                let rootNode = FileNode(url: root, isDirectory: true, depth: -1)
+                FileNodeContextMenu(node: rootNode, isWorkspaceRoot: true) { action in
+                    handle(action, for: rootNode)
+                }
+            }
+        }
+    }
+
+    // MARK: - Actions
+
+    private func handle(_ action: FileNodeAction, for node: FileNode) {
+        let url = node.url
+        let folder = node.isDirectory ? url : url.deletingLastPathComponent()
+        switch action {
+        case .newFile:             nameEntry = .newFile(in: folder)
+        case .newFolder:           nameEntry = .newFolder(in: folder)
+        case .open:                handleTap(node)
+        case .openToSide:          Task { await appState.openFileToSide(url) }
+        case .openWithDefaultApp:  appState.openWithDefaultApp(url)
+        case .revealInFinder:      appState.revealInFinder(url)
+        case .openInTerminal:      appState.openInIntegratedTerminal(url, isDirectory: node.isDirectory)
+        case .findInFolder:        appState.findInFolder(url)
+        case .selectForCompare:    appState.selectForCompare(url)
+        case .compareWithSelected: Task { await appState.compareWithSelected(url) }
+        case .openChanges:         Task { await appState.openChanges(for: url) }
+        case .fileHistory:         Task { await appState.showExplorerFileHistory(url) }
+        case .addToClaudeChat:     appState.addExplorerItemToClaudeChat(url, isDirectory: node.isDirectory)
+        case .cut:                 appState.cutExplorerItems([url])
+        case .copy:                appState.copyExplorerItems([url])
+        case .paste:               Task { await appState.pasteExplorerItems(into: folder) }
+        case .duplicate:           Task { await appState.duplicateExplorerItem(url) }
+        case .copyPath:            appState.copyPathToPasteboard(url)
+        case .copyRelativePath:    appState.copyRelativePathToPasteboard(url)
+        case .rename:              nameEntry = .rename(url)
+        case .delete:
+            nodeToDelete = node
+            showDeleteConfirmation = true
+        }
+    }
+
+    private func commit(_ entry: NameEntry, name: String) async {
+        switch entry {
+        case .newFile(let dir):   await appState.createExplorerFile(named: name, in: dir)
+        case .newFolder(let dir): await appState.createExplorerFolder(named: name, in: dir)
+        case .rename(let url):    await appState.renameExplorerItem(url, to: name)
         }
     }
 
@@ -177,37 +187,17 @@ struct FileTreeView: View {
             toggleExpanded(node, in: &appState.fileTree)
             if isExpanded(node, in: appState.fileTree) {
                 Task {
-                    let children = try? await appState.fileService.buildFileTree(node.url)
-                    updateChildren(for: node, with: children ?? [], in: &appState.fileTree)
+                    // Re-list at the right depth so nested rows indent
+                    // correctly, keeping any expanded subfolders open.
+                    let previous = AppState.expandedPaths(in: node.children ?? [])
+                    var children = (try? await appState.fileService.buildFileTree(node.url, depth: node.depth + 1)) ?? []
+                    AppState.applyExpansion(previous, to: &children)
+                    updateChildren(for: node, with: children, in: &appState.fileTree)
                 }
             }
         } else {
             Task {
                 await appState.openFile(node.url)
-            }
-        }
-    }
-
-    private func handleNewFile(in node: FileNode) {
-        let dir = node.isDirectory ? node.url : node.url.deletingLastPathComponent()
-        let newURL = dir.appendingPathComponent("untitled")
-        Task {
-            try? await appState.fileService.createFile(at: newURL)
-            if let ws = appState.workspace {
-                let tree = try? await appState.fileService.buildFileTree(ws.rootURL)
-                appState.fileTree = tree ?? []
-            }
-        }
-    }
-
-    private func handleNewFolder(in node: FileNode) {
-        let dir = node.isDirectory ? node.url : node.url.deletingLastPathComponent()
-        let newURL = dir.appendingPathComponent("untitled-folder")
-        Task {
-            try? await appState.fileService.createDirectory(at: newURL)
-            if let ws = appState.workspace {
-                let tree = try? await appState.fileService.buildFileTree(ws.rootURL)
-                appState.fileTree = tree ?? []
             }
         }
     }
@@ -244,10 +234,7 @@ struct FileTreeView: View {
     ) {
         for i in nodes.indices {
             if nodes[i].id == target.id {
-                // Assign depth to children
-                var depthChildren = children
-                setDepth(&depthChildren, depth: target.depth + 1)
-                nodes[i].children = depthChildren
+                nodes[i].children = children
                 return
             }
             if nodes[i].children != nil {
@@ -255,29 +242,143 @@ struct FileTreeView: View {
             }
         }
     }
+}
 
-    private func setDepth(_ nodes: inout [FileNode], depth: Int) {
-        for i in nodes.indices {
-            nodes[i] = FileNode(
-                url: nodes[i].url,
-                isDirectory: nodes[i].isDirectory,
-                children: nodes[i].children,
-                isExpanded: nodes[i].isExpanded,
-                depth: depth
-            )
+// MARK: - FileNodeAction
+
+/// Everything the explorer context menu can do to a node.
+private enum FileNodeAction {
+    case newFile, newFolder
+    case open, openToSide, openWithDefaultApp, revealInFinder, openInTerminal
+    case findInFolder
+    case selectForCompare, compareWithSelected
+    case openChanges, fileHistory
+    case addToClaudeChat
+    case cut, copy, paste, duplicate
+    case copyPath, copyRelativePath
+    case rename, delete
+}
+
+// MARK: - FileNodeContextMenu
+
+/// VS Code explorer-style menu. Folders get create/find-in-folder actions,
+/// files get open/compare/git actions; the workspace root (empty-space
+/// right-click) omits the rename/delete/clipboard-source items.
+private struct FileNodeContextMenu: View {
+    let node: FileNode
+    var isWorkspaceRoot: Bool = false
+    let perform: (FileNodeAction) -> Void
+    @Environment(AppState.self) private var appState
+
+    var body: some View {
+        if node.isDirectory {
+            Button("New File…") { perform(.newFile) }
+            Button("New Folder…") { perform(.newFolder) }
+            Divider()
+            Button("Reveal in Finder") { perform(.revealInFinder) }
+            Button("Open in Integrated Terminal") { perform(.openInTerminal) }
+            Divider()
+            Button("Find in Folder…") { perform(.findInFolder) }
+            if !isWorkspaceRoot {
+                Button("Open Folder History") { perform(.fileHistory) }
+            }
+            Divider()
+            Button("Add Folder to Claude Chat") { perform(.addToClaudeChat) }
+        } else {
+            Button("Open") { perform(.open) }
+            Button("Open to the Side") { perform(.openToSide) }
+            Button("Open with Default App") { perform(.openWithDefaultApp) }
+            Button("Reveal in Finder") { perform(.revealInFinder) }
+            Button("Open in Integrated Terminal") { perform(.openInTerminal) }
+            Divider()
+            Button("Select for Compare") { perform(.selectForCompare) }
+            if let selected = appState.compareSelectionURL, selected != node.url {
+                Button("Compare with \(selected.lastPathComponent)") { perform(.compareWithSelected) }
+            }
+            Divider()
+            if appState.gitChange(for: node.url) != nil {
+                Button("Open Changes") { perform(.openChanges) }
+            }
+            Button("Open File History") { perform(.fileHistory) }
+            Divider()
+            Button("Add File to Claude Chat") { perform(.addToClaudeChat) }
+        }
+
+        Divider()
+        if !isWorkspaceRoot {
+            Button("Cut") { perform(.cut) }
+            Button("Copy") { perform(.copy) }
+        }
+        Button("Paste") { perform(.paste) }
+        if !isWorkspaceRoot {
+            Button("Duplicate") { perform(.duplicate) }
+        }
+
+        Divider()
+        Button("Copy Path") { perform(.copyPath) }
+        if !isWorkspaceRoot {
+            Button("Copy Relative Path") { perform(.copyRelativePath) }
+        }
+
+        if !isWorkspaceRoot {
+            Divider()
+            Button("Rename…") { perform(.rename) }
+            Button("Delete", role: .destructive) { perform(.delete) }
+        }
+    }
+}
+
+// MARK: - NameEntry
+
+/// What the name prompt sheet is collecting a name for.
+private enum NameEntry: Identifiable {
+    case newFile(in: URL)
+    case newFolder(in: URL)
+    case rename(URL)
+
+    var id: String {
+        switch self {
+        case .newFile(let dir):   return "file:\(dir.path)"
+        case .newFolder(let dir): return "folder:\(dir.path)"
+        case .rename(let url):    return "rename:\(url.path)"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .newFile(let dir):   return "New File in \(dir.lastPathComponent)"
+        case .newFolder(let dir): return "New Folder in \(dir.lastPathComponent)"
+        case .rename(let url):    return "Rename \"\(url.lastPathComponent)\""
+        }
+    }
+
+    var confirmLabel: String {
+        switch self {
+        case .newFile, .newFolder: return "Create"
+        case .rename:              return "Rename"
+        }
+    }
+
+    var initialText: String {
+        if case .rename(let url) = self { return url.lastPathComponent }
+        return ""
+    }
+
+    var placeholder: String {
+        switch self {
+        case .newFile:   return "name.ext or path/to/name.ext"
+        case .newFolder: return "folder or path/to/folder"
+        case .rename:    return "New name"
         }
     }
 }
 
 // MARK: - FileNodeRow
 
-private struct FileNodeRow: View {
+private struct FileNodeRow<Menu: View>: View {
     let node: FileNode
     let onTap: () -> Void
-    let onNewFile: () -> Void
-    let onNewFolder: () -> Void
-    let onRename: () -> Void
-    let onDelete: () -> Void
+    @ViewBuilder let menu: () -> Menu
     @Environment(AppState.self) private var appState
 
     @State private var isHovering: Bool = false
@@ -321,14 +422,7 @@ private struct FileNodeRow: View {
         .contentShape(Rectangle())
         .onHover { isHovering = $0 }
         .onTapGesture { onTap() }
-        .contextMenu {
-            Button("New File Here") { onNewFile() }
-            Button("New Folder Here") { onNewFolder() }
-            Divider()
-            Button("Rename") { onRename() }
-            Divider()
-            Button("Delete", role: .destructive) { onDelete() }
-        }
+        .contextMenu { menu() }
     }
 
     @ViewBuilder
@@ -383,40 +477,51 @@ private struct FileNodeRow: View {
     }
 }
 
-// MARK: - RenameSheet
+// MARK: - NameEntrySheet
 
-private struct RenameSheet: View {
-    let originalName: String
-    @Binding var renameText: String
+private struct NameEntrySheet: View {
+    let entry: NameEntry
     let onConfirm: (String) -> Void
 
+    @State private var text: String = ""
+    @FocusState private var isFocused: Bool
     @Environment(\.dismiss) private var dismiss
     @Environment(AppState.self) private var appState
 
     var body: some View {
-        VStack(spacing: appState.sf(16)) {
-            Text("Rename \"\(originalName)\"")
+        VStack(alignment: .leading, spacing: appState.sf(12)) {
+            Text(entry.title)
                 .font(.system(size: appState.sf(13), weight: .semibold))
+                .lineLimit(1)
+                .truncationMode(.middle)
 
-            TextField("New name", text: $renameText)
+            TextField(entry.placeholder, text: $text)
                 .textFieldStyle(.roundedBorder)
+                .focused($isFocused)
                 .onSubmit { commit() }
 
             HStack {
+                Spacer()
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
-                Spacer()
-                Button("Rename") { commit() }
+                Button(entry.confirmLabel) { commit() }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(renameText.isEmpty)
+                    .disabled(trimmed.isEmpty)
             }
         }
         .padding(appState.sf(20))
-        .frame(width: appState.sf(320))
+        .frame(width: appState.sf(360))
+        .onAppear {
+            text = entry.initialText
+            isFocused = true
+        }
     }
 
+    private var trimmed: String { text.trimmingCharacters(in: .whitespaces) }
+
     private func commit() {
-        onConfirm(renameText)
+        guard !trimmed.isEmpty else { return }
+        onConfirm(trimmed)
         dismiss()
     }
 }

@@ -73,13 +73,16 @@ struct StatusBarView: View {
 
                 // Update progress / badge
                 switch updateService.state {
-                case .available(let version, _):
+                case .available(let release):
                     StatusBarItem {
-                        HStack(spacing: appState.sf(4)) {
-                            ProgressView().controlSize(.mini)
-                            Text("Update \(version) found…")
+                        Button {
+                            updateService.isPromptPresented = true
+                        } label: {
+                            Label("Update \(release.version) available", systemImage: "arrow.down.circle.fill")
+                                .foregroundStyle(Color.accentColor)
                         }
-                        .foregroundStyle(.secondary)
+                        .buttonStyle(.plain)
+                        .help("Install Athena \(release.version)")
                     }
                 case .downloading:
                     StatusBarItem {

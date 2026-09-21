@@ -7,11 +7,20 @@ import AppKit
 
 // MARK: - State machine
 
-enum UpdateState: Sendable {
+/// A published release newer than the running build.
+struct UpdateRelease: Sendable, Equatable {
+    let version: String
+    /// Release notes (GitHub markdown), possibly empty.
+    let notes: String
+    let downloadURL: URL
+    let pageURL: URL?
+}
+
+enum UpdateState: Sendable, Equatable {
     case idle
     case checking
     case upToDate
-    case available(version: String, downloadURL: URL)
+    case available(UpdateRelease)
     case downloading
     case readyToInstall(appURL: URL)
     case error(String)
@@ -19,18 +28,43 @@ enum UpdateState: Sendable {
 
 // MARK: - Service
 
+/// Checks GitHub for a newer release at launch and every few hours after
+/// that. When it finds one it asks first (`isPromptPresented` drives
+/// `UpdatePromptView`) and never downloads or restarts on its own. The user
+/// can install now, be reminded next launch, or skip that version.
 @MainActor
 @Observable
 final class UpdateService {
-    private let repoOwner = "martinykiriloff"
-    private let repoName  = "athena-editor"
+    private static let skippedVersionKey = "update.skippedVersion"
 
     var state: UpdateState = .idle
     var lastChecked: Date?
     /// The version string being downloaded / installed, for UI display.
     private(set) var pendingVersion: String?
+    /// Drives the "new version available" prompt sheet.
+    var isPromptPresented: Bool = false
 
+    /// The running build's version. Nil for a build without an Info.plist
+    /// (bare `swift run`), which never checks automatically.
+    let currentVersion: String?
+
+    @ObservationIgnored private let fetchLatest: @Sendable () async throws -> UpdateRelease
+    @ObservationIgnored private let settings: SettingsService
     @ObservationIgnored private var autoCheckTask: Task<Void, Never>?
+    /// "Remind Me Later" silences a version for the rest of this launch only.
+    @ObservationIgnored private var remindLaterVersion: String?
+
+    init(
+        currentVersion: String? = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
+        settings: SettingsService = SettingsService(),
+        fetchLatest: @escaping @Sendable () async throws -> UpdateRelease = {
+            try await fetchLatestRelease(owner: "martinykiriloff", repo: "athena-editor")
+        }
+    ) {
+        self.currentVersion = currentVersion
+        self.settings = settings
+        self.fetchLatest = fetchLatest
+    }
 
     var updateAvailable: Bool {
         switch state {
@@ -39,11 +73,18 @@ final class UpdateService {
         }
     }
 
+    /// The release on offer, while one is.
+    var availableRelease: UpdateRelease? {
+        if case .available(let release) = state { return release }
+        return nil
+    }
+
     // MARK: - Public API
 
-    /// Schedules a one-time, delayed update check owned by this service —
-    /// not by any SwiftUI view's `.task`, whose lifetime is tied to that
-    /// view's identity/presence. Idempotent — call once at app launch.
+    /// Schedules the background checks: one shortly after launch, then one
+    /// every `interval`, owned by this service — not by any SwiftUI view's
+    /// `.task`, whose lifetime is tied to that view's identity/presence.
+    /// Idempotent — call once at app launch.
     ///
     /// Sleeps via a `ContinuousClock` instance rather than `Task.sleep(for:)`:
     /// the latter is generic over `Clock`, and on non-assertions release
@@ -51,57 +92,82 @@ final class UpdateService {
     /// colliding specializations of it across modules corrupt the task
     /// allocator on deallocation, aborting with `swift_task_dealloc`
     /// (see https://github.com/swiftlang/swift/issues/86204).
-    func scheduleAutoCheck(after delay: Duration = .seconds(5)) {
-        guard autoCheckTask == nil else { return }
+    func scheduleAutoCheck(after delay: Duration = .seconds(5), every interval: Duration = .seconds(6 * 60 * 60)) {
+        guard autoCheckTask == nil, currentVersion != nil else { return }
         autoCheckTask = Task { [weak self] in
             let clock = ContinuousClock()
-            try? await clock.sleep(until: clock.now.advanced(by: delay))
-            guard !Task.isCancelled else { return }
-            await self?.checkForUpdates()
+            var wait = delay
+            while !Task.isCancelled {
+                try? await clock.sleep(until: clock.now.advanced(by: wait))
+                guard !Task.isCancelled else { return }
+                await self?.checkForUpdates(userInitiated: false)
+                wait = interval
+            }
         }
     }
 
-    func checkForUpdates() async {
+    /// Looks for a newer release and prompts when there is one. A manual
+    /// check (menu / Settings) always prompts and reports "up to date"; a
+    /// background check stays quiet for a skipped or "later" version and
+    /// doesn't surface network errors.
+    func checkForUpdates(userInitiated: Bool = true) async {
+        switch state {
+        case .checking, .downloading, .readyToInstall: return
+        default: break
+        }
+        // An offer already on screen needn't be re-fetched in the background.
+        if !userInitiated, isPromptPresented { return }
+
+        let previous = state
         state = .checking
         do {
-            let release = try await fetchLatestRelease(owner: repoOwner, repo: repoName)
+            let release = try await fetchLatest()
             lastChecked = .now
-            let current = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
-            let latest  = release.tagName.trimmingCharacters(in: CharacterSet(charactersIn: "v"))
 
-            if isNewer(latest, than: current) {
-                guard
-                    let asset = release.assets.first(where: { $0.name.hasSuffix(".zip") }),
-                    let url   = URL(string: asset.browserDownloadURL)
-                else {
-                    state = .error("No .zip asset found in release \(latest)")
-                    return
-                }
-                pendingVersion = latest
-                // Kick off download immediately — no user interaction required.
-                await downloadAndInstall(from: url)
-            } else {
-                state = .upToDate
+            guard Self.isNewer(release.version, than: currentVersion ?? "0") else {
+                state = userInitiated ? .upToDate : .idle
+                return
+            }
+            state = .available(release)
+
+            let skipped: String = await settings.value(for: Self.skippedVersionKey, default: "")
+            let silenced = release.version == skipped || release.version == remindLaterVersion
+            if userInitiated || !silenced {
+                isPromptPresented = true
             }
         } catch {
-            state = .error(error.localizedDescription)
+            state = userInitiated ? .error(error.localizedDescription) : previous
         }
     }
 
-    private func downloadAndInstall(from url: URL) async {
+    /// "Remind Me Later": closes the prompt; the next launch asks again.
+    func remindLater() {
+        remindLaterVersion = availableRelease?.version
+        isPromptPresented = false
+    }
+
+    /// "Skip This Version": never prompt for it again in the background
+    /// (a manual check still offers it). A newer release prompts as usual.
+    func skipAvailableVersion() async {
+        guard let version = availableRelease?.version else { return }
+        try? await settings.setValue(version, for: Self.skippedVersionKey)
+        isPromptPresented = false
+        state = .idle
+    }
+
+    /// "Install and Restart": downloads the release, runs `prepare` (the
+    /// caller saves open files), then replaces the app and relaunches.
+    func install(prepare: @MainActor () async -> Void) async {
+        guard case .available(let release) = state else { return }
+        pendingVersion = release.version
         state = .downloading
         do {
-            let appURL = try await downloadAndExtract(from: url)
+            let appURL = try await downloadAndExtract(from: release.downloadURL)
             state = .readyToInstall(appURL: appURL)
-            // Save all open files before we quit.
-            NotificationCenter.default.post(name: .athenaSaveAll, object: nil)
-            // Give saves a moment to flush, then replace and relaunch.
-            // ContinuousClock, not Task.sleep(for:) — see scheduleAutoCheck's doc comment.
-            let clock = ContinuousClock()
-            try? await clock.sleep(until: clock.now.advanced(by: .seconds(2)))
+            await prepare()
             installAndRelaunch(newAppURL: appURL)
         } catch {
-            state = .error(error.localizedDescription)
+            state = .error("Download failed: \(error.localizedDescription)")
         }
     }
 
@@ -135,11 +201,15 @@ final class UpdateService {
         }
     }
 
-    // MARK: - Semver comparison
+    // MARK: - Version comparison
 
-    private func isNewer(_ version: String, than current: String) -> Bool {
-        let l = version.split(separator: ".").compactMap { Int($0) }
-        let c = current.split(separator: ".").compactMap  { Int($0) }
+    /// Numeric, component-wise ("2026.10" > "2026.9"); a leading "v" is ignored.
+    nonisolated static func isNewer(_ version: String, than current: String) -> Bool {
+        func parts(_ v: String) -> [Int] {
+            v.trimmingCharacters(in: CharacterSet(charactersIn: "vV")).split(separator: ".").compactMap { Int($0) }
+        }
+        let l = parts(version)
+        let c = parts(current)
         for i in 0..<max(l.count, c.count) {
             let lv = i < l.count ? l[i] : 0
             let cv = i < c.count ? c[i] : 0
@@ -152,13 +222,26 @@ final class UpdateService {
 
 // MARK: - Network helpers (nonisolated, runs off main actor)
 
-private func fetchLatestRelease(owner: String, repo: String) async throws -> GitHubRelease {
+private func fetchLatestRelease(owner: String, repo: String) async throws -> UpdateRelease {
     let url = URL(string: "https://api.github.com/repos/\(owner)/\(repo)/releases/latest")!
     var req = URLRequest(url: url)
     req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
     req.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
     let (data, _) = try await URLSession.shared.data(for: req)
-    return try JSONDecoder().decode(GitHubRelease.self, from: data)
+    let release = try JSONDecoder().decode(GitHubRelease.self, from: data)
+    let version = release.tagName.trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
+    guard
+        let asset = release.assets.first(where: { $0.name.hasSuffix(".zip") }),
+        let downloadURL = URL(string: asset.browserDownloadURL)
+    else {
+        throw UpdateError.noArchive(version)
+    }
+    return UpdateRelease(
+        version: version,
+        notes: release.body ?? "",
+        downloadURL: downloadURL,
+        pageURL: release.htmlURL.flatMap(URL.init(string:))
+    )
 }
 
 private func downloadAndExtract(from downloadURL: URL) async throws -> URL {
@@ -213,11 +296,13 @@ private func runProcess(executableURL: URL, arguments: [String]) async throws {
 private enum UpdateError: LocalizedError {
     case appNotFound
     case processFailed(Int32)
+    case noArchive(String)
 
     var errorDescription: String? {
         switch self {
         case .appNotFound:          return "Athena.app not found in the update archive"
         case .processFailed(let c): return "Process exited with code \(c)"
+        case .noArchive(let v):     return "No .zip asset found in release \(v)"
         }
     }
 }
@@ -226,9 +311,13 @@ private enum UpdateError: LocalizedError {
 
 private struct GitHubRelease: Decodable {
     let tagName: String
+    let body:    String?
+    let htmlURL: String?
     let assets:  [GitHubAsset]
     enum CodingKeys: String, CodingKey {
         case tagName = "tag_name"
+        case body
+        case htmlURL = "html_url"
         case assets
     }
 }

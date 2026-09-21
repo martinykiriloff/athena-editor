@@ -141,6 +141,13 @@ struct MainWindowView: View {
             // doesn't time out on CI (each ViewModifier is type-checked independently).
             .modifier(FileNotificationHandlers(appState: appState, newWindow: { openWindow(id: "main") }))
             .modifier(SystemNotificationHandlers(appState: appState, updateService: updateService))
+            .sheet(isPresented: Binding(
+                get: { updateService.isPromptPresented },
+                // Closing the sheet any other way counts as "later".
+                set: { if !$0 { updateService.remindLater() } }
+            )) {
+                UpdatePromptView()
+            }
     }
 
     private var layoutContent: some View {

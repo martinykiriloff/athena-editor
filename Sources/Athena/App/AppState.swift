@@ -299,6 +299,19 @@ final class AppState {
     /// Symbol (⇧⌘O).
     var quickOpenPrefill: String = ""
 
+    // MARK: - Explorer (file tree context menu)
+
+    /// The file picked with "Select for Compare"; "Compare with Selected"
+    /// diffs another file against it.
+    var compareSelectionURL: URL?
+    /// Set by "Find in Folder…" — `SearchPanelView` moves it into its
+    /// include filter and clears it.
+    var searchIncludePrefill: String?
+    /// Items staged with "Cut". The URLs themselves live on the general
+    /// pasteboard (so Finder copies paste in too); this only marks that a
+    /// paste of exactly these items should move rather than copy.
+    @ObservationIgnored var cutFileURLs: [URL] = []
+
     // MARK: - Diff Viewer
 
     /// The Git file change currently shown in `DiffViewerView`'s overlay —
@@ -519,6 +532,43 @@ final class AppState {
         secondaryGroup?.tabs.append(copy)
         secondaryGroup?.activeTabId = copy.id
         focusedGroup = .secondary
+    }
+
+    /// Explorer "Open to the Side": opens `url` in the secondary group
+    /// (creating it on first use). An existing secondary tab for the file is
+    /// activated; a file open only in the primary group gets an independent
+    /// secondary copy, exactly like `splitEditorRight()`.
+    func openFileToSide(_ url: URL) async {
+        if secondaryGroup == nil {
+            secondaryGroup = EditorGroup()
+        }
+
+        if let existing = secondaryGroup?.tabs.first(where: { $0.fileURL == url }) {
+            secondaryGroup?.activeTabId = existing.id
+            focusedGroup = .secondary
+            return
+        }
+
+        if let source = openTabs.first(where: { $0.fileURL == url }) {
+            var copy = TabModel(title: source.title)
+            copy.fileURL  = url
+            copy.content  = source.content
+            copy.language = source.language
+            copy.isDirty  = source.isDirty
+            secondaryGroup?.tabs.append(copy)
+            secondaryGroup?.activeTabId = copy.id
+            focusedGroup = .secondary
+            return
+        }
+
+        focusedGroup = .secondary
+        await openFile(url)
+
+        // A failed read leaves the fresh group empty — collapse it again.
+        if secondaryGroup?.tabs.isEmpty == true {
+            secondaryGroup = nil
+            focusedGroup = .primary
+        }
     }
 
     /// Records `tabId`'s cursor position (in `side`) and makes `side` the
@@ -3076,15 +3126,6 @@ final class AppState {
         }
     }
 
-    private func refreshFileTree() async {
-        guard let workspace else { return }
-        do {
-            fileTree = try await fileService.buildFileTree(workspace.rootURL)
-        } catch {
-            statusMessage = "Error refreshing file tree: \(error.localizedDescription)"
-        }
-    }
-
     /// An open tab's backing file changed on disk. If the tab has no unsaved
     /// edits, reload it silently (bypassing `updateTabContent` so this
     /// doesn't re-mark the tab dirty or re-fire LSP `didChange` — same
@@ -3399,13 +3440,13 @@ final class AppState {
     /// and makes it active. Titled after the detected `$SHELL` — just the
     /// shell name ("zsh") for the first session created this launch, numbered
     /// ("zsh 2", "zsh 3", …) after that.
-    func newTerminalSession() {
+    func newTerminalSession(in directory: String? = nil) {
         terminalSessionSequence += 1
         let shellPath = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         let shellName = URL(fileURLWithPath: shellPath).lastPathComponent
         let title = terminalSessionSequence == 1 ? shellName : "\(shellName) \(terminalSessionSequence)"
         let session = TerminalSession(title: title, shell: shellPath,
-                                      currentDirectory: terminalStartDirectory)
+                                      currentDirectory: directory ?? terminalStartDirectory)
         terminalSessions.append(session)
         activeTerminalSessionId = session.id
     }
