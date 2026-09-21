@@ -11,11 +11,20 @@ import AppKit
 struct ResizeDivider: View {
     enum Axis { case vertical, horizontal }
 
+    /// Thickness of the handle, in screen points (not zoomed).
+    static let thickness: CGFloat = 4
+
     let axis: Axis
-    /// Closure receives the raw drag translation delta and should update AppState.
-    let onDrag: (CGFloat) -> Void
+    /// The size being resized, read once when a drag begins.
+    let size: () -> CGFloat
+    /// Receives the size captured at drag start and the cumulative drag
+    /// translation in screen points; should write the new size to AppState.
+    let onDrag: (_ base: CGFloat, _ translation: CGFloat) -> Void
 
     @State private var isHovering = false
+    /// Size at drag start. `DragGesture` translation is cumulative, so it
+    /// must be applied to a base that stays fixed for the whole drag.
+    @State private var dragBase: CGFloat?
 
     var body: some View {
         Group {
@@ -23,7 +32,7 @@ struct ResizeDivider: View {
             case .vertical:
                 Rectangle()
                     .fill(isHovering ? Color.accentColor.opacity(0.6) : Color(nsColor: .separatorColor))
-                    .frame(width: 4)
+                    .frame(width: Self.thickness)
                     .onHover { hovering in
                         isHovering = hovering
                         if hovering {
@@ -32,16 +41,11 @@ struct ResizeDivider: View {
                             NSCursor.pop()
                         }
                     }
-                    .gesture(
-                        DragGesture(minimumDistance: 1, coordinateSpace: .global)
-                            .onChanged { value in
-                                onDrag(value.translation.width)
-                            }
-                    )
+                    .gesture(dragGesture { $0.width })
             case .horizontal:
                 Rectangle()
                     .fill(isHovering ? Color.accentColor.opacity(0.6) : Color(nsColor: .separatorColor))
-                    .frame(height: 4)
+                    .frame(height: Self.thickness)
                     .onHover { hovering in
                         isHovering = hovering
                         if hovering {
@@ -50,14 +54,19 @@ struct ResizeDivider: View {
                             NSCursor.pop()
                         }
                     }
-                    .gesture(
-                        DragGesture(minimumDistance: 1, coordinateSpace: .global)
-                            .onChanged { value in
-                                onDrag(value.translation.height)
-                            }
-                    )
+                    .gesture(dragGesture { $0.height })
             }
         }
+    }
+
+    private func dragGesture(_ component: @escaping (CGSize) -> CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 1, coordinateSpace: .global)
+            .onChanged { value in
+                let base = dragBase ?? size()
+                dragBase = base
+                onDrag(base, component(value.translation))
+            }
+            .onEnded { _ in dragBase = nil }
     }
 }
 
@@ -67,13 +76,21 @@ struct ResizeDivider: View {
 private struct EditorSplitView: View {
     @Environment(AppState.self) private var appState
 
-    // Accumulated width before the current drag begins.
-    @State private var dragBaseHeight: CGFloat = 0
-
     var body: some View {
-        @Bindable var state = appState
+        GeometryReader { geo in
+            content(height: geo.size.height)
+        }
+    }
 
-        VStack(spacing: 0) {
+    private func content(height: CGFloat) -> some View {
+        let showPanel = appState.showBottomPanel && !appState.isZenMode
+        // The panel may take the whole column (unzoomed points); the stored
+        // height is only capped at render time so it comes back when the
+        // window grows again.
+        let maxPanel = max(0, (height - ResizeDivider.thickness) / appState.uiScale)
+        let panelHeight = min(appState.bottomPanelHeight, maxPanel)
+
+        return VStack(spacing: 0) {
             // Zen mode (plan.md item 28, "C8") centers the editor content
             // with a max width — VS Code-style — rather than letting it
             // stretch full-bleed once the sidebar/activity bar/panel chrome
@@ -91,22 +108,17 @@ private struct EditorSplitView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
-            if appState.showBottomPanel && !appState.isZenMode {
-                ResizeDivider(axis: .horizontal) { delta in
-                    // Dragging upward (negative delta) should increase panel height.
-                    // Drag deltas are in screen points; the stored height is in
-                    // unzoomed points so it survives a zoom change unchanged.
-                    let newHeight = (dragBaseHeight - delta / appState.uiScale)
-                        .clamped(to: 100...600)
-                    appState.bottomPanelHeight = newHeight
-                }
-                .onAppear { dragBaseHeight = appState.bottomPanelHeight }
-                .onChange(of: appState.bottomPanelHeight) { _, newValue in
-                    dragBaseHeight = newValue
+            if showPanel {
+                // Dragging upward (negative translation) grows the panel.
+                // Drag deltas are in screen points; the stored height is in
+                // unzoomed points so it survives a zoom change unchanged.
+                ResizeDivider(axis: .horizontal, size: { panelHeight }) { base, t in
+                    appState.bottomPanelHeight = (base - t / appState.uiScale).clamped(to: 0...maxPanel)
                 }
 
                 BottomPanelView()
-                    .frame(height: appState.sf(appState.bottomPanelHeight))
+                    .frame(height: appState.sf(panelHeight))
+                    .clipped()
             }
         }
     }
@@ -118,9 +130,6 @@ struct MainWindowView: View {
     @Environment(AppState.self)      private var appState
     @Environment(UpdateService.self) private var updateService
     @Environment(\.openWindow)       private var openWindow
-
-    @State private var dragBaseSidebarWidth: CGFloat = 0
-    @State private var dragBaseClaudeWidth: CGFloat = 0
 
     var body: some View {
         layoutContent
@@ -136,44 +145,64 @@ struct MainWindowView: View {
 
     private var layoutContent: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                if !appState.isZenMode {
-                    ActivityBarView()
-                        .frame(width: appState.sf(48))
-                }
-
-                if appState.showSidebar && !appState.isZenMode {
-                    SidebarView()
-                        .frame(width: appState.sf(appState.sidebarWidth))
-                    ResizeDivider(axis: .vertical) { delta in
-                        appState.sidebarWidth = (dragBaseSidebarWidth + delta / appState.uiScale).clamped(to: 160...600)
-                    }
-                    .onAppear { dragBaseSidebarWidth = appState.sidebarWidth }
-                    .onChange(of: appState.sidebarWidth) { _, v in dragBaseSidebarWidth = v }
-                }
-
-                EditorSplitView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                if appState.showClaudePanel {
-                    ResizeDivider(axis: .vertical) { delta in
-                        appState.claudePanelWidth = (dragBaseClaudeWidth - delta / appState.uiScale).clamped(to: 240...700)
-                    }
-                    .onAppear { dragBaseClaudeWidth = appState.claudePanelWidth }
-                    .onChange(of: appState.claudePanelWidth) { _, v in dragBaseClaudeWidth = v }
-
-                    ClaudePanel()
-                        .frame(width: appState.sf(appState.claudePanelWidth))
-                        .background(Color(nsColor: .controlBackgroundColor))
-                }
+            GeometryReader { geo in
+                panelRow(width: geo.size.width)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             if !appState.isZenMode {
                 StatusBarView()
                     .frame(height: appState.sf(22))
             }
         }
+    }
+
+    /// Activity bar, sidebar, editor and Claude panel. Side panel limits
+    /// come from the window's current width, not fixed numbers: each panel
+    /// may grow until it meets the other one (squeezing the editor to
+    /// nothing) and shrink to zero.
+    private func panelRow(width: CGFloat) -> some View {
+        let showSidebar = appState.showSidebar && !appState.isZenMode
+        let showClaude  = appState.showClaudePanel
+        let activityBar = appState.isZenMode ? 0 : appState.sf(48)
+        let dividers    = ResizeDivider.thickness * CGFloat((showSidebar ? 1 : 0) + (showClaude ? 1 : 0))
+        // Width the two side panels share, in unzoomed points.
+        let free = max(0, (width - activityBar - dividers) / appState.uiScale)
+        // Stored widths are capped only at render time, so a panel regains
+        // its size when the window grows again.
+        let sidebarWidth = showSidebar ? min(appState.sidebarWidth, free) : 0
+        let claudeWidth  = showClaude ? min(appState.claudePanelWidth, free - sidebarWidth) : 0
+
+        return HStack(spacing: 0) {
+            if !appState.isZenMode {
+                ActivityBarView()
+                    .frame(width: appState.sf(48))
+            }
+
+            if showSidebar {
+                SidebarView()
+                    .frame(width: appState.sf(sidebarWidth))
+                    .clipped()
+                ResizeDivider(axis: .vertical, size: { sidebarWidth }) { base, t in
+                    appState.sidebarWidth = (base + t / appState.uiScale).clamped(to: 0...(free - claudeWidth))
+                }
+            }
+
+            EditorSplitView()
+                .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+
+            if showClaude {
+                ResizeDivider(axis: .vertical, size: { claudeWidth }) { base, t in
+                    appState.claudePanelWidth = (base - t / appState.uiScale).clamped(to: 0...(free - sidebarWidth))
+                }
+
+                ClaudePanel()
+                    .frame(width: appState.sf(claudeWidth))
+                    .background(Color(nsColor: .controlBackgroundColor))
+                    .clipped()
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

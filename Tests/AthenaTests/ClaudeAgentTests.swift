@@ -401,6 +401,7 @@ struct ClaudeAgentLaunchTests {
         #expect(argument(args, after: "--input-format") == "stream-json")
         #expect(argument(args, after: "--output-format") == "stream-json")
         #expect(args.contains("--include-partial-messages"))
+        #expect(argument(args, after: "--thinking-display") == "summarized")
         #expect(argument(args, after: "--permission-prompts") == "host")
         #expect(argument(args, after: "--permission-prompt-tool") == "stdio")
         #expect(argument(args, after: "--permission-mode") == "default")

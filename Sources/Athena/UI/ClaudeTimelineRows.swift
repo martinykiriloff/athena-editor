@@ -512,7 +512,8 @@ struct ClaudeNoticeRow: View {
 
 // MARK: - ClaudeThinkingRow
 
-/// Extended thinking, collapsed by default — present but never in the way.
+/// Extended thinking: shown live while it streams, then folded away once the
+/// block completes so finished turns stay compact.
 struct ClaudeThinkingRow: View {
     @Environment(AppState.self) private var appState
 
@@ -520,6 +521,9 @@ struct ClaudeThinkingRow: View {
     let isStreaming: Bool
 
     @State private var isExpanded = false
+
+    private var hasText: Bool { !text.isEmpty }
+    private var showsText: Bool { hasText && (isStreaming || isExpanded) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: appState.sf(4)) {
@@ -531,16 +535,21 @@ struct ClaudeThinkingRow: View {
                         .font(.system(size: appState.sf(9.5)))
                     Text(isStreaming ? "Thinking…" : "Thought process")
                         .font(.system(size: appState.sf(10), weight: .medium))
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: appState.sf(7.5), weight: .semibold))
+                    if hasText && !isStreaming {
+                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                            .font(.system(size: appState.sf(7.5), weight: .semibold))
+                    }
                     Spacer()
                 }
                 .foregroundStyle(.tertiary)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            // Nothing to reveal while streaming (already shown) or when the
+            // model withheld the thinking text.
+            .disabled(!hasText || isStreaming)
 
-            if isExpanded {
+            if showsText {
                 Text(text)
                     .font(.system(size: appState.sf(10.5)))
                     .foregroundStyle(.secondary)

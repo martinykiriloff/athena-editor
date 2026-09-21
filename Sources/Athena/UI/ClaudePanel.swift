@@ -83,59 +83,37 @@ struct ClaudePanel: View {
     }
 
     private var modelMenu: some View {
-        Menu {
-            ForEach(ClaudeModelOption.all) { option in
-                Button {
-                    appState.setClaudeModel(option)
-                } label: {
-                    if option == appState.claudeModel {
-                        Label(option.name, systemImage: "checkmark")
-                    } else {
-                        Text(option.name)
-                    }
-                }
-            }
-        } label: {
-            HStack(spacing: appState.sf(3)) {
-                Text(appState.claudeModel.name)
-                    .font(.system(size: appState.sf(10), weight: .medium))
-                Image(systemName: "chevron.down")
-                    .font(.system(size: appState.sf(7), weight: .semibold))
-            }
-            .foregroundStyle(.secondary)
+        ClaudePickerButton(
+            label: appState.claudeModel.name,
+            header: "Model",
+            options: ClaudeModelOption.all.map {
+                ClaudePickerOption(id: $0.id, title: $0.name, detail: $0.detail, icon: $0.icon)
+            },
+            selection: appState.claudeModel.id,
+            help: "Model for this session"
+        ) { id in
+            appState.setClaudeModel(.option(id: id))
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("Model for this session")
     }
 
     private var permissionModeMenu: some View {
-        Menu {
-            ForEach(ClaudePermissionMode.allCases) { mode in
-                Button {
-                    appState.setClaudePermissionMode(mode)
-                } label: {
-                    if mode == appState.claudePermissionMode {
-                        Label(mode.title, systemImage: "checkmark")
-                    } else {
-                        Label(mode.title, systemImage: mode.icon)
-                    }
-                }
-            }
-        } label: {
-            HStack(spacing: appState.sf(3)) {
-                Image(systemName: appState.claudePermissionMode.icon)
-                    .font(.system(size: appState.sf(9)))
-                Text(appState.claudePermissionMode.shortTitle)
-                    .font(.system(size: appState.sf(10), weight: .medium))
-            }
-            .foregroundStyle(appState.claudePermissionMode.isDangerous ? Color.orange : Color.secondary)
+        let current = appState.claudePermissionMode
+        return ClaudePickerButton(
+            label: current.shortTitle,
+            icon: current.icon,
+            labelTint: current.isDangerous ? .orange : .secondary,
+            header: "Permissions",
+            options: ClaudePermissionMode.allCases.map {
+                ClaudePickerOption(
+                    id: $0, title: $0.title, detail: $0.detail, icon: $0.icon,
+                    tint: $0.isDangerous ? .orange : .accentColor
+                )
+            },
+            selection: current,
+            help: "Permission mode"
+        ) { mode in
+            appState.setClaudePermissionMode(mode)
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("Permission mode")
     }
 
     /// Past conversations for this workspace, read from the CLI's own

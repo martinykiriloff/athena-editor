@@ -173,6 +173,16 @@ enum ClaudePermissionMode: String, CaseIterable, Sendable, Identifiable, Codable
         }
     }
 
+    /// One-line explanation shown under the title in the mode picker.
+    var detail: String {
+        switch self {
+        case .normal:            return "Ask before edits and commands"
+        case .acceptEdits:       return "Apply file edits without asking"
+        case .plan:              return "Research and plan — no changes"
+        case .bypassPermissions: return "Run everything without asking"
+        }
+    }
+
     /// `bypassPermissions` disables every guardrail — the panel warns on it.
     var isDangerous: Bool { self == .bypassPermissions }
 }
@@ -191,6 +201,25 @@ struct ClaudeModelOption: Identifiable, Sendable, Equatable, Codable {
     static let haiku   = ClaudeModelOption(id: "haiku",  name: "Haiku",   alias: "haiku")
 
     static let all: [ClaudeModelOption] = [.auto, .opus, .sonnet, .haiku]
+
+    /// One-line explanation shown under the name in the model picker.
+    var detail: String {
+        switch id {
+        case "opus":   return "Most capable — complex, multi-step work"
+        case "sonnet": return "Balanced speed and capability"
+        case "haiku":  return "Fastest — quick edits and questions"
+        default:       return "Whatever the CLI is configured to use"
+        }
+    }
+
+    var icon: String {
+        switch id {
+        case "opus":   return "brain.head.profile"
+        case "sonnet": return "bolt"
+        case "haiku":  return "hare"
+        default:       return "gearshape"
+        }
+    }
 
     static func option(id: String) -> ClaudeModelOption {
         all.first { $0.id == id } ?? .auto

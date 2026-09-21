@@ -318,6 +318,9 @@ actor ClaudeAgentService {
             "--output-format", "stream-json",
             "--verbose",
             "--include-partial-messages",
+            // Headless sessions get empty (signature-only) thinking blocks
+            // unless a display mode is requested explicitly.
+            "--thinking-display", "summarized",
             // Route permission prompts to us rather than auto-denying them.
             "--permission-prompts", "host",
             "--permission-prompt-tool", "stdio",

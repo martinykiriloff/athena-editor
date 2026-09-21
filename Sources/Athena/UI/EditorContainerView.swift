@@ -67,7 +67,7 @@ private struct DocumentSymbolsTaskKey: Equatable {
 /// Two side-by-side editor panes with a basic draggable splitter between
 /// them (plan.md item 22 point 3: "a simple fixed-ratio or basic-draggable-
 /// width split is fine" — this isn't pixel-perfect resizable, just a
-/// `GeometryReader`-driven width fraction clamped to a sane range).
+/// `GeometryReader`-driven width fraction of the available width).
 private struct SplitEditorPanesView: View {
     @Environment(AppState.self) private var appState
     /// Primary pane's fraction of the total available width.
@@ -81,26 +81,25 @@ private struct SplitEditorPanesView: View {
             HStack(spacing: 0) {
                 EditorPaneView(side: .primary)
                     .frame(width: totalWidth * splitFraction)
+                    .clipped()
                 SplitterHandleView(fraction: $splitFraction, totalWidth: totalWidth)
                 EditorPaneView(side: .secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
             }
         }
     }
 }
 
 /// A narrow draggable divider between the two editor panes. Reports the
-/// primary pane's fraction of `totalWidth` (clamped to 20%–80% so neither
-/// pane can be dragged away entirely) back to the parent via `fraction`.
+/// primary pane's fraction of `totalWidth` (0–1: either pane may be
+/// dragged down to nothing) back to the parent via `fraction`.
 private struct SplitterHandleView: View {
     @Binding var fraction: CGFloat
     let totalWidth: CGFloat
     @Environment(AppState.self) private var appState
     @State private var isHovering = false
     @State private var dragStartFraction: CGFloat?
-
-    private let minFraction: CGFloat = 0.2
-    private let maxFraction: CGFloat = 0.8
 
     var body: some View {
         Rectangle()
@@ -122,7 +121,7 @@ private struct SplitterHandleView: View {
                         dragStartFraction = base
                         guard totalWidth > 0 else { return }
                         let delta = value.translation.width / totalWidth
-                        fraction = min(maxFraction, max(minFraction, base + delta))
+                        fraction = min(1, max(0, base + delta))
                     }
                     .onEnded { _ in dragStartFraction = nil }
             )
