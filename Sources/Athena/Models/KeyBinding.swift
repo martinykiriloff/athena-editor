@@ -12,6 +12,7 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
     // View
     case toggleSidebar      = "workbench.action.toggleSidebarVisibility"
     case toggleTerminal     = "workbench.action.terminal.toggleTerminal"
+    case newTerminal        = "workbench.action.terminal.new"
     case showExplorer       = "workbench.view.explorer"
     case showSourceControl  = "workbench.view.scm"
     case showSearch         = "workbench.view.search"
@@ -65,6 +66,7 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
         case .closeTab:          return "Close Editor"
         case .toggleSidebar:     return "Toggle Sidebar"
         case .toggleTerminal:    return "Toggle Terminal"
+        case .newTerminal:       return "New Terminal"
         case .showExplorer:      return "Show Explorer"
         case .showSourceControl: return "Show Source Control"
         case .showSearch:        return "Show Search"
@@ -111,7 +113,7 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
         switch self {
         case .saveFile, .newFile, .closeTab:
             return "File"
-        case .toggleSidebar, .toggleTerminal,
+        case .toggleSidebar, .toggleTerminal, .newTerminal,
              .showExplorer, .showSourceControl, .showSearch, .showDatabase, .showClaude,
              .claudeAddContext, .claudeInterrupt,
              .zoomIn, .zoomOut, .resetZoom, .splitEditorRight, .toggleZenMode:
@@ -252,6 +254,7 @@ struct KeyBinding: Identifiable, Codable, Sendable {
         // View
         KeyBinding(action: .toggleSidebar,     combo: KeyCombo(key: "b",   command: true)),
         KeyBinding(action: .toggleTerminal,    combo: KeyCombo(key: "backtick", control: true)),
+        KeyBinding(action: .newTerminal,       combo: KeyCombo(key: "backtick", shift: true, control: true)),
         KeyBinding(action: .showExplorer,      combo: KeyCombo(key: "e",   command: true, shift: true)),
         KeyBinding(action: .showSourceControl, combo: KeyCombo(key: "g",   command: true, shift: true)),
         KeyBinding(action: .showSearch,        combo: KeyCombo(key: "f",   command: true, shift: true)),

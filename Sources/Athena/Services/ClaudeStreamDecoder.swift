@@ -329,6 +329,7 @@ struct ClaudeStreamDecoder: Sendable {
         info.cwd            = message["cwd"]?.stringValue ?? ""
         info.permissionMode = message["permissionMode"]?.stringValue ?? "default"
         info.version        = message["claude_code_version"]?.stringValue ?? ""
+        info.apiKeySource   = message["apiKeySource"]?.stringValue ?? ""
         info.tools          = (message["tools"]?.arrayValue ?? []).compactMap(\.stringValue)
         info.agents         = (message["agents"]?.arrayValue ?? []).compactMap(\.stringValue)
         info.slashCommandNames = (message["slash_commands"]?.arrayValue ?? []).compactMap(\.stringValue)

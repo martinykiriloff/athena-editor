@@ -43,6 +43,23 @@ struct ClaudeSessionInitTests {
         #expect(info.mcpServers.last?.isConnected == false)
     }
 
+    /// A subscription login reports `apiKeySource: "none"` yet still sends a
+    /// `total_cost_usd` per turn; only real API-key billing should show it.
+    @Test func distinguishesSubscriptionFromAPIKeyBilling() {
+        func info(_ source: String?) -> ClaudeSessionInfo? {
+            var line = initLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let source {
+                line = String(line.dropLast()) + #","apiKeySource":"\#(source)"}"#
+            }
+            var decoder = ClaudeStreamDecoder()
+            guard case .sessionInit(let info)? = decoder.decode(line: line).first else { return nil }
+            return info
+        }
+        #expect(info("none")?.isBilledPerToken == false)
+        #expect(info("ANTHROPIC_API_KEY")?.isBilledPerToken == true)
+        #expect(info(nil)?.isBilledPerToken == false)
+    }
+
     /// Hook lifecycle frames dominate the stream volume and must never reach
     /// the timeline.
     @Test func ignoresHookLifecycleNoise() {
@@ -778,5 +795,43 @@ struct ClaudeSessionStoreTests {
             ClaudeSessionStore.escapedDirectoryName(for: URL(fileURLWithPath: "/Users/dev/shop"))
                 == "-Users-dev-shop"
         )
+    }
+}
+
+// MARK: - Reply markdown blocks
+
+@Suite("Claude reply markdown blocks")
+struct ClaudeMarkdownBlockTests {
+
+    @Test("Fenced code becomes a code block, dropping the fence and language tag")
+    func fencedCode() {
+        let blocks = ClaudeMarkdownBlock.parse("Run this:\n\n```bash\nnpm test\nnpm run lint\n```\n\nDone.")
+        #expect(blocks == [
+            .paragraph("Run this:"),
+            .code("npm test\nnpm run lint"),
+            .paragraph("Done."),
+        ])
+    }
+
+    @Test("A fence still open mid-stream renders as code so far")
+    func unterminatedFence() {
+        #expect(ClaudeMarkdownBlock.parse("```swift\nlet x = 1") == [.code("let x = 1")])
+    }
+
+    @Test("Headings, bullets and numbered items are split out of prose")
+    func headingsAndLists() {
+        let blocks = ClaudeMarkdownBlock.parse("## Plan\n- first\n  * nested\n2. second\nplain line\n**bold** start")
+        #expect(blocks == [
+            .heading(level: 2, text: "Plan"),
+            .listItem(marker: "•", text: "first"),
+            .listItem(marker: "  •", text: "nested"),
+            .listItem(marker: "2.", text: "second"),
+            .paragraph("plain line\n**bold** start"),
+        ])
+    }
+
+    @Test("Hashes without a space and horizontal rules stay prose")
+    func notHeadings() {
+        #expect(ClaudeMarkdownBlock.parse("#hashtag\n---") == [.paragraph("#hashtag\n---")])
     }
 }

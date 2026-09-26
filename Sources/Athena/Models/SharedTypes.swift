@@ -589,6 +589,16 @@ struct ClaudeAccount: Identifiable, Equatable, Sendable {
         configDirectory: "\(NSHomeDirectory())/.claude-work"
     )
     static let all: [ClaudeAccount] = [.personal, .work]
+
+    /// Accounts actually set up on this Mac — an alternate account only
+    /// counts once its config directory exists, so single-account users
+    /// never see an account switcher.
+    static var available: [ClaudeAccount] {
+        all.filter { account in
+            guard let dir = account.configDirectory else { return true }
+            return FileManager.default.fileExists(atPath: dir)
+        }
+    }
 }
 
 /// A file staged for (or sent with) a Claude panel message. Athena never

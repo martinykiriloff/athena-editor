@@ -594,7 +594,7 @@ struct ClaudeTurnSummaryRow: View {
         if result.outputTokens > 0 {
             parts.append("\(result.outputTokens.formatted()) out")
         }
-        if result.costUSD > 0 {
+        if appState.claudeSessionInfo?.isBilledPerToken == true, result.costUSD > 0 {
             parts.append(String(format: "$%.4f", result.costUSD))
         }
         return parts.isEmpty ? "Done" : parts.joined(separator: " · ")

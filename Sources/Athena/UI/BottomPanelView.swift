@@ -9,62 +9,100 @@ import SwiftUI
 struct BottomPanelView: View {
     @Environment(AppState.self) private var appState
 
-    private var tabBarHeight: CGFloat { appState.sf(28) }
+    private var headerHeight: CGFloat { appState.sf(32) }
 
     var body: some View {
         VStack(spacing: 0) {
-            tabRow
-            Divider()
+            header
             panelContent
         }
     }
 
-    // MARK: Tab Row
+    // MARK: Header
 
-    private var tabRow: some View {
-        HStack(spacing: 0) {
-            ForEach(BottomPanel.allCases, id: \.self) { panel in
+    /// One row, as in VS Code: view tabs on the left, then the active view's
+    /// own actions and the panel's maximize/close on the right.
+    private var header: some View {
+        HStack(spacing: appState.sf(2)) {
+            // The legacy API-key chat is superseded by the Claude panel; two
+            // "Claude" surfaces with different behaviour only confused users.
+            ForEach(BottomPanel.allCases.filter { $0 != .chat }, id: \.self) { panel in
                 bottomPanelTab(panel)
             }
-            Spacer()
 
-            // Close button
-            Button {
-                appState.showBottomPanel = false
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: appState.sf(11)))
-                    .foregroundColor(.secondary)
-                    .frame(width: appState.sf(28), height: tabBarHeight)
+            Spacer(minLength: appState.sf(8))
+
+            viewActions
+
+            Divider()
+                .frame(height: appState.sf(16))
+                .padding(.horizontal, appState.sf(4))
+
+            PanelHeaderButton(
+                systemImage: appState.isBottomPanelMaximized
+                    ? "arrow.down.right.and.arrow.up.left"
+                    : "arrow.up.left.and.arrow.down.right",
+                help: appState.isBottomPanelMaximized ? "Restore Panel Size" : "Maximize Panel Size"
+            ) {
+                appState.isBottomPanelMaximized.toggle()
             }
-            .buttonStyle(.plain)
-            .help("Close Panel")
+
+            PanelHeaderButton(systemImage: "xmark", help: "Hide Panel") {
+                appState.showBottomPanel = false
+            }
         }
-        .frame(height: tabBarHeight)
+        .padding(.horizontal, appState.sf(8))
+        .frame(height: headerHeight)
         .background(Color(nsColor: .controlBackgroundColor))
+    }
+
+    @ViewBuilder
+    private var viewActions: some View {
+        if appState.activeBottomPanel == .terminal {
+            PanelHeaderButton(systemImage: "plus", help: "New Terminal (⌃⇧`)") {
+                appState.newTerminalSession()
+            }
+            PanelHeaderButton(systemImage: "trash", help: "Kill Terminal") {
+                if let id = appState.activeTerminalSessionId {
+                    appState.closeTerminalSession(id)
+                }
+            }
+            .disabled(appState.activeTerminalSessionId == nil)
+        }
     }
 
     @ViewBuilder
     private func bottomPanelTab(_ panel: BottomPanel) -> some View {
         let isActive = appState.activeBottomPanel == panel
+        let shape = RoundedRectangle(cornerRadius: appState.sf(5), style: .continuous)
 
         Button {
             appState.activeBottomPanel = panel
         } label: {
-            Text(panelLabel(panel))
-                .font(.system(size: appState.sf(12), weight: isActive ? .medium : .regular))
-                .foregroundColor(isActive ? .primary : .secondary)
-                .padding(.horizontal, appState.sf(12))
-                .frame(height: tabBarHeight)
-                .overlay(alignment: .bottom) {
-                    if isActive {
-                        Rectangle()
-                            .fill(Color.accentColor)
-                            .frame(height: appState.sf(2))
-                    }
+            HStack(spacing: appState.sf(5)) {
+                Text(panelLabel(panel))
+                    .font(.system(size: appState.sf(11.5), weight: isActive ? .medium : .regular))
+                    .foregroundStyle(isActive ? .primary : .secondary)
+
+                if panel == .problems, problemCount > 0 {
+                    Text("\(problemCount)")
+                        .font(.system(size: appState.sf(9.5), weight: .semibold).monospacedDigit())
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, appState.sf(5))
+                        .padding(.vertical, appState.sf(1))
+                        .background(Capsule().fill(Color.accentColor))
                 }
+            }
+            .padding(.horizontal, appState.sf(8))
+            .padding(.vertical, appState.sf(4))
+            .background(shape.fill(Color.primary.opacity(isActive ? 0.1 : 0)))
+            .contentShape(shape)
         }
         .buttonStyle(.plain)
+    }
+
+    private var problemCount: Int {
+        appState.diagnostics.values.reduce(0) { $0 + $1.count }
     }
 
     private func panelLabel(_ panel: BottomPanel) -> String {
@@ -99,20 +137,34 @@ struct BottomPanelView: View {
 
 // MARK: - TerminalPanelView
 
-/// Hosts the terminal panel's session tab strip plus the stack of every
+/// Hosts the terminal panel's session list (right, as in VS Code) plus the stack of every
 /// open session's `TerminalView` (plan.md item 21). Every session's view is
-/// kept mounted — never conditionally instantiated — so switching tabs only
+/// kept mounted — never conditionally instantiated — so switching sessions only
 /// toggles which one is visible/hit-testable rather than tearing down (and
 /// killing) a background shell.
 private struct TerminalPanelView: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
-        VStack(spacing: 0) {
-            TerminalTabStripView()
-            Divider()
+        GeometryReader { geo in
+            // The list may take up to half the panel (unzoomed points); the
+            // stored width is only capped at render time.
+            let maxList = max(0, (geo.size.width / 2) / appState.uiScale)
+            let listWidth = min(appState.terminalListWidth, maxList)
 
-            content
+            HStack(spacing: 0) {
+                content
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                if !appState.terminalSessions.isEmpty {
+                    // Dragging left (negative translation) widens the list.
+                    ResizeDivider(axis: .vertical, size: { listWidth }) { base, t in
+                        appState.terminalListWidth = min(max(base - t / appState.uiScale, 60), maxList)
+                    }
+                    TerminalListView()
+                        .frame(width: appState.sf(listWidth))
+                }
+            }
         }
         // Deferred to here so the shell starts in the open folder: at app
         // init no workspace has been restored yet.
@@ -152,6 +204,38 @@ private struct TerminalPanelView: View {
 }
 
 // TerminalView is defined in UI/TerminalView.swift (uses SwiftTerm).
+
+// MARK: - PanelHeaderButton
+
+/// Icon button for the panel header, with a hover plate like VS Code's
+/// action bar.
+private struct PanelHeaderButton: View {
+    @Environment(AppState.self) private var appState
+    @Environment(\.isEnabled) private var isEnabled
+
+    let systemImage: String
+    let help: String
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: appState.sf(11.5)))
+                .foregroundStyle(isEnabled ? Color.secondary : Color.secondary.opacity(0.4))
+                .frame(width: appState.sf(24), height: appState.sf(22))
+                .background(
+                    RoundedRectangle(cornerRadius: appState.sf(5), style: .continuous)
+                        .fill(Color.primary.opacity(isHovered && isEnabled ? 0.1 : 0))
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .help(help)
+    }
+}
 
 // MARK: - ProblemsView
 

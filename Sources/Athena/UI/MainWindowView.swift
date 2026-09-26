@@ -89,35 +89,46 @@ private struct EditorSplitView: View {
         // window grows again.
         let maxPanel = max(0, (height - ResizeDivider.thickness) / appState.uiScale)
         let panelHeight = min(appState.bottomPanelHeight, maxPanel)
+        // Maximized, the panel takes the column and the editor is hidden —
+        // but stays mounted so its scroll/undo state survives the restore.
+        let maximized = showPanel && appState.isBottomPanelMaximized
 
         return VStack(spacing: 0) {
             // Zen mode (plan.md item 28, "C8") centers the editor content
             // with a max width — VS Code-style — rather than letting it
             // stretch full-bleed once the sidebar/activity bar/panel chrome
             // that used to bound it is hidden.
-            if appState.isZenMode {
-                HStack(spacing: 0) {
-                    Spacer(minLength: 0)
+            Group {
+                if appState.isZenMode {
+                    HStack(spacing: 0) {
+                        Spacer(minLength: 0)
+                        EditorContainerView()
+                            .frame(maxWidth: appState.sf(1000))
+                        Spacer(minLength: 0)
+                    }
+                } else {
                     EditorContainerView()
-                        .frame(maxWidth: appState.sf(1000))
-                    Spacer(minLength: 0)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                EditorContainerView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            .frame(maxWidth: .infinity, maxHeight: maximized ? 0 : .infinity)
+            .opacity(maximized ? 0 : 1)
+            .allowsHitTesting(!maximized)
+            .clipped()
 
             if showPanel {
                 // Dragging upward (negative translation) grows the panel.
                 // Drag deltas are in screen points; the stored height is in
                 // unzoomed points so it survives a zoom change unchanged.
-                ResizeDivider(axis: .horizontal, size: { panelHeight }) { base, t in
-                    appState.bottomPanelHeight = (base - t / appState.uiScale).clamped(to: 0...maxPanel)
+                if !maximized {
+                    ResizeDivider(axis: .horizontal, size: { panelHeight }) { base, t in
+                        appState.bottomPanelHeight = (base - t / appState.uiScale).clamped(to: 0...maxPanel)
+                    }
                 }
 
+                // One view in both states, so maximizing never remounts the
+                // terminals.
                 BottomPanelView()
-                    .frame(height: appState.sf(panelHeight))
+                    .frame(height: maximized ? height : appState.sf(panelHeight))
                     .clipped()
             }
         }

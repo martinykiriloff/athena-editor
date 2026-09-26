@@ -476,6 +476,16 @@ struct ClaudeSessionInfo: Sendable, Equatable {
     var slashCommandNames: [String] = []
     var agents: [String] = []
     var version: String = ""
+    /// Where the CLI's credentials came from: `"none"` for a claude.ai
+    /// subscription login, otherwise an API key source (env var, helper…).
+    var apiKeySource: String = ""
+
+    /// Pay-per-token billing. The CLI reports a `total_cost_usd` on every
+    /// turn even for subscription logins, where it is only a notional
+    /// API-equivalent figure — showing it there reads as a charge.
+    var isBilledPerToken: Bool {
+        !apiKeySource.isEmpty && apiKeySource != "none"
+    }
 }
 
 /// A slash command discovered from the live session's `initialize` response —

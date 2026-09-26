@@ -18,10 +18,9 @@ struct ClaudePanel: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            sessionBar
+            header
             Divider()
             timeline
-            Divider()
             composer
         }
         .overlay(alignment: .leading) { Divider() }
@@ -53,34 +52,73 @@ struct ClaudePanel: View {
         }
     }
 
-    // MARK: - Session bar
+    // MARK: - Header
 
-    private var sessionBar: some View {
+    /// Titled like every sidebar panel so the panel says what it is; session
+    /// actions sit on the right, the way VS Code's views place them.
+    private var header: some View {
         HStack(spacing: appState.sf(6)) {
-            ForEach(ClaudeAccount.all) { account in
-                AccountChip(account: account, isActive: appState.activeClaudeAccount == account) {
-                    appState.switchClaudeAccount(account)
-                }
+            Circle()
+                .fill(appState.claudeSessionIsLive ? Color.green : Color.secondary.opacity(0.5))
+                .frame(width: appState.sf(6), height: appState.sf(6))
+                .help(connectionLabel)
+
+            Text("CLAUDE")
+                .font(.system(size: appState.sf(11), weight: .semibold))
+                .foregroundStyle(.secondary)
+                .tracking(0.5)
+                .help(connectionLabel)
+
+            if ClaudeAccount.available.count > 1 {
+                accountMenu
             }
 
             Spacer(minLength: appState.sf(4))
 
-            modelMenu
-            permissionModeMenu
+            if appState.claudeSessionInfo?.isBilledPerToken == true, appState.claudeSessionCostUSD > 0 {
+                Text(String(format: "$%.2f", appState.claudeSessionCostUSD))
+                    .font(.system(size: appState.sf(10)).monospacedDigit())
+                    .foregroundStyle(.tertiary)
+                    .help(String(format: "Session cost: $%.4f", appState.claudeSessionCostUSD))
+            }
+
             historyMenu
 
-            Button {
+            PanelIconButton(systemImage: "square.and.pencil", help: "New conversation") {
                 appState.newClaudeConversation()
-            } label: {
-                Image(systemName: "square.and.pencil")
-                    .font(.system(size: appState.sf(11)))
-                    .foregroundStyle(.secondary)
             }
-            .buttonStyle(.plain)
-            .help("New conversation")
+
+            PanelIconButton(systemImage: "xmark", help: "Close Claude (⇧⌘A)") {
+                appState.showClaudePanel = false
+            }
         }
-        .padding(.horizontal, appState.sf(10))
-        .padding(.vertical, appState.sf(7))
+        .padding(.leading, appState.sf(12))
+        .padding(.trailing, appState.sf(6))
+        .frame(height: appState.sf(30))
+    }
+
+    private var accountMenu: some View {
+        ClaudePickerButton(
+            label: appState.activeClaudeAccount.name,
+            header: "Account",
+            options: ClaudeAccount.available.map {
+                ClaudePickerOption(id: $0.id, title: $0.name, icon: "person.crop.circle")
+            },
+            selection: appState.activeClaudeAccount.id,
+            width: 200,
+            help: "Claude account"
+        ) { id in
+            guard let account = ClaudeAccount.all.first(where: { $0.id == id }) else { return }
+            appState.switchClaudeAccount(account)
+        }
+    }
+
+    private var connectionLabel: String {
+        guard let info = appState.claudeSessionInfo else {
+            return appState.claudeEventTask == nil ? "Not connected" : "Connecting…"
+        }
+        let model = info.model.isEmpty ? appState.claudeModel.name : info.model
+        return "Connected · \(model) · \(URL(fileURLWithPath: info.cwd).lastPathComponent)"
     }
 
     private var modelMenu: some View {
@@ -91,6 +129,7 @@ struct ClaudePanel: View {
                 ClaudePickerOption(id: $0.id, title: $0.name, detail: $0.detail, icon: $0.icon)
             },
             selection: appState.claudeModel.id,
+            opensUpward: true,
             help: "Model for this session"
         ) { id in
             appState.setClaudeModel(.option(id: id))
@@ -111,7 +150,8 @@ struct ClaudePanel: View {
                 )
             },
             selection: current,
-            help: "Permission mode"
+            opensUpward: true,
+            help: "Permission mode — what Claude may do without asking"
         ) { mode in
             appState.setClaudePermissionMode(mode)
         }
@@ -214,26 +254,79 @@ struct ClaudePanel: View {
     }
 
     private var emptyState: some View {
-        VStack(spacing: appState.sf(10)) {
-            Image(systemName: "sparkles")
-                .font(.system(size: appState.sf(28)))
-                .foregroundStyle(.tertiary)
-            Text("Ask Claude anything")
-                .font(.system(size: appState.sf(13)))
-                .foregroundStyle(.secondary)
-            VStack(spacing: appState.sf(3)) {
-                Text("/ for commands · @ to add files")
+        VStack(spacing: appState.sf(14)) {
+            VStack(spacing: appState.sf(6)) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: appState.sf(26)))
+                    .foregroundStyle(Color.accentColor.opacity(0.8))
+                Text("What can I help you build?")
+                    .font(.system(size: appState.sf(14), weight: .semibold))
+                Text("Claude can read, edit and run code in this workspace.")
                     .font(.system(size: appState.sf(11)))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+
+            // Starters fill the composer rather than sending, so the user can
+            // adjust the prompt first.
+            VStack(spacing: appState.sf(6)) {
+                ForEach(starterPrompts, id: \.title) { starter in
+                    StarterPromptButton(title: starter.title, icon: starter.icon) {
+                        useStarter(starter.prompt)
+                    }
+                }
+            }
+
+            VStack(spacing: appState.sf(3)) {
+                Text("Type / for commands · @ to attach files")
+                    .font(.system(size: appState.sf(10.5)))
                     .foregroundStyle(.tertiary)
                 if let info = appState.claudeSessionInfo {
                     Text("\(info.tools.count) tools · \(info.mcpServers.filter(\.isConnected).count) MCP servers")
                         .font(.system(size: appState.sf(10)))
-                        .foregroundStyle(.quaternary)
+                        .foregroundStyle(.tertiary)
                 }
             }
         }
+        .frame(maxWidth: appState.sf(320))
+        .padding(.horizontal, appState.sf(16))
+        .padding(.top, appState.sf(36))
         .frame(maxWidth: .infinity)
-        .padding(.top, appState.sf(48))
+    }
+
+    private struct StarterPrompt {
+        let title: String
+        let icon: String
+        let prompt: String
+    }
+
+    /// File-scoped starters while a file is focused, workspace-scoped otherwise.
+    private var starterPrompts: [StarterPrompt] {
+        if appState.focusedTab != nil {
+            return [
+                StarterPrompt(title: "Explain this file", icon: "text.magnifyingglass",
+                              prompt: "Explain what this file does and how it fits into the project."),
+                StarterPrompt(title: "Find bugs in this file", icon: "ladybug",
+                              prompt: "Review this file for bugs and edge cases."),
+                StarterPrompt(title: "Write tests for this file", icon: "checkmark.seal",
+                              prompt: "Write tests for this file, following the project's existing test conventions."),
+            ]
+        }
+        return [
+            StarterPrompt(title: "Explain this codebase", icon: "map",
+                          prompt: "Give me an overview of this codebase: its structure, main components and how they fit together."),
+            StarterPrompt(title: "Find where to start", icon: "signpost.right",
+                          prompt: "I'm new to this project. Where should I start reading, and how do I build and run it?"),
+        ]
+    }
+
+    private func useStarter(_ prompt: String) {
+        if appState.focusedTab != nil, let ref = appState.focusedTabContextRef(),
+           !appState.claudePendingContexts.contains(ref) {
+            appState.addClaudeContext(ref)
+        }
+        inputText = prompt
+        inputFocused = true
     }
 
     // MARK: - Composer
@@ -249,10 +342,32 @@ struct ClaudePanel: View {
                 Divider()
             }
             queueBar
-            contextBar
-            inputBar
-            footer
+            inputCard
         }
+    }
+
+    // MARK: Input card
+
+    /// One bordered box holding everything that shapes the next message —
+    /// context, text and session options — so it reads as a single control.
+    private var inputCard: some View {
+        let shape = RoundedRectangle(cornerRadius: appState.sf(8), style: .continuous)
+
+        return VStack(alignment: .leading, spacing: 0) {
+            contextBar
+            inputField
+            composerToolbar
+        }
+        .background(shape.fill(Color(nsColor: .textBackgroundColor)))
+        .overlay(
+            shape.strokeBorder(
+                inputFocused ? Color.accentColor.opacity(0.7) : Color.primary.opacity(0.14),
+                lineWidth: 1
+            )
+        )
+        .padding(.horizontal, appState.sf(10))
+        .padding(.top, appState.sf(6))
+        .padding(.bottom, appState.sf(10))
     }
 
     // MARK: Queue
@@ -319,7 +434,7 @@ struct ClaudePanel: View {
                         }
                     }
                 }
-                .padding(.horizontal, appState.sf(10))
+                .padding(.horizontal, appState.sf(8))
             }
             .padding(.top, appState.sf(8))
         }
@@ -333,40 +448,50 @@ struct ClaudePanel: View {
 
     // MARK: Input
 
-    private var inputBar: some View {
-        HStack(alignment: .bottom, spacing: appState.sf(8)) {
-            Button(action: presentAttachmentPicker) {
-                Image(systemName: "paperclip")
-                    .font(.system(size: appState.sf(14)))
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            .help("Attach files (or drag & drop onto the panel)")
-
-            TextField(placeholder, text: $inputText, axis: .vertical)
-                .textFieldStyle(.plain)
-                .font(.system(size: appState.sf(13)))
-                .lineLimit(1...8)
-                .focused($inputFocused)
-                .onChange(of: inputText) { _, _ in selectedCompletionIndex = 0 }
-                .onKeyPress(.upArrow) { moveCompletionSelection(-1) }
-                .onKeyPress(.downArrow) { moveCompletionSelection(1) }
-                .onKeyPress(.tab) { acceptSelectedCompletion() }
-                .onKeyPress(.return) { handleReturn() }
-                .onKeyPress(.escape) {
-                    guard activeCompletion != nil else { return .ignored }
-                    inputText = ""
-                    return .handled
+    private var inputField: some View {
+        TextField(placeholder, text: $inputText, axis: .vertical)
+            .textFieldStyle(.plain)
+            .font(.system(size: appState.sf(13)))
+            .lineLimit(2...10)
+            .focused($inputFocused)
+            .onChange(of: inputText) { _, _ in selectedCompletionIndex = 0 }
+            .onKeyPress(.upArrow) { moveCompletionSelection(-1) }
+            .onKeyPress(.downArrow) { moveCompletionSelection(1) }
+            .onKeyPress(.tab) { acceptSelectedCompletion() }
+            .onKeyPress(.return, phases: .down) { press in
+                // Modified Return is left to the field so it can break lines.
+                guard press.modifiers.isDisjoint(with: [.shift, .option, .command, .control]) else {
+                    return .ignored
                 }
-
-            sendButton
-        }
-        .padding(.horizontal, appState.sf(10))
-        .padding(.vertical, appState.sf(8))
+                return handleReturn()
+            }
+            .onKeyPress(.escape) { handleEscape() }
+            .padding(.horizontal, appState.sf(10))
+            .padding(.top, appState.sf(9))
+            .padding(.bottom, appState.sf(4))
     }
 
     private var placeholder: String {
-        appState.claudeIsStreaming ? "Queue a follow-up…" : "Message Claude… (/ commands, @ files)"
+        appState.claudeIsStreaming ? "Queue a follow-up…" : "Ask Claude to explain, fix or build something…"
+    }
+
+    /// Attach, permission mode and model live beside the text they apply to;
+    /// Send is where the eye ends up after typing.
+    private var composerToolbar: some View {
+        HStack(spacing: appState.sf(4)) {
+            PanelIconButton(systemImage: "paperclip", help: "Attach files (or drag & drop onto the panel)") {
+                presentAttachmentPicker()
+            }
+            permissionModeMenu
+            modelMenu
+
+            Spacer(minLength: appState.sf(4))
+
+            sendButton
+        }
+        .padding(.leading, appState.sf(4))
+        .padding(.trailing, appState.sf(6))
+        .padding(.bottom, appState.sf(6))
     }
 
     private var sendButton: some View {
@@ -377,13 +502,16 @@ struct ClaudePanel: View {
                 submit()
             }
         } label: {
-            Image(systemName: isStopButton ? "stop.circle.fill" : "arrow.up.circle.fill")
-                .font(.system(size: appState.sf(20)))
-                .foregroundStyle(sendButtonColor)
+            Image(systemName: isStopButton ? "stop.fill" : "arrow.up")
+                .font(.system(size: appState.sf(isStopButton ? 9 : 11), weight: .bold))
+                .foregroundStyle(canSubmit || isStopButton ? Color.white : Color.secondary)
+                .frame(width: appState.sf(24), height: appState.sf(24))
+                .background(Circle().fill(sendButtonColor))
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .disabled(!isStopButton && !canSubmit)
-        .help(isStopButton ? "Stop (Esc)" : "Send")
+        .help(isStopButton ? "Stop (Esc or ⌘.)" : "Send (↩)")
     }
 
     private var isStopButton: Bool {
@@ -398,42 +526,7 @@ struct ClaudePanel: View {
 
     private var sendButtonColor: Color {
         if isStopButton { return .red }
-        return canSubmit ? .accentColor : .secondary
-    }
-
-    // MARK: Footer
-
-    private var footer: some View {
-        HStack(spacing: appState.sf(6)) {
-            Circle()
-                .fill(appState.claudeSessionIsLive ? Color.green : Color.secondary.opacity(0.5))
-                .frame(width: appState.sf(5), height: appState.sf(5))
-
-            Text(footerLabel)
-                .font(.system(size: appState.sf(9)))
-                .foregroundStyle(.tertiary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-
-            Spacer()
-
-            if appState.claudeSessionCostUSD > 0 {
-                Text(String(format: "$%.3f", appState.claudeSessionCostUSD))
-                    .font(.system(size: appState.sf(9), design: .monospaced))
-                    .foregroundStyle(.tertiary)
-                    .help("Session cost")
-            }
-        }
-        .padding(.horizontal, appState.sf(10))
-        .padding(.bottom, appState.sf(6))
-    }
-
-    private var footerLabel: String {
-        guard let info = appState.claudeSessionInfo else {
-            return appState.claudeEventTask == nil ? "Not connected" : "Connecting…"
-        }
-        let model = info.model.isEmpty ? appState.claudeModel.name : info.model
-        return "\(model) · \(URL(fileURLWithPath: info.cwd).lastPathComponent)"
+        return canSubmit ? .accentColor : Color.secondary.opacity(0.18)
     }
 
     // MARK: - Completions
@@ -511,6 +604,18 @@ struct ClaudePanel: View {
             guard items.indices.contains(selectedCompletionIndex) else { return .ignored }
             accept(.file(items[selectedCompletionIndex]))
         }
+        return .handled
+    }
+
+    /// Esc closes an open picker first, then stops a running turn — matching
+    /// the Stop button's tooltip.
+    private func handleEscape() -> KeyPress.Result {
+        if activeCompletion != nil {
+            inputText = ""
+            return .handled
+        }
+        guard appState.claudeIsStreaming else { return .ignored }
+        appState.interruptClaude()
         return .handled
     }
 
@@ -721,15 +826,18 @@ private struct AssistantTextRow: View {
     let isStreaming: Bool
 
     var body: some View {
-        HStack(alignment: .top, spacing: 0) {
-            // The caret marks which paragraph is still being written when a
-            // turn interleaves prose with tool calls.
-            Text(attributed) + Text(isStreaming ? " ▍" : "").foregroundColor(.accentColor)
+        let blocks = ClaudeMarkdownBlock.parse(text)
+
+        VStack(alignment: .leading, spacing: appState.sf(6)) {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
+                view(for: block, showsCaret: isStreaming && index == blocks.count - 1)
+            }
+            if isStreaming && blocks.isEmpty {
+                caret
+            }
         }
         .font(.system(size: appState.sf(12.5)))
         .foregroundStyle(.primary)
-        .textSelection(.enabled)
-        .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, appState.sf(12))
         .padding(.vertical, appState.sf(4))
@@ -741,40 +849,204 @@ private struct AssistantTextRow: View {
         }
     }
 
-    /// Renders inline markdown (bold, code spans, links). Full markdown is
-    /// deliberately out of scope here — code blocks arrive as tool calls, and
-    /// prose reads better without a heavyweight renderer in a narrow panel.
-    private var attributed: AttributedString {
+    // MARK: Blocks
+
+    @ViewBuilder
+    private func view(for block: ClaudeMarkdownBlock, showsCaret: Bool) -> some View {
+        switch block {
+        case .paragraph(let source):
+            prose(source, showsCaret: showsCaret)
+
+        case .heading(let level, let source):
+            prose(source, showsCaret: showsCaret)
+                .font(.system(size: appState.sf(level <= 1 ? 14.5 : level == 2 ? 13.5 : 12.5), weight: .semibold))
+                .padding(.top, appState.sf(4))
+
+        case .listItem(let marker, let source):
+            HStack(alignment: .firstTextBaseline, spacing: appState.sf(6)) {
+                Text(marker)
+                    .foregroundStyle(.secondary)
+                    .frame(minWidth: appState.sf(12), alignment: .trailing)
+                prose(source, showsCaret: showsCaret)
+            }
+
+        case .code(let source):
+            // The caret is omitted inside code: it would read as code.
+            ClaudeCodeBlock(text: source, tint: .primary, lineLimit: 40)
+        }
+    }
+
+    /// The caret marks which paragraph is still being written when a turn
+    /// interleaves prose with tool calls.
+    private func prose(_ source: String, showsCaret: Bool) -> some View {
+        (Text(Self.inline(source)) + (showsCaret ? caretText : Text("")))
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var caretText: Text { Text(" ▍").foregroundColor(.accentColor) }
+    private var caret: some View { caretText }
+
+    /// Inline markdown (bold, italics, code spans, links) within one block.
+    private static func inline(_ source: String) -> AttributedString {
         (try? AttributedString(
-            markdown: text,
+            markdown: source,
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        )) ?? AttributedString(text)
+        )) ?? AttributedString(source)
     }
 }
 
-// MARK: - AccountChip
+// MARK: - ClaudeMarkdownBlock
 
-private struct AccountChip: View {
+/// The block-level markdown Claude's replies actually use — fenced code,
+/// headings, list items and paragraphs. Tables and quotes stay as prose.
+enum ClaudeMarkdownBlock: Equatable {
+    case paragraph(String)
+    case heading(level: Int, text: String)
+    case listItem(marker: String, text: String)
+    case code(String)
+
+    static func parse(_ text: String) -> [ClaudeMarkdownBlock] {
+        var blocks: [ClaudeMarkdownBlock] = []
+        var paragraph: [String] = []
+        var code: [String]? = nil
+
+        func flushParagraph() {
+            guard !paragraph.isEmpty else { return }
+            blocks.append(.paragraph(paragraph.joined(separator: "\n")))
+            paragraph = []
+        }
+
+        for line in text.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+            if trimmed.hasPrefix("```") {
+                if let open = code {
+                    blocks.append(.code(open.joined(separator: "\n")))
+                    code = nil
+                } else {
+                    flushParagraph()
+                    code = []
+                }
+                continue
+            }
+            if code != nil {
+                code?.append(line)
+                continue
+            }
+
+            if trimmed.isEmpty {
+                flushParagraph()
+            } else if let heading = heading(trimmed) {
+                flushParagraph()
+                blocks.append(heading)
+            } else if let item = listItem(line) {
+                flushParagraph()
+                blocks.append(item)
+            } else {
+                paragraph.append(line)
+            }
+        }
+
+        flushParagraph()
+        // A fence still open mid-stream renders as code so far.
+        if let open = code {
+            blocks.append(.code(open.joined(separator: "\n")))
+        }
+        return blocks
+    }
+
+    private static func heading(_ line: String) -> ClaudeMarkdownBlock? {
+        let hashes = line.prefix { $0 == "#" }.count
+        guard (1...6).contains(hashes) else { return nil }
+        let rest = line.dropFirst(hashes)
+        guard rest.first == " " else { return nil }
+        return .heading(level: hashes, text: rest.trimmingCharacters(in: .whitespaces))
+    }
+
+    /// `- x`, `* x`, `+ x` and `1. x`, keeping nesting as leading indent.
+    private static func listItem(_ line: String) -> ClaudeMarkdownBlock? {
+        let indentWidth = line.prefix { $0 == " " }.count
+        let indent = String(repeating: "  ", count: indentWidth / 2)
+        let trimmed = line.drop { $0 == " " }
+
+        if let first = trimmed.first, "-*+".contains(first), trimmed.dropFirst().first == " " {
+            return .listItem(marker: indent + "•", text: String(trimmed.dropFirst(2)))
+        }
+
+        let digits = trimmed.prefix { $0.isNumber }
+        if !digits.isEmpty, digits.count <= 3 {
+            let rest = trimmed.dropFirst(digits.count)
+            if rest.hasPrefix(". ") || rest.hasPrefix(") ") {
+                return .listItem(marker: indent + digits + ".", text: String(rest.dropFirst(2)))
+            }
+        }
+        return nil
+    }
+}
+
+// MARK: - PanelIconButton
+
+/// Icon-only header/toolbar button with the same hover circle as the
+/// picker triggers, so every control in the panel reads as clickable.
+private struct PanelIconButton: View {
     @Environment(AppState.self) private var appState
 
-    let account: ClaudeAccount
-    let isActive: Bool
+    let systemImage: String
+    let help: String
     let action: () -> Void
+
+    @State private var isHovered = false
 
     var body: some View {
         Button(action: action) {
-            Text(account.name)
-                .font(.system(size: appState.sf(10), weight: isActive ? .semibold : .regular))
-                .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
-                .padding(.horizontal, appState.sf(7))
-                .padding(.vertical, appState.sf(3))
-                .background(
-                    RoundedRectangle(cornerRadius: appState.sf(4))
-                        .fill(isActive ? Color.accentColor.opacity(0.14) : Color.clear)
-                )
+            Image(systemName: systemImage)
+                .font(.system(size: appState.sf(11)))
+                .foregroundStyle(.secondary)
+                .frame(width: appState.sf(22), height: appState.sf(22))
+                .background(Circle().fill(Color.primary.opacity(isHovered ? 0.07 : 0)))
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .help("\(account.name) account")
+        .onHover { isHovered = $0 }
+        .help(help)
+    }
+}
+
+// MARK: - StarterPromptButton
+
+private struct StarterPromptButton: View {
+    @Environment(AppState.self) private var appState
+
+    let title: String
+    let icon: String
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: appState.sf(7), style: .continuous)
+
+        Button(action: action) {
+            HStack(spacing: appState.sf(8)) {
+                Image(systemName: icon)
+                    .font(.system(size: appState.sf(11)))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: appState.sf(16))
+                Text(title)
+                    .font(.system(size: appState.sf(11.5)))
+                    .foregroundStyle(.primary)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, appState.sf(10))
+            .padding(.vertical, appState.sf(7))
+            .background(shape.fill(Color.primary.opacity(isHovered ? 0.07 : 0.035)))
+            .overlay(shape.strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
+            .contentShape(shape)
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
     }
 }
 

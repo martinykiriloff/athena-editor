@@ -94,6 +94,11 @@ final class AppState {
     var activeBottomPanel: BottomPanel = .terminal
     var sidebarWidth: CGFloat = 260
     var bottomPanelHeight: CGFloat = 220
+    /// The bottom panel fills the whole editor column (VS Code's "Maximize
+    /// Panel Size"); `bottomPanelHeight` is kept for when it is restored.
+    var isBottomPanelMaximized: Bool = false
+    /// Width of the terminal list beside the terminal, in unzoomed points.
+    var terminalListWidth: CGFloat = 170
     var statusMessage: String = ""
     var searchQuery: String = ""
     var commitMessage: String = ""
@@ -3278,6 +3283,10 @@ final class AppState {
             showSidebar.toggle()
         case .toggleTerminal:
             toggleTerminal()
+        case .newTerminal:
+            newTerminalSession()
+            activeBottomPanel = .terminal
+            showBottomPanel   = true
         case .showExplorer:
             activateSidebarPanel(.files)
         case .showSourceControl:
@@ -3436,7 +3445,7 @@ final class AppState {
 
     // MARK: - Terminal Sessions
 
-    /// Opens a new terminal tab (the "+" button in `TerminalTabStripView`)
+    /// Opens a new terminal tab (the "+" button in the bottom panel header)
     /// and makes it active. Titled after the detected `$SHELL` — just the
     /// shell name ("zsh") for the first session created this launch, numbered
     /// ("zsh 2", "zsh 3", …) after that.
@@ -3484,7 +3493,15 @@ final class AppState {
         activeTerminalSessionId = newActiveId
     }
 
-    /// Activates the terminal session with the given ID (a tab-strip click).
+    /// Renames a terminal session; a blank name keeps the current title.
+    func renameTerminalSession(_ id: UUID, to title: String) {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let index = terminalSessions.firstIndex(where: { $0.id == id }) else { return }
+        terminalSessions[index].title = trimmed
+    }
+
+    /// Activates the terminal session with the given ID (a terminal-list click).
     func activateTerminalSession(_ id: UUID) {
         guard terminalSessions.contains(where: { $0.id == id }) else { return }
         activeTerminalSessionId = id

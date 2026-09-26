@@ -22,6 +22,8 @@ struct ClaudePickerOption<ID: Hashable>: Identifiable {
 struct ClaudeDropdownPresentation {
     let anchor: Anchor<CGRect>
     let width: CGFloat
+    /// Opens above the trigger — for triggers near the bottom of the panel.
+    let opensUpward: Bool
     let content: AnyView
     let dismiss: () -> Void
 }
@@ -52,16 +54,23 @@ private struct ClaudeDropdownHost: ViewModifier {
                     let x = min(max(trigger.maxX - presentation.width, margin),
                                 max(proxy.size.width - presentation.width - margin, margin))
 
-                    ZStack(alignment: .topLeading) {
+                    // Upward cards are bottom-aligned to the panel, then
+                    // lifted so their bottom edge sits just above the trigger.
+                    let upward = presentation.opensUpward
+                    let y = upward ? -(proxy.size.height - trigger.minY + 4) : trigger.maxY + 4
+
+                    ZStack(alignment: upward ? .bottomLeading : .topLeading) {
                         Color.clear
                             .contentShape(Rectangle())
                             .onTapGesture { presentation.dismiss() }
 
                         presentation.content
                             .frame(width: presentation.width)
-                            .offset(x: x, y: trigger.maxY + 4)
+                            .offset(x: x, y: y)
                             .transition(
-                                .opacity.combined(with: .scale(scale: 0.96, anchor: .topTrailing))
+                                .opacity.combined(with: .scale(
+                                    scale: 0.96, anchor: upward ? .bottomTrailing : .topTrailing
+                                ))
                             )
                     }
                 }
@@ -84,6 +93,7 @@ struct ClaudePickerButton<ID: Hashable>: View {
     var selection: ID? = nil
     var emptyMessage: String = "Nothing here yet"
     var width: CGFloat = 272
+    var opensUpward: Bool = false
     let help: String
     let onSelect: (ID) -> Void
 
@@ -105,6 +115,7 @@ struct ClaudePickerButton<ID: Hashable>: View {
             return [ClaudeDropdownPresentation(
                 anchor: anchor,
                 width: appState.sf(width),
+                opensUpward: opensUpward,
                 content: AnyView(dropdown),
                 dismiss: { setPresented(false) }
             )]
