@@ -2,31 +2,31 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleIdentifier</key>
-    <string>com.athena.editor</string>
-    <key>CFBundleName</key>
-    <string>Athena</string>
-    <key>NSPrincipalClass</key>
-    <string>NSApplication</string>
-    <key>NSHighResolutionCapable</key>
-    <true/>
-    <key>LSMinimumSystemVersion</key>
-    <string>15.0</string>
-    <key>LSArchitecturePriority</key>
-    <array>
-        <string>arm64</string>
-    </array>
-    <key>CFBundleExecutable</key>
-    <string>Athena</string>
-    <key>CFBundleShortVersionString</key>
-    <string>2026.7</string>
-    <key>CFBundleVersion</key>
-    <string>2026.7</string>
-    <key>NSHumanReadableCopyright</key>
-    <string>2026 CoderMate</string>
-    <key>NSSupportsAutomaticTermination</key>
-    <false/>
-    <key>CFBundleIconFile</key>
-    <string>AppIcon</string>
+	<key>CFBundleExecutable</key>
+	<string>Athena</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.athena.editor</string>
+	<key>CFBundleName</key>
+	<string>Athena</string>
+	<key>CFBundleShortVersionString</key>
+	<string>2026.8</string>
+	<key>CFBundleVersion</key>
+	<string>2026.8</string>
+	<key>LSArchitecturePriority</key>
+	<array>
+		<string>arm64</string>
+	</array>
+	<key>LSMinimumSystemVersion</key>
+	<string>15.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>2026 CoderMate</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSSupportsAutomaticTermination</key>
+	<false/>
 </dict>
 </plist>
