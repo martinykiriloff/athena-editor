@@ -63,7 +63,11 @@ struct WelcomeView: View {
                     }
                 }
 
-                Spacer().frame(height: appState.sf(56))
+                // ── Recent folders ─────────────────────────────────────────
+                RecentWorkspacesList()
+                    .padding(.top, appState.sf(40))
+
+                Spacer().frame(height: appState.sf(40))
 
                 // ── Keyboard shortcuts reference ───────────────────────────
                 ShortcutsGrid()
@@ -188,6 +192,112 @@ private struct QuickActionButton: View {
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
         .animation(.easeInOut(duration: 0.12), value: isHovered)
+    }
+}
+
+// MARK: - RecentWorkspacesList
+
+/// Recently opened folders: click to open, × to drop one from the list.
+/// Folders that no longer exist are left out.
+private struct RecentWorkspacesList: View {
+    @Environment(AppState.self) private var appState
+    /// Read only so SwiftUI redraws when the list changes.
+    @AppStorage(AppState.recentWorkspacesKey) private var storedPaths = ""
+
+    private static let shown = 6
+
+    private var paths: [String] {
+        _ = storedPaths
+        return AppState.recentWorkspacePaths()
+            .filter { FileManager.default.fileExists(atPath: $0) }
+            .prefix(Self.shown)
+            .map { $0 }
+    }
+
+    var body: some View {
+        if !paths.isEmpty {
+            VStack(alignment: .leading, spacing: appState.sf(2)) {
+                Text("Recent")
+                    .font(.system(size: appState.sf(11), weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, appState.sf(10))
+                    .padding(.bottom, appState.sf(4))
+
+                ForEach(paths, id: \.self) { path in
+                    RecentWorkspaceRow(path: path) {
+                        Task { await appState.openWorkspace(URL(fileURLWithPath: path)) }
+                    } onRemove: {
+                        AppState.removeRecentWorkspace(path)
+                        // `removeRecentWorkspace` writes through UserDefaults
+                        // directly; mirror it so the list redraws.
+                        storedPaths = UserDefaults.standard.string(forKey: AppState.recentWorkspacesKey) ?? ""
+                    }
+                }
+            }
+            .frame(maxWidth: appState.sf(480))
+        }
+    }
+}
+
+// MARK: - RecentWorkspaceRow
+
+private struct RecentWorkspaceRow: View {
+    @Environment(AppState.self) private var appState
+
+    let path: String
+    let onOpen: () -> Void
+    let onRemove: () -> Void
+
+    @State private var isHovered = false
+
+    /// The parent folder with the home directory shortened to `~`.
+    private var location: String {
+        let parent = (path as NSString).deletingLastPathComponent
+        let home = NSHomeDirectory()
+        return parent.hasPrefix(home) ? "~" + parent.dropFirst(home.count) : parent
+    }
+
+    var body: some View {
+        HStack(spacing: appState.sf(8)) {
+            Image(systemName: "folder")
+                .font(.system(size: appState.sf(12)))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: appState.sf(16))
+
+            Text((path as NSString).lastPathComponent)
+                .font(.system(size: appState.sf(13), weight: .medium))
+                .foregroundStyle(Color.accentColor)
+                .lineLimit(1)
+
+            Text(location)
+                .font(.system(size: appState.sf(12)))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.head)
+
+            Spacer(minLength: appState.sf(8))
+
+            Button(action: onRemove) {
+                Image(systemName: "xmark")
+                    .font(.system(size: appState.sf(9), weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: appState.sf(18), height: appState.sf(18))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .opacity(isHovered ? 1 : 0)
+            .help("Remove from Recent")
+        }
+        .padding(.horizontal, appState.sf(10))
+        .padding(.vertical, appState.sf(5))
+        .background(
+            RoundedRectangle(cornerRadius: appState.sf(6), style: .continuous)
+                .fill(isHovered ? Color(nsColor: appState.currentTheme.lineHighlight) : .clear)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onOpen)
+        .onHover { isHovered = $0 }
+        .help(path)
     }
 }
 

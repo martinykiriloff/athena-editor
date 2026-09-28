@@ -31,6 +31,7 @@ final class AppState {
     let postgresService: PostgresService
     let sqliteService: SQLiteService
     let inlineCompletionService: InlineCompletionService
+    let toolCheckService = ToolCheckService()
 
     // MARK: - UI State
 
@@ -57,6 +58,8 @@ final class AppState {
 
     /// Most recently closed file tabs, newest last — popped by Reopen Closed
     /// Editor (⇧⌘T). Capped at `closedTabLimit`.
+    /// Missing tools to tell the user about; see `AppState+ToolChecks`.
+    var toolNotices: [ToolNotice] = []
     var recentlyClosedTabs: [ClosedTab] = []
     /// Files double-clicked while their preview open was still reading the
     /// file; `openFile` opens them permanent instead. See `keepOpen(_:)`.
@@ -735,6 +738,7 @@ final class AppState {
                         self.statusMessage = "Couldn't start \(language.rawValue) language server: \(error.localizedDescription)"
                     }
                     await self.lspManager.didOpen(fileURL: url, content: content)
+                    await self.checkLanguageServer(for: language)
                 }
             }
         } catch {
@@ -868,6 +872,7 @@ final class AppState {
 
         try? await settingsService.setValue(url.path, for: "lastWorkspacePath")
         AppState.registerRecentPath(url)
+        AppState.registerRecentWorkspace(url)
 
         await discoverNPMPackages()
         // Load SFCC connections here, not (only) in the SFCC sidebar's

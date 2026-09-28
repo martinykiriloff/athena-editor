@@ -43,6 +43,7 @@ struct AthenaApp: App {
                     await appState.installKeyMonitor()
                     appState.startDiagnosticsConsumer()
                     appState.startFileWatchConsumer()
+                    Task { await appState.runToolChecks() }
                     await appState.restoreLastWorkspace()
                     // Owned by updateService, not this view's .task — see
                     // scheduleAutoCheck's doc comment.

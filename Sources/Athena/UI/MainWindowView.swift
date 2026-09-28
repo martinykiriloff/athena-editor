@@ -167,6 +167,10 @@ struct MainWindowView: View {
                 panelRow(width: geo.size.width)
             }
 
+            ForEach(appState.toolNotices) { notice in
+                ToolNoticeBanner(notice: notice)
+            }
+
             if !appState.isZenMode {
                 StatusBarView()
                     .frame(height: appState.sf(22))

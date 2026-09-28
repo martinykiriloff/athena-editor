@@ -1035,7 +1035,8 @@ actor DebugService {
     nonisolated static func realPath(of path: String) -> String {
         var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
         guard realpath(path, &buffer) != nil else { return path }
-        return String(cString: buffer)
+        let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+        return String(decoding: bytes, as: UTF8.self)
     }
 
     /// Locates Node, including under a version manager.

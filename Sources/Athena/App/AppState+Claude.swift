@@ -501,7 +501,8 @@ extension AppState {
     static func claudeLaunchFailureText(_ error: Error) -> String {
         switch error {
         case ClaudeAgentError.binaryNotFound(let name):
-            return "Couldn't find the `\(name)` CLI. Install Claude Code and make sure it's on your PATH."
+            return "Couldn't find the `\(name)` CLI. Install Claude Code with "
+                + "`curl -fsSL https://claude.ai/install.sh | bash`, then try again."
         case ClaudeAgentError.launchFailed(let reason):
             return "Couldn't start the Claude agent: \(reason)"
         default:

@@ -714,6 +714,22 @@ struct TabModel: Identifiable, Sendable {
     }
 }
 
+// MARK: - Tool checks
+
+/// A missing external tool, found by the first-run checks or when a file
+/// needs a language server that isn't installed. Shown as a dismissible
+/// banner so the feature that depends on it doesn't just fail quietly.
+struct ToolNotice: Identifiable, Sendable, Equatable {
+    /// Stable per tool ("git", "claude", "lsp.typescript"); dismissals are
+    /// remembered by it.
+    var id: String
+    var title: String
+    /// What doesn't work without it.
+    var detail: String
+    /// A command that installs it.
+    var installCommand: String
+}
+
 // MARK: - Code actions
 
 /// A server-side command attached to a code action, run with

@@ -30,11 +30,11 @@ code. Work top to bottom; groups 1–2 (except quick fixes) are the next batch.
 
 ## 3. Finding your way
 
-- [ ] **Recent folders on the Welcome screen.** List recently opened
+- [x] **Recent folders on the Welcome screen.** List recently opened
       workspaces (click to open, remove from list). `UI/WelcomeView.swift`.
-- [ ] **Search in Settings.** A filter field that narrows the settings form to
+- [x] **Search in Settings.** A filter field that narrows the settings form to
       matching labels. `UI/SettingsView.swift`.
-- [ ] **First-run checks.** Detect a missing `claude` CLI, `git` or language
+- [x] **First-run checks.** Detect a missing `claude` CLI, `git` or language
       server and say so plainly (with an install hint) instead of a panel
       failing quietly.
 

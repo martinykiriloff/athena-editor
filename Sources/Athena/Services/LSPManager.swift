@@ -445,6 +445,12 @@ actor LSPManager {
         return parseWorkspaceEdit(from: data)
     }
 
+    /// Whether `language` has a server running or installed to launch.
+    func hasServer(for language: Language) async -> Bool {
+        if servers[language] != nil { return true }
+        return await launchCommand(for: language) != nil
+    }
+
     // MARK: - Code actions
 
     /// Hands server-initiated `workspace/applyEdit` requests to `handler`.
