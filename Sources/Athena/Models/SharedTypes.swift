@@ -427,7 +427,7 @@ struct DBQueryResult: Sendable {
 }
 
 enum BottomPanel: String, Sendable, CaseIterable {
-    case terminal, scripts, output, problems, chat, sfcclogs, references, debugConsole
+    case terminal, scripts, output, problems, sfcclogs, references, debugConsole
 }
 
 // MARK: - Language
@@ -631,12 +631,6 @@ struct ClaudeAttachment: Identifiable, Equatable, Sendable {
         if isImage { return "photo" }
         return "doc"
     }
-}
-
-// MARK: - Chat
-
-enum ChatRole: Sendable {
-    case user, assistant
 }
 
 // MARK: - Editor commands
@@ -1059,14 +1053,6 @@ struct Diagnostic: Identifiable, Sendable, Equatable {
         lhs.fileURL == rhs.fileURL && lhs.line == rhs.line && lhs.column == rhs.column
             && lhs.message == rhs.message && lhs.severity == rhs.severity
     }
-}
-
-// MARK: - Chat
-
-struct ChatMessage: Identifiable, Sendable {
-    let id = UUID()
-    var role: ChatRole
-    var content: String
 }
 
 // MARK: - Completions

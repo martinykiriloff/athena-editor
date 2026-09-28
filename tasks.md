@@ -40,10 +40,10 @@ code. Work top to bottom; groups 1–2 (except quick fixes) are the next batch.
 
 ## 4. Polish
 
-- [ ] **Remove the legacy Claude chat.** The bottom-panel tab is hidden; delete
+- [x] **Remove the legacy Claude chat.** The bottom-panel tab is hidden; delete
       `UI/ChatView.swift`, `BottomPanel.chat` and the `chatMessages` state, and
       check whether `ClaudeService` still has other callers (`LSPManager`).
-- [ ] **Per-tab actions in the bottom panel header.** Move Output's Clear
+- [x] **Per-tab actions in the bottom panel header.** Move Output's Clear
       button into the header (like the terminal's + / Kill), and give Debug
       Console a Clear too, then drop Output's separate toolbar row.
 

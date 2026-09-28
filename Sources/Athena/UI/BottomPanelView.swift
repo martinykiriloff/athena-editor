@@ -24,9 +24,7 @@ struct BottomPanelView: View {
     /// own actions and the panel's maximize/close on the right.
     private var header: some View {
         HStack(spacing: appState.sf(2)) {
-            // The legacy API-key chat is superseded by the Claude panel; two
-            // "Claude" surfaces with different behaviour only confused users.
-            ForEach(BottomPanel.allCases.filter { $0 != .chat }, id: \.self) { panel in
+            ForEach(BottomPanel.allCases, id: \.self) { panel in
                 bottomPanelTab(panel)
             }
 
@@ -58,7 +56,8 @@ struct BottomPanelView: View {
 
     @ViewBuilder
     private var viewActions: some View {
-        if appState.activeBottomPanel == .terminal {
+        switch appState.activeBottomPanel {
+        case .terminal:
             PanelHeaderButton(systemImage: "plus", help: "New Terminal (⌃⇧`)") {
                 appState.newTerminalSession()
             }
@@ -68,6 +67,18 @@ struct BottomPanelView: View {
                 }
             }
             .disabled(appState.activeTerminalSessionId == nil)
+        case .output:
+            PanelHeaderButton(systemImage: "trash", help: "Clear Output") {
+                appState.scriptOutput = ""
+            }
+            .disabled(appState.scriptOutput.isEmpty)
+        case .debugConsole:
+            PanelHeaderButton(systemImage: "trash", help: "Clear Console") {
+                appState.debugConsoleEntries = []
+            }
+            .disabled(appState.debugConsoleEntries.isEmpty)
+        default:
+            EmptyView()
         }
     }
 
@@ -111,7 +122,6 @@ struct BottomPanelView: View {
         case .scripts:   return "Scripts"
         case .output:    return "Output"
         case .problems:  return "Problems"
-        case .chat:      return "Claude"
         case .sfcclogs:  return "SFCC Logs"
         case .references: return "References"
         case .debugConsole: return "Debug Console"
@@ -127,7 +137,6 @@ struct BottomPanelView: View {
         case .scripts:   ScriptsPanelView()
         case .output:    OutputView()
         case .problems:  ProblemsView()
-        case .chat:      ChatView()
         case .sfcclogs:  SFCCLogView()
         case .references: ReferencesPanelView()
         case .debugConsole: DebugConsoleView()
@@ -347,31 +356,10 @@ private struct DiagnosticRowView: View {
 
 struct OutputView: View {
     @Environment(AppState.self) private var appState
-    @State private var scrollProxy: ScrollViewProxy? = nil
 
+    // Clear lives in the panel header (`BottomPanelView.viewActions`).
     var body: some View {
         VStack(spacing: 0) {
-            // toolbar
-            HStack(spacing: 0) {
-                Spacer()
-                if !appState.scriptOutput.isEmpty {
-                    Button {
-                        appState.scriptOutput = ""
-                    } label: {
-                        Image(systemName: "trash")
-                            .font(.system(size: appState.sf(12)))
-                            .foregroundColor(.secondary)
-                            .frame(width: appState.sf(28), height: appState.sf(24))
-                    }
-                    .buttonStyle(.plain)
-                    .help("Clear output")
-                }
-            }
-            .frame(height: appState.sf(24))
-            .background(Color(nsColor: .controlBackgroundColor))
-
-            Divider()
-
             ScrollViewReader { proxy in
                 ScrollView {
                     Text(appState.scriptOutput.isEmpty

@@ -944,9 +944,8 @@ actor LSPManager {
     private func startReadingLoop(for language: Language, process: Process, stdoutHandle: FileHandle) {
         // Captures `self` strongly, not weakly: LSPManager is a permanent
         // singleton owned by AppState for the app's entire lifetime (never
-        // deallocated before process exit — same reasoning already applied
-        // to the actor self-captures in ClaudeCLIService/ClaudeService), so
-        // there's no dangling-self risk to guard against. A `weak self`
+        // deallocated before process exit), so there's no dangling-self
+        // risk to guard against. A `weak self`
         // capture here is also what a stricter toolchain flags as "passing
         // closure as a 'sending' parameter risks causing data races" — the
         // weak reference's synthesized mutable backing storage, threaded

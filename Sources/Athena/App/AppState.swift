@@ -14,7 +14,6 @@ final class AppState {
 
     let fileService: FileService
     let gitService: GitService
-    let claudeService: ClaudeService
     let claudeAgentService: ClaudeAgentService
     let claudeSessionStore: ClaudeSessionStore
     let searchService: SearchService
@@ -88,8 +87,6 @@ final class AppState {
     var branches: [GitBranch] = []
     var searchResults: [SearchResult] = []
     var diagnostics: [URL: [Diagnostic]] = [:]
-    var chatMessages: [ChatMessage] = []
-    var isStreaming: Bool = false
     var activeSidebarPanel: SidebarPanel = .files
     var showSidebar: Bool = true
     var showBottomPanel: Bool = false
@@ -612,7 +609,6 @@ final class AppState {
     init(
         fileService: FileService = FileService(),
         gitService: GitService = GitService(),
-        claudeService: ClaudeService = ClaudeService(),
         claudeAgentService: ClaudeAgentService = ClaudeAgentService(),
         claudeSessionStore: ClaudeSessionStore = ClaudeSessionStore(),
         searchService: SearchService = SearchService(),
@@ -632,7 +628,6 @@ final class AppState {
     ) {
         self.fileService = fileService
         self.gitService = gitService
-        self.claudeService = claudeService
         self.claudeAgentService = claudeAgentService
         self.claudeSessionStore = claudeSessionStore
         self.searchService = searchService
