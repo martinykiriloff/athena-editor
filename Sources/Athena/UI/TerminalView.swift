@@ -26,6 +26,7 @@ struct TerminalView: NSViewRepresentable {
         Self.applyColors(theme, to: tv)
 
         tv.processDelegate = context.coordinator
+        Self.installLineEditingKeys()
 
         // `-i -l`: SwiftTerm's default environment (`Terminal.getEnvironmentVariables`)
         // deliberately excludes `PATH`, and without `-l` (login) the shell never
@@ -111,6 +112,51 @@ struct TerminalView: NSViewRepresentable {
     private static func font(ofSize size: CGFloat) -> NSFont {
         NSFont(name: "JetBrains Mono", size: size)
             ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+    }
+
+    // MARK: - Line-editing keys
+
+    /// The bytes a macOS line-editing shortcut sends to the shell, matching
+    /// Terminal.app and VS Code: ⌘⌫ kills to line start (^U), ⌘← / ⌘→ go to
+    /// line start / end (^A / ^E), ⌥← / ⌥→ jump a word (ESC b / ESC f) and
+    /// ⌥⌫ deletes a word (ESC DEL). SwiftTerm turns ⌘← / ⌘→ into word
+    /// jumps and drops ⌘⌫, so these are sent before it sees the key.
+    nonisolated static func lineEditingBytes(keyCode: UInt16, modifiers: NSEvent.ModifierFlags) -> [UInt8]? {
+        let mods = modifiers.intersection([.command, .option, .control, .shift])
+        switch (mods, keyCode) {
+        case (.command, 51):  return [0x15]        // ⌘⌫
+        case (.command, 123): return [0x01]        // ⌘←
+        case (.command, 124): return [0x05]        // ⌘→
+        case (.option, 123):  return [0x1B, 0x62]  // ⌥←
+        case (.option, 124):  return [0x1B, 0x66]  // ⌥→
+        case (.option, 51):   return [0x1B, 0x7F]  // ⌥⌫
+        default:              return nil
+        }
+    }
+
+    private static var lineEditingMonitor: Any?
+
+    /// One app-wide key monitor, installed with the first terminal. It acts
+    /// only when a terminal is the first responder of the event's window, so
+    /// the editor keeps its own ⌘← / ⌥← handling. SwiftTerm's `keyDown` is
+    /// public, not open, so a subclass couldn't intercept these instead.
+    private static func installLineEditingKeys() {
+        guard lineEditingMonitor == nil else { return }
+        lineEditingMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard let bytes = lineEditingBytes(keyCode: event.keyCode, modifiers: event.modifierFlags)
+            else { return event }
+            // Only primitives cross into the isolated block — `NSEvent`
+            // isn't Sendable.
+            let windowNumber = event.windowNumber
+            let handled = MainActor.assumeIsolated { () -> Bool in
+                guard let terminal = NSApp.window(withWindowNumber: windowNumber)?.firstResponder
+                        as? LocalProcessTerminalView
+                else { return false }
+                terminal.send(bytes)
+                return true
+            }
+            return handled ? nil : event
+        }
     }
 
     func makeCoordinator() -> Coordinator {

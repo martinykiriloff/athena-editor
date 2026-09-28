@@ -198,6 +198,11 @@ struct AthenaCommands: Commands {
                 performAction(.closeTab)
             }
 
+            // ⇧⌘T is owned by the keybinding monitor; click routes the same way.
+            Button("Reopen Closed Editor") {
+                performAction(.reopenClosedTab)
+            }
+
             Button("Close Folder") {
                 NotificationCenter.default.post(name: .athenaCloseFolder, object: nil)
             }
@@ -309,6 +314,21 @@ struct AthenaCommands: Commands {
 
             Button("Rename Symbol…") {
                 performAction(.renameSymbol)
+            }
+
+            // ⌘., F8 and ⇧F8 are owned by the keybinding monitor.
+            Button("Quick Fix…") {
+                performAction(.quickFix)
+            }
+
+            Divider()
+
+            Button("Next Problem") {
+                performAction(.nextProblem)
+            }
+
+            Button("Previous Problem") {
+                performAction(.previousProblem)
             }
         }
     }

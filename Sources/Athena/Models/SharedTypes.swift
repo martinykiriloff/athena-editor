@@ -653,6 +653,7 @@ enum EditorCommand: Sendable {
     case selectNextOccurrence
     case findReferences
     case renameSymbol
+    case quickFix
     case moveLineUp
     case moveLineDown
     case copyLineUp
@@ -703,10 +704,47 @@ struct TabModel: Identifiable, Sendable {
     /// when `AppState.activeTab(in:)` swaps out from under it — see
     /// `EditorPaneView.body`). Ignored for every non-markdown language.
     var isMarkdownPreview: Bool = false
+    /// A preview tab (italic title), opened by a single click in the
+    /// explorer: the next single click replaces it. Editing, saving, a
+    /// double click or a deliberate open makes it permanent.
+    var isPreview: Bool = false
 
     static func untitled() -> TabModel {
         TabModel(title: "Untitled")
     }
+}
+
+// MARK: - Code actions
+
+/// A server-side command attached to a code action, run with
+/// `workspace/executeCommand`. `arguments` is the raw JSON array, kept
+/// opaque because each server defines its own argument shapes.
+struct LSPCommand: Sendable, Equatable {
+    var command: String
+    var arguments: Data?
+}
+
+/// One entry of a `textDocument/codeAction` reply (Quick Fix, ⌘.). An
+/// action carries an edit, a command, or both; the edit is applied first.
+struct CodeAction: Identifiable, Sendable {
+    let id = UUID()
+    var title: String
+    var kind: String?
+    var isPreferred: Bool = false
+    var edits: [URL: [LSPTextEdit]] = [:]
+    var command: LSPCommand?
+    /// The server that produced it, which is also the one that runs `command`.
+    var language: Language
+
+    var isQuickFix: Bool { kind?.hasPrefix("quickfix") ?? false }
+}
+
+/// A closed editor tab remembered for Reopen Closed Editor (⇧⌘T): the file
+/// and where the caret was, both 1-based.
+struct ClosedTab: Sendable, Equatable {
+    var fileURL: URL
+    var line: Int
+    var column: Int
 }
 
 extension TabModel {

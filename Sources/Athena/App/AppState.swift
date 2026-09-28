@@ -55,6 +55,14 @@ final class AppState {
     /// `secondaryGroup == nil`, so single-pane behavior is unaffected.
     var focusedGroup: EditorGroupSide = .primary
 
+    /// Most recently closed file tabs, newest last — popped by Reopen Closed
+    /// Editor (⇧⌘T). Capped at `closedTabLimit`.
+    var recentlyClosedTabs: [ClosedTab] = []
+    /// Files double-clicked while their preview open was still reading the
+    /// file; `openFile` opens them permanent instead. See `keepOpen(_:)`.
+    @ObservationIgnored var pendingPins: Set<URL> = []
+    static let closedTabLimit = 30
+
     /// Every assignment (workspace open/close, file-watcher rebuild, the
     /// sidebar's create/rename/delete/expand paths) re-derives the cached
     /// ⌘P index — the sidebar mutates this directly, so `didSet` is the one
@@ -455,14 +463,14 @@ final class AppState {
     /// commands act on. Identical to `activeTab` (primary) while unsplit.
     var focusedTab: TabModel? { activeTab(in: focusedGroup) }
 
-    private func setTabs(_ tabs: [TabModel], in side: EditorGroupSide) {
+    func setTabs(_ tabs: [TabModel], in side: EditorGroupSide) {
         switch side {
         case .primary:   openTabs = tabs
         case .secondary: secondaryGroup?.tabs = tabs
         }
     }
 
-    private func setActiveTabId(_ id: UUID?, in side: EditorGroupSide) {
+    func setActiveTabId(_ id: UUID?, in side: EditorGroupSide) {
         switch side {
         case .primary:   activeTabId = id
         case .secondary: secondaryGroup?.activeTabId = id
@@ -473,7 +481,7 @@ final class AppState {
     /// ids are unique per group — `splitEditorRight()` gives the secondary
     /// copy of a file its own fresh `TabModel`/id rather than sharing the
     /// source tab's — so a plain membership check is unambiguous.
-    private func side(ofTab id: UUID) -> EditorGroupSide? {
+    func side(ofTab id: UUID) -> EditorGroupSide? {
         if openTabs.contains(where: { $0.id == id }) { return .primary }
         if secondaryGroup?.tabs.contains(where: { $0.id == id }) == true { return .secondary }
         return nil
@@ -481,7 +489,7 @@ final class AppState {
 
     /// The group with an open tab for `url`, if any (used by `openFile` to
     /// reveal/focus an already-open file rather than duplicating it).
-    private func side(ofOpenFile url: URL) -> EditorGroupSide? {
+    func side(ofOpenFile url: URL) -> EditorGroupSide? {
         if openTabs.contains(where: { $0.fileURL == url }) { return .primary }
         if secondaryGroup?.tabs.contains(where: { $0.fileURL == url }) == true { return .secondary }
         return nil
@@ -655,9 +663,14 @@ final class AppState {
     /// (`.primary` while unsplit, so single-pane behavior is unchanged —
     /// plan.md item 22). Use `splitEditorRight()` to deliberately open the
     /// same file a second time as an independent tab in the other group.
-    func openFile(_ url: URL) async {
+    ///
+    /// `preview` opens it as a preview tab that replaces the group's current
+    /// one (explorer single click); any other open makes an already-open
+    /// preview tab of the file permanent.
+    func openFile(_ url: URL, preview: Bool = false) async {
         if let existingSide = side(ofOpenFile: url),
            let existingId = tabs(in: existingSide).first(where: { $0.fileURL == url })?.id {
+            if !preview { pinTab(existingId) }
             setActiveTabId(existingId, in: existingSide)
             focusedGroup = existingSide
             if existingSide == .primary { await persistSession() }
@@ -679,11 +692,9 @@ final class AppState {
             tab.fileURL = url
             tab.language = language
             tab.isDirty = false
+            tab.isPreview = preview && pendingPins.remove(url) == nil
 
-            var groupTabs = tabs(in: side)
-            groupTabs.append(tab)
-            setTabs(groupTabs, in: side)
-            setActiveTabId(tab.id, in: side)
+            placeNewTab(tab, in: side)
 
             statusMessage = "Opened \(url.lastPathComponent)"
             AppState.registerRecentPath(url)
@@ -699,11 +710,9 @@ final class AppState {
             tab.content = content
             tab.language = language
             tab.isDirty = false
+            tab.isPreview = preview && pendingPins.remove(url) == nil
 
-            var groupTabs = tabs(in: side)
-            groupTabs.append(tab)
-            setTabs(groupTabs, in: side)
-            setActiveTabId(tab.id, in: side)
+            placeNewTab(tab, in: side)
 
             statusMessage = "Opened \(url.lastPathComponent)"
             AppState.registerRecentPath(url)
@@ -756,6 +765,13 @@ final class AppState {
         var groupTabs = tabs(in: side)
         guard let index = groupTabs.firstIndex(where: { $0.id == id }) else { return }
         let closedURL = groupTabs[index].fileURL
+        if let url = closedURL {
+            rememberClosedTab(ClosedTab(
+                fileURL: url,
+                line: groupTabs[index].cursorLine,
+                column: groupTabs[index].cursorColumn
+            ))
+        }
 
         // LSP/file-watch/diagnostics/gutter state is keyed by file URL and
         // shared by both groups when the same file is split into each — only
@@ -1411,6 +1427,7 @@ final class AppState {
             groupTabs = tabs(in: side)
             if let i = groupTabs.firstIndex(where: { $0.id == id }) {
                 groupTabs[i].isDirty = false
+                groupTabs[i].isPreview = false
                 // A completed save overwrites whatever triggered the
                 // "changed on disk" banner, so it's no longer relevant.
                 groupTabs[i].externallyModified = false
@@ -2709,6 +2726,7 @@ final class AppState {
         guard let index = groupTabs.firstIndex(where: { $0.id == id }) else { return }
         groupTabs[index].content = content
         groupTabs[index].isDirty = true
+        groupTabs[index].isPreview = false
         setTabs(groupTabs, in: side)
 
         if let url = groupTabs[index].fileURL {
@@ -3062,6 +3080,11 @@ final class AppState {
         guard diagnosticsTask == nil else { return }
         diagnosticsTask = Task { [weak self] in
             guard let self else { return }
+            // Edits a code action's command asks us to make. AppState lives
+            // as long as the app, so the handler holds it strongly.
+            await self.lspManager.setApplyEditHandler { [self] edits in
+                await self.applyWorkspaceEdit(edits)
+            }
             let stream = await self.lspManager.diagnosticsStream()
             for await (url, diags) in stream {
                 self.diagnostics[url] = diags
@@ -3275,6 +3298,8 @@ final class AppState {
             openNewTab(in: focusedGroup)
         case .closeTab:
             if let id = focusedTab?.id { closeTab(id) }
+        case .reopenClosedTab:
+            await reopenClosedTab()
         case .splitEditorRight:
             splitEditorRight()
         case .toggleZenMode:
@@ -3314,6 +3339,10 @@ final class AppState {
             cycleTab(forward: true)
         case .previousTab:
             cycleTab(forward: false)
+        case .nextProblem:
+            await goToAdjacentProblem(forward: true)
+        case .previousProblem:
+            await goToAdjacentProblem(forward: false)
         // Editor-level actions are forwarded to the active text view, which
         // owns the selection and undo stack.
         case .findInFile:
@@ -3334,6 +3363,8 @@ final class AppState {
             postEditorCommand(.findReferences)
         case .renameSymbol:
             postEditorCommand(.renameSymbol)
+        case .quickFix:
+            postEditorCommand(.quickFix)
         case .moveLineUp:
             postEditorCommand(.moveLineUp)
         case .moveLineDown:

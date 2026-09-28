@@ -102,6 +102,12 @@ struct EditorView: NSViewRepresentable {
     /// renaming the symbol there to `newName` (F2, "Rename Symbol"), and
     /// applies the resulting workspace edit.
     var onRenameSymbol: (Int, Int, String) async -> Void = { _, _, _ in }
+    /// Requests LSP code actions for the 1-based selection start and end
+    /// (⌘., "Quick Fix").
+    var onRequestCodeActions: ((line: Int, column: Int), (line: Int, column: Int)) async -> [CodeAction] = { _, _ in [] }
+    /// Runs a chosen code action. The URL, when set, is this file, whose
+    /// edits the coordinator already applied through the text view.
+    var onPerformCodeAction: (CodeAction, URL?) async -> Void = { _, _ in }
     /// A pending cross-view "jump to this location" request set by `AppState`
     /// (e.g. a References panel row click) — consumed once this file's
     /// content is the target's, then cleared via `onNavigationConsumed`.
@@ -1022,7 +1028,7 @@ extension EditorView {
             case .find:           guard parent.isFocusedGroup else { return }; findReplaceController?.present(withReplace: false)
             case .findAndReplace: guard parent.isFocusedGroup else { return }; findReplaceController?.present(withReplace: true)
             case .goToLine, .toggleComment, .indent, .outdent, .selectNextOccurrence,
-                 .findReferences, .renameSymbol,
+                 .findReferences, .renameSymbol, .quickFix,
                  .moveLineUp, .moveLineDown, .copyLineUp, .copyLineDown, .deleteLine:
                 guard tv.window?.firstResponder === tv else { return }
                 switch command {
@@ -1033,6 +1039,7 @@ extension EditorView {
                 case .selectNextOccurrence: selectNextOccurrence(tv)
                 case .findReferences: requestFindReferences(tv)
                 case .renameSymbol:   promptRenameSymbol(tv)
+                case .quickFix:       requestQuickFix(tv)
                 case .moveLineUp:    applyLineEdit(LineOperations.moveUp(text: tv.string, selection: tv.selectedRange()), in: tv)
                 case .moveLineDown:  applyLineEdit(LineOperations.moveDown(text: tv.string, selection: tv.selectedRange()), in: tv)
                 case .copyLineUp:    applyLineEdit(LineOperations.copyUp(text: tv.string, selection: tv.selectedRange()), in: tv)
@@ -1138,6 +1145,111 @@ extension EditorView {
             Task { [weak self] in
                 await self?.parent.onRenameSymbol(line, col, newName)
             }
+        }
+
+        // MARK: - Quick Fix (⌘.)
+
+        /// Actions behind the open Quick Fix menu, indexed by item tag.
+        private var pendingCodeActions: [CodeAction] = []
+
+        /// Asks the language server for code actions at the selection and
+        /// pops a menu of them at the caret. A reply that arrives after the
+        /// text or selection changed is dropped rather than shown stale.
+        private func requestQuickFix(_ tv: NSTextView) {
+            let selection = tv.selectedRange()
+            let text = tv.string
+            let start = position(in: text, at: selection.location)
+            let end = position(in: text, at: NSMaxRange(selection))
+            Task { [weak self] in
+                guard let self else { return }
+                let actions = await self.parent.onRequestCodeActions(start, end)
+                guard tv.string == text, tv.selectedRange() == selection else { return }
+                self.showQuickFixMenu(actions, in: tv)
+            }
+        }
+
+        private func showQuickFixMenu(_ actions: [CodeAction], in tv: NSTextView) {
+            pendingCodeActions = actions
+            let menu = NSMenu()
+            menu.autoenablesItems = false
+
+            if actions.isEmpty {
+                let item = NSMenuItem(title: "No code actions available", action: nil, keyEquivalent: "")
+                item.isEnabled = false
+                menu.addItem(item)
+            }
+            for (index, action) in actions.enumerated() {
+                // Quick fixes first (see `LSPManager.parseCodeActions`), then
+                // a separator before refactorings and source actions.
+                if index > 0, actions[index - 1].isQuickFix, !action.isQuickFix {
+                    menu.addItem(.separator())
+                }
+                let item = NSMenuItem(title: action.title, action: #selector(codeActionChosen(_:)), keyEquivalent: "")
+                item.target = self
+                item.tag = index
+                if action.isQuickFix {
+                    item.image = NSImage(systemSymbolName: "lightbulb.fill", accessibilityDescription: nil)
+                }
+                menu.addItem(item)
+            }
+
+            menu.popUp(positioning: nil, at: caretMenuPoint(in: tv), in: tv)
+        }
+
+        /// Just below the caret, in the text view's coordinates.
+        private func caretMenuPoint(in tv: NSTextView) -> NSPoint {
+            guard let layoutManager = tv.layoutManager, let container = tv.textContainer else { return .zero }
+            let caret = NSRange(location: tv.selectedRange().location, length: 0)
+            let glyphs = layoutManager.glyphRange(forCharacterRange: caret, actualCharacterRange: nil)
+            let rect = layoutManager.boundingRect(forGlyphRange: glyphs, in: container)
+            let origin = tv.textContainerOrigin
+            return NSPoint(x: rect.minX + origin.x, y: rect.maxY + origin.y + 2)
+        }
+
+        /// Applies this file's part of the chosen action through the text
+        /// view — one undo step — and hands the rest (other files, the
+        /// command) to `AppState`.
+        @objc private func codeActionChosen(_ sender: NSMenuItem) {
+            guard pendingCodeActions.indices.contains(sender.tag), let tv = textView else { return }
+            let action = pendingCodeActions[sender.tag]
+            pendingCodeActions = []
+
+            var handledURL: URL?
+            if let url = parent.fileURL, let edits = action.edits[url] {
+                let original = tv.string
+                let updated = applyLSPTextEdits(edits, to: original)
+                if let (range, replacement) = Self.changedRange(from: original, to: updated) {
+                    replace(range, with: replacement, in: tv)
+                    tv.setSelectedRange(NSRange(location: range.location + (replacement as NSString).length, length: 0))
+                }
+                handledURL = url
+            }
+            Task { [weak self] in
+                await self?.parent.onPerformCodeAction(action, handledURL)
+            }
+        }
+
+        /// The smallest UTF-16 range of `old` that, replaced by the returned
+        /// string, turns it into `new` — so an edit replaces only what
+        /// changed instead of the whole document. Nil when they're equal.
+        nonisolated static func changedRange(from old: String, to new: String) -> (NSRange, String)? {
+            let a = old as NSString, b = new as NSString
+            guard !a.isEqual(to: new as String) else { return nil }
+            var prefix = 0
+            let maxPrefix = min(a.length, b.length)
+            while prefix < maxPrefix, a.character(at: prefix) == b.character(at: prefix) { prefix += 1 }
+            var suffix = 0
+            let maxSuffix = min(a.length, b.length) - prefix
+            while suffix < maxSuffix,
+                  a.character(at: a.length - 1 - suffix) == b.character(at: b.length - 1 - suffix) { suffix += 1 }
+            // Don't split a surrogate pair at either boundary.
+            var start = prefix, oldEnd = a.length - suffix, newEnd = b.length - suffix
+            if start > 0, UTF16.isTrailSurrogate(a.character(at: start)) { start -= 1 }
+            if oldEnd < a.length, UTF16.isTrailSurrogate(a.character(at: oldEnd)) { oldEnd += 1; newEnd += 1 }
+            return (
+                NSRange(location: start, length: oldEnd - start),
+                b.substring(with: NSRange(location: start, length: newEnd - start))
+            )
         }
 
         /// Comment token for the current language, or "" if line comments

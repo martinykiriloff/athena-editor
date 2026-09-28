@@ -51,6 +51,14 @@ actor LSPManager {
     /// this cache is written from `parseCompletions` and read from `resolve`,
     /// both actor-isolated methods, but the type itself must stay Sendable.
     private var lastCompletionRawItems: [UUID: Data] = [:]
+    /// The last `publishDiagnostics` array per file, as the server sent it.
+    /// `textDocument/codeAction` must echo diagnostics back verbatim — the
+    /// server keys its fixes on fields (`code`, `data`, the end of the
+    /// range) that `Diagnostic` doesn't keep.
+    private var rawDiagnostics: [URL: Data] = [:]
+    /// Applies a server-initiated `workspace/applyEdit` (sent while running a
+    /// code action's command). Set once by `AppState`.
+    private var applyEditHandler: (@Sendable ([URL: [LSPTextEdit]]) async -> Bool)?
 
     // MARK: - Public API
 
@@ -138,6 +146,29 @@ actor LSPManager {
                             "parameterInformation": ["labelOffsetSupport": true],
                         ],
                     ],
+                    // Without `codeActionLiteralSupport` servers may only
+                    // reply with bare commands, and most quick fixes are
+                    // edits, not commands.
+                    "codeAction": [
+                        "dynamicRegistration": false,
+                        "isPreferredSupport": true,
+                        "disabledSupport": true,
+                        "codeActionLiteralSupport": [
+                            "codeActionKind": [
+                                "valueSet": [
+                                    "", "quickfix", "refactor", "refactor.extract",
+                                    "refactor.inline", "refactor.rewrite",
+                                    "source", "source.organizeImports", "source.fixAll",
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+                // Commands behind code actions answer with a
+                // `workspace/applyEdit` request; see `handleServerRequest`.
+                "workspace": [
+                    "applyEdit": true,
+                    "workspaceEdit": ["documentChanges": true],
                 ],
             ],
         ]
@@ -412,6 +443,117 @@ actor LSPManager {
         }
 
         return parseWorkspaceEdit(from: data)
+    }
+
+    // MARK: - Code actions
+
+    /// Hands server-initiated `workspace/applyEdit` requests to `handler`.
+    func setApplyEditHandler(_ handler: @escaping @Sendable ([URL: [LSPTextEdit]]) async -> Bool) {
+        applyEditHandler = handler
+    }
+
+    /// Requests `textDocument/codeAction` for the 0-based range, passing the
+    /// server's own diagnostics that touch those lines as context. Returns
+    /// the enabled actions, quick fixes first; empty when no server runs.
+    func codeActions(
+        fileURL: URL,
+        startLine: Int, startCharacter: Int,
+        endLine: Int, endCharacter: Int
+    ) async throws -> [CodeAction] {
+        let language = Language.detect(from: fileURL)
+        guard servers[language] != nil else { return [] }
+
+        let context = rawDiagnostics[fileURL]
+            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [[String: Any]] }
+            .map { Self.diagnostics($0, touchingLines: startLine...max(startLine, endLine)) } ?? []
+
+        let params: [String: Any] = [
+            "textDocument": ["uri": fileURL.absoluteString],
+            "range": [
+                "start": ["line": startLine, "character": startCharacter],
+                "end": ["line": endLine, "character": endCharacter],
+            ],
+            // triggerKind 1 = Invoked: the user asked (⌘.), as opposed to
+            // automatic lightbulb polling.
+            "context": ["diagnostics": context, "triggerKind": 1],
+        ]
+
+        guard let data = try? await sendRequest(method: "textDocument/codeAction", params: params, language: language) else {
+            return []
+        }
+        return Self.parseCodeActions(from: data, language: language)
+    }
+
+    /// Runs a code action's command. Any edit it makes comes back as a
+    /// `workspace/applyEdit` request.
+    func executeCommand(_ command: LSPCommand, language: Language) async {
+        guard servers[language] != nil else { return }
+        var params: [String: Any] = ["command": command.command]
+        if let arguments = command.arguments,
+           let decoded = try? JSONSerialization.jsonObject(with: arguments) as? [Any] {
+            params["arguments"] = decoded
+        }
+        _ = try? await sendRequest(method: "workspace/executeCommand", params: params, language: language)
+    }
+
+    /// Diagnostics whose range overlaps `lines` (0-based, inclusive).
+    static func diagnostics(_ all: [[String: Any]], touchingLines lines: ClosedRange<Int>) -> [[String: Any]] {
+        all.filter { entry in
+            guard let range = entry["range"] as? [String: Any],
+                  let start = (range["start"] as? [String: Any])?["line"] as? Int,
+                  let end = (range["end"] as? [String: Any])?["line"] as? Int
+            else { return false }
+            return start <= lines.upperBound && end >= lines.lowerBound
+        }
+    }
+
+    /// Parses a `textDocument/codeAction` reply: an array mixing `Command`
+    /// (`{title, command: String, arguments?}`) and `CodeAction`
+    /// (`{title, kind?, edit?, command?: Command, isPreferred?, disabled?}`).
+    /// Disabled actions are dropped. Quick fixes sort first, preferred ones
+    /// at the top, otherwise the server's order is kept.
+    static func parseCodeActions(from data: Data, language: Language) -> [CodeAction] {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let result = json["result"] as? [[String: Any]]
+        else { return [] }
+
+        let actions: [CodeAction] = result.compactMap { entry in
+            guard let title = entry["title"] as? String else { return nil }
+            if entry["disabled"] != nil { return nil }
+
+            // A bare Command has a string `command`; a CodeAction nests one.
+            if let name = entry["command"] as? String {
+                return CodeAction(
+                    title: title,
+                    command: LSPCommand(command: name, arguments: argumentsData(entry["arguments"])),
+                    language: language
+                )
+            }
+
+            var action = CodeAction(title: title, language: language)
+            action.kind = entry["kind"] as? String
+            action.isPreferred = entry["isPreferred"] as? Bool ?? false
+            if let edit = entry["edit"] as? [String: Any] {
+                action.edits = workspaceEdits(from: edit)
+            }
+            if let command = entry["command"] as? [String: Any], let name = command["command"] as? String {
+                action.command = LSPCommand(command: name, arguments: argumentsData(command["arguments"]))
+            }
+            guard !action.edits.isEmpty || action.command != nil else { return nil }
+            return action
+        }
+
+        func rank(_ a: CodeAction) -> Int {
+            a.isQuickFix ? (a.isPreferred ? 0 : 1) : 2
+        }
+        return actions.enumerated()
+            .sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }
+            .map(\.element)
+    }
+
+    private static func argumentsData(_ value: Any?) -> Data? {
+        guard let array = value as? [Any] else { return nil }
+        return try? JSONSerialization.data(withJSONObject: array)
     }
 
     /// Requests document formatting from the running language server for
@@ -827,13 +969,18 @@ actor LSPManager {
         guard let server = servers[language], server.process === process else { return }
         guard let json = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any] else { return }
 
-        if let id = json["id"] as? Int {
+        if let method = json["method"] as? String {
+            // A server-initiated request carries an id too — it must not be
+            // mistaken for the reply to one of ours with the same number.
+            if let id = LSPRequestID(json["id"]) {
+                handleServerRequest(id: id, method: method, params: json["params"] as? [String: Any], language: language)
+            } else {
+                handleNotification(method: method, params: json["params"] as? [String: Any])
+            }
+        } else if let id = json["id"] as? Int {
             // Resolve the pending continuation for a request response.
             server.pending[id]?.resume(returning: bodyData)
             servers[language]?.pending.removeValue(forKey: id)
-        } else if let method = json["method"] as? String {
-            // Server-initiated notification (no "id" field).
-            handleNotification(method: method, params: json["params"] as? [String: Any])
         }
     }
 
@@ -897,6 +1044,39 @@ actor LSPManager {
 
     // MARK: - Server-initiated notifications
 
+    /// Answers a request the server sent us. Every request gets a reply —
+    /// servers block on some of them (progress tokens, configuration).
+    private func handleServerRequest(id: LSPRequestID, method: String, params: [String: Any]?, language: Language) {
+        switch method {
+        case "workspace/applyEdit":
+            let edits = (params?["edit"] as? [String: Any]).map(Self.workspaceEdits(from:)) ?? [:]
+            guard let handler = applyEditHandler, !edits.isEmpty else {
+                sendResponse(id: id, result: ["applied": false], language: language)
+                return
+            }
+            Task {
+                let applied = await handler(edits)
+                self.sendResponse(id: id, result: ["applied": applied], language: language)
+            }
+        case "workspace/configuration":
+            // One `null` per requested section: "use your defaults".
+            let count = (params?["items"] as? [Any])?.count ?? 0
+            sendResponse(id: id, result: Array(repeating: NSNull(), count: count), language: language)
+        case "window/workDoneProgress/create", "client/registerCapability",
+             "client/unregisterCapability", "window/showMessageRequest":
+            sendResponse(id: id, result: NSNull(), language: language)
+        default:
+            sendResponse(id: id, error: ["code": -32601, "message": "Method not found: \(method)"], language: language)
+        }
+    }
+
+    private func sendResponse(id: LSPRequestID, result: Any? = nil, error: [String: Any]? = nil, language: Language) {
+        guard servers[language] != nil else { return }
+        var obj: [String: Any] = ["jsonrpc": "2.0", "id": id.jsonValue]
+        if let error { obj["error"] = error } else { obj["result"] = result ?? NSNull() }
+        sendMessage(frame(obj), to: &servers[language]!)
+    }
+
     /// Dispatches a JSON-RPC notification pushed by the server (no matching
     /// pending request). Currently only `textDocument/publishDiagnostics` is
     /// handled; anything else is silently ignored.
@@ -912,6 +1092,9 @@ actor LSPManager {
             let uriString = params["uri"] as? String,
             let url = URL(string: uriString)
         else { return }
+        if let raw = params["diagnostics"], let data = try? JSONSerialization.data(withJSONObject: raw) {
+            rawDiagnostics[url] = data
+        }
 
         let rawDiagnostics = params["diagnostics"] as? [[String: Any]] ?? []
 
@@ -1097,7 +1280,12 @@ actor LSPManager {
             let json   = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let result = json["result"] as? [String: Any]
         else { return [:] }
+        return Self.workspaceEdits(from: result)
+    }
 
+    /// Flattens a `WorkspaceEdit` object into per-file text edits. File
+    /// create/rename/delete operations in `documentChanges` are skipped.
+    static func workspaceEdits(from result: [String: Any]) -> [URL: [LSPTextEdit]] {
         var edits: [URL: [LSPTextEdit]] = [:]
 
         if let changes = result["changes"] as? [String: Any] {
@@ -1226,6 +1414,25 @@ actor LSPManager {
 
 // MARK: - Errors
 
+/// A JSON-RPC id, which the spec allows to be a number or a string.
+private enum LSPRequestID: Sendable {
+    case int(Int)
+    case string(String)
+
+    init?(_ value: Any?) {
+        if let int = value as? Int { self = .int(int) }
+        else if let string = value as? String { self = .string(string) }
+        else { return nil }
+    }
+
+    var jsonValue: Any {
+        switch self {
+        case .int(let int): return int
+        case .string(let string): return string
+        }
+    }
+}
+
 private enum LSPError: Error {
     case serverNotRunning(Language)
     case serverTerminated(Language)
@@ -1273,15 +1480,19 @@ func applyLSPTextEdits(_ edits: [LSPTextEdit], to content: String) -> String {
         return min(lineStarts[line] + character, ns.length)
     }
 
-    let ranged: [(range: NSRange, newText: String)] = edits.compactMap { edit in
+    let ranged: [(range: NSRange, newText: String, order: Int)] = edits.enumerated().compactMap { index, edit in
         let start = offset(line: edit.startLine, character: edit.startCharacter)
         let end   = offset(line: edit.endLine, character: edit.endCharacter)
         guard end >= start else { return nil }
-        return (NSRange(location: start, length: end - start), edit.newText)
+        return (NSRange(location: start, length: end - start), edit.newText, index)
     }
 
+    // Back to front. Inserts at the same offset go in reverse array order so
+    // they end up in array order, as the spec requires (e.g. two imports
+    // added at the top of a file).
     let result = NSMutableString(string: content)
-    for (range, newText) in ranged.sorted(by: { $0.range.location > $1.range.location }) {
+    let backToFront = ranged.sorted { ($0.range.location, $0.order) > ($1.range.location, $1.order) }
+    for (range, newText, _) in backToFront {
         guard range.location + range.length <= result.length else { continue }
         result.replaceCharacters(in: range, with: newText)
     }

@@ -75,6 +75,7 @@ private struct TabItemView: View {
             // than from a small grey dot at the far edge.
             Text(tab.title)
                 .font(.system(size: appState.sf(12)))
+                .italic(tab.isPreview)
                 .foregroundColor(TabAppearance.titleColor(isDirty: tab.isDirty, isActive: isActive))
                 .lineLimit(1)
 
@@ -118,9 +119,13 @@ private struct TabItemView: View {
         .contentShape(Rectangle())
         .onHover { isHovering = $0 }
         .onTapGesture { appState.activateTab(tab.id) }
+        .simultaneousGesture(TapGesture(count: 2).onEnded { appState.pinTab(tab.id) })
         .overlay { MiddleClickDetector { appState.closeTab(tab.id) } }
         .contextMenu {
             Button("Close") { appState.closeTab(tab.id) }
+            if tab.isPreview {
+                Button("Keep Open") { appState.pinTab(tab.id) }
+            }
             Button("Close Others") {
                 for t in appState.tabs(in: side) where t.id != tab.id {
                     appState.closeTab(t.id)

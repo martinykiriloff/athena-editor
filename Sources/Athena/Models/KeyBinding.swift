@@ -9,6 +9,7 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
     case saveFile           = "workbench.action.files.save"
     case newFile            = "workbench.action.files.newUntitledFile"
     case closeTab           = "workbench.action.closeActiveEditor"
+    case reopenClosedTab    = "workbench.action.reopenClosedEditor"
     // View
     case toggleSidebar      = "workbench.action.toggleSidebarVisibility"
     case toggleTerminal     = "workbench.action.terminal.toggleTerminal"
@@ -27,6 +28,8 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
     case previousTab        = "workbench.action.previousEditor"
     case goToLine           = "workbench.action.gotoLine"
     case goToSymbol         = "workbench.action.gotoSymbol"
+    case nextProblem        = "editor.action.marker.nextInFiles"
+    case previousProblem    = "editor.action.marker.prevInFiles"
     // Layout
     case splitEditorRight   = "workbench.action.splitEditorRight"
     case toggleZenMode      = "workbench.action.toggleZenMode"
@@ -39,6 +42,7 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
     case selectNextOccurrence = "editor.action.addSelectionToNextFindMatch"
     case findReferences      = "editor.action.referenceSearch.trigger"
     case renameSymbol        = "editor.action.rename"
+    case quickFix            = "editor.action.quickFix"
     case moveLineUp          = "editor.action.moveLinesUpAction"
     case moveLineDown        = "editor.action.moveLinesDownAction"
     case copyLineUp          = "editor.action.copyLinesUpAction"
@@ -64,6 +68,7 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
         case .saveFile:          return "Save File"
         case .newFile:           return "New File"
         case .closeTab:          return "Close Editor"
+        case .reopenClosedTab:   return "Reopen Closed Editor"
         case .toggleSidebar:     return "Toggle Sidebar"
         case .toggleTerminal:    return "Toggle Terminal"
         case .newTerminal:       return "New Terminal"
@@ -88,6 +93,8 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
         case .previousTab:       return "Previous Editor"
         case .goToLine:          return "Go to Line"
         case .goToSymbol:        return "Go to Symbol"
+        case .nextProblem:       return "Go to Next Problem"
+        case .previousProblem:   return "Go to Previous Problem"
         case .splitEditorRight:  return "Split Editor Right"
         case .toggleZenMode:     return "Toggle Zen Mode"
         case .findInFile:        return "Find in File"
@@ -98,6 +105,7 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
         case .selectNextOccurrence: return "Select Next Occurrence"
         case .findReferences:    return "Find All References"
         case .renameSymbol:      return "Rename Symbol"
+        case .quickFix:          return "Quick Fix"
         case .moveLineUp:        return "Move Line Up"
         case .moveLineDown:      return "Move Line Down"
         case .copyLineUp:        return "Copy Line Up"
@@ -111,14 +119,15 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
 
     var category: String {
         switch self {
-        case .saveFile, .newFile, .closeTab:
+        case .saveFile, .newFile, .closeTab, .reopenClosedTab:
             return "File"
         case .toggleSidebar, .toggleTerminal, .newTerminal,
              .showExplorer, .showSourceControl, .showSearch, .showDatabase, .showClaude,
              .claudeAddContext, .claudeInterrupt,
              .zoomIn, .zoomOut, .resetZoom, .splitEditorRight, .toggleZenMode:
             return "View"
-        case .quickOpen, .commandPalette, .nextTab, .previousTab, .goToLine, .goToSymbol:
+        case .quickOpen, .commandPalette, .nextTab, .previousTab, .goToLine, .goToSymbol,
+             .nextProblem, .previousProblem:
             return "Navigation"
         case .toggleBreakpoint, .removeAllBreakpoints, .startOrContinueDebug, .stopDebug,
              .debugStepOver, .debugStepInto, .debugStepOut:
@@ -126,7 +135,7 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
         case .sfccUploadAllCartridges:
             return "SFCC"
         case .findInFile, .findAndReplace, .toggleComment, .indentLine, .outdentLine,
-             .selectNextOccurrence, .findReferences, .renameSymbol,
+             .selectNextOccurrence, .findReferences, .renameSymbol, .quickFix,
              .moveLineUp, .moveLineDown, .copyLineUp, .copyLineDown, .deleteLine:
             return "Editor"
         }
@@ -251,6 +260,7 @@ struct KeyBinding: Identifiable, Codable, Sendable {
         KeyBinding(action: .saveFile,          combo: KeyCombo(key: "s",   command: true)),
         KeyBinding(action: .newFile,           combo: KeyCombo(key: "n",   command: true)),
         KeyBinding(action: .closeTab,          combo: KeyCombo(key: "w",   command: true)),
+        KeyBinding(action: .reopenClosedTab,   combo: KeyCombo(key: "t",   command: true, shift: true)),
         // View
         KeyBinding(action: .toggleSidebar,     combo: KeyCombo(key: "b",   command: true)),
         KeyBinding(action: .toggleTerminal,    combo: KeyCombo(key: "backtick", control: true)),
@@ -261,8 +271,9 @@ struct KeyBinding: Identifiable, Codable, Sendable {
         KeyBinding(action: .showDatabase,      combo: nil),
         KeyBinding(action: .showClaude,        combo: KeyCombo(key: "a",   command: true, shift: true)),
         KeyBinding(action: .claudeAddContext,  combo: KeyCombo(key: "l",   command: true)),
-        // ⌘. is the platform's Cancel; it stops the agent mid-turn.
-        KeyBinding(action: .claudeInterrupt,   combo: KeyCombo(key: ".",   command: true)),
+        // Unbound: ⌘. is Quick Fix, as in VS Code. Esc in the Claude panel
+        // and its Stop button still end a turn.
+        KeyBinding(action: .claudeInterrupt,   combo: nil),
         // Navigation
         KeyBinding(action: .quickOpen,         combo: KeyCombo(key: "p",   command: true)),
         KeyBinding(action: .commandPalette,    combo: KeyCombo(key: "p",   command: true, shift: true)),
@@ -270,6 +281,8 @@ struct KeyBinding: Identifiable, Codable, Sendable {
         KeyBinding(action: .previousTab,       combo: KeyCombo(key: "tab", shift: true, control: true)),
         KeyBinding(action: .goToLine,          combo: KeyCombo(key: "g",   control: true)),
         KeyBinding(action: .goToSymbol,        combo: KeyCombo(key: "o",   command: true, shift: true)),
+        KeyBinding(action: .nextProblem,       combo: KeyCombo(key: "f8")),
+        KeyBinding(action: .previousProblem,   combo: KeyCombo(key: "f8",  shift: true)),
         // Layout — ⌘\ is VS Code's real macOS default for "Split Editor Right"
         // (plan.md item 22); no existing binding above claims the "\" key.
         KeyBinding(action: .splitEditorRight,  combo: KeyCombo(key: "\\",  command: true)),
@@ -292,6 +305,7 @@ struct KeyBinding: Identifiable, Codable, Sendable {
         KeyBinding(action: .selectNextOccurrence, combo: KeyCombo(key: "d", command: true)),
         // Rename Symbol is plain F2, per VS Code, as directed.
         KeyBinding(action: .renameSymbol,       combo: KeyCombo(key: "f2")),
+        KeyBinding(action: .quickFix,           combo: KeyCombo(key: ".",  command: true)),
         // Find All References deliberately deviates from VS Code's plain
         // ⇧F12: on stock Mac keyboard settings ("Use F1, F2, etc. keys as
         // standard function keys" off, the default), F12 alone is the

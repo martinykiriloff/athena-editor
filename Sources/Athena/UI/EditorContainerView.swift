@@ -382,6 +382,13 @@ struct CodeEditorView: View {
                         fileURL: fileURL, line: line - 1, character: col - 1, newName: newName
                     )
                 },
+                onRequestCodeActions: { start, end in
+                    guard let fileURL = tab.fileURL else { return [] }
+                    return await appState.codeActions(fileURL: fileURL, start: start, end: end)
+                },
+                onPerformCodeAction: { action, handledURL in
+                    await appState.performCodeAction(action, skipping: handledURL)
+                },
                 pendingNavigationTarget: appState.pendingNavigationTarget,
                 onNavigationConsumed: { appState.pendingNavigationTarget = nil },
                 scrollProxy: $scrollProxy,

@@ -268,12 +268,23 @@ struct ProblemsView: View {
 
     private var diagnosticsList: some View {
         List {
-            ForEach(Array(appState.diagnostics.keys), id: \.self) { fileURL in
-                let fileDiagnostics = appState.diagnostics[fileURL] ?? []
+            // Sorted like `sortedDiagnostics` (F8's order) — dictionary key
+            // order is arbitrary and reshuffles on every publish.
+            ForEach(appState.diagnostics.keys.sorted { $0.path < $1.path }, id: \.self) { fileURL in
+                let fileDiagnostics = (appState.diagnostics[fileURL] ?? []).sorted {
+                    ($0.line, $0.column) < ($1.line, $1.column)
+                }
                 if !fileDiagnostics.isEmpty {
                     Section {
                         ForEach(fileDiagnostics) { diagnostic in
-                            DiagnosticRowView(diagnostic: diagnostic)
+                            Button {
+                                Task { await appState.navigateToDiagnostic(diagnostic) }
+                            } label: {
+                                DiagnosticRowView(diagnostic: diagnostic)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .help("Go to \(diagnostic.fileURL.lastPathComponent):\(diagnostic.line):\(diagnostic.column)")
                         }
                     } header: {
                         Text(fileURL.lastPathComponent)
@@ -303,7 +314,7 @@ private struct DiagnosticRowView: View {
                     .font(.system(size: appState.sf(12)))
                     .foregroundColor(.primary)
 
-                Text("\(diagnostic.fileURL.lastPathComponent):\(diagnostic.line)")
+                Text("\(diagnostic.fileURL.lastPathComponent):\(diagnostic.line):\(diagnostic.column)")
                     .font(.system(size: appState.sf(11)))
                     .foregroundColor(.secondary)
             }

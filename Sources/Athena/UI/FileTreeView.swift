@@ -197,7 +197,7 @@ struct FileTreeView: View {
             }
         } else {
             Task {
-                await appState.openFile(node.url)
+                await appState.openFile(node.url, preview: true)
             }
         }
     }
@@ -422,6 +422,11 @@ private struct FileNodeRow<Menu: View>: View {
         .contentShape(Rectangle())
         .onHover { isHovering = $0 }
         .onTapGesture { onTap() }
+        // Simultaneous, not `onTapGesture(count: 2)` first: that would hold
+        // every single click back until the double-click interval passed.
+        .simultaneousGesture(TapGesture(count: 2).onEnded {
+            if !node.isDirectory { appState.keepOpen(node.url) }
+        })
         .contextMenu { menu() }
     }
 
