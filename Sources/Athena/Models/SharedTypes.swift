@@ -1532,3 +1532,26 @@ struct SFCCDebugBreakpoint: Sendable, Decodable, Equatable {
         case scriptPath = "script_path"
     }
 }
+
+// MARK: - Local History
+
+/// One saved snapshot of a file's content, as listed by `LocalHistoryService`.
+struct LocalHistorySnapshot: Sendable, Identifiable, Equatable {
+    /// Millisecond timestamp the snapshot was taken at (also its file stem).
+    let id: String
+    let date: Date
+    let byteCount: Int
+}
+
+/// Presentation and selection state for `LocalHistoryView`.
+struct LocalHistoryState: Sendable {
+    var isPresented = false
+    var fileURL: URL?
+    /// The tab whose live buffer is diffed against and receives a restore.
+    var tabID: UUID?
+    var snapshots: [LocalHistorySnapshot] = []
+    var selectedID: String?
+    /// Diff from the selected snapshot (old) to the current buffer (new).
+    var diff: ParsedDiff = .empty
+    var errorMessage: String?
+}
