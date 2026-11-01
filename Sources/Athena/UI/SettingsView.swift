@@ -197,6 +197,18 @@ struct SettingsView: View {
                     .help("Auto-detect tab size and insert spaces from file content")
             }
 
+            SettingRow("Large File Threshold") {
+                Stepper(
+                    appState.largeFileThresholdKB > 0 ? "\(appState.largeFileThresholdKB) KB" : "Off",
+                    value: state.largeFileThresholdKB,
+                    in: 0...102_400, step: 256
+                )
+                .onChange(of: appState.largeFileThresholdKB) { _, v in
+                    appState.persistSetting(v, for: "largeFileThresholdKB")
+                }
+                .help("Files above this size open without highlighting, minimap, blame or language server. 0 turns it off.")
+            }
+
             SettingRow("Auto Indent") {
                 Toggle("Auto Indent", isOn: state.editorAutoIndent)
                     .onChange(of: appState.editorAutoIndent) { _, v in

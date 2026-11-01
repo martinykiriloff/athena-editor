@@ -55,44 +55,79 @@ final class SyntaxHighlighter {
             ?? NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
     }
 
-    // MARK: Public API
+    // MARK: Incremental API
 
-    func highlight(_ text: String) -> NSAttributedString {
-        let font = makeFont()
+    /// Attributes every character gets before token colours are layered on.
+    func baseAttributes() -> [NSAttributedString.Key: Any] {
         let para = NSMutableParagraphStyle()
         para.lineHeightMultiple = lineHeight
 
         var baseAttrs: [NSAttributedString.Key: Any] = [
             .foregroundColor: theme.foreground,
-            .font: font,
+            .font: makeFont(),
             .paragraphStyle: para,
         ]
         if fontLigatures { baseAttrs[.ligature] = 2 }
+        return baseAttrs
+    }
 
-        let result = NSMutableAttributedString(string: text, attributes: baseAttrs)
+    /// The default (un-highlighted) text colour — what a character carries
+    /// when no rule matched it.
+    var baseForeground: NSColor { theme.foreground }
 
-        let fullRange = NSRange(text.startIndex..., in: text)
-
-        // Apply each rule in order; comment rules are appended last so they
-        // override any keyword colouring that fell inside a comment.
+    /// Token colour spans for `range` of `text`, in rule order (later spans
+    /// override earlier ones when applied in sequence). Regexes run with
+    /// transparent, non-anchoring bounds so lookbehind/lookahead and `^`
+    /// behave exactly as they do in a whole-document pass.
+    func spans(in text: String, range: NSRange) -> [(range: NSRange, color: NSColor)] {
+        var out: [(range: NSRange, color: NSColor)] = []
         for rule in rules {
             rule.pattern.enumerateMatches(
                 in: text,
-                options: [],
-                range: fullRange
+                options: [.withTransparentBounds, .withoutAnchoringBounds],
+                range: range
             ) { match, _, _ in
                 guard let match else { return }
-                let range: NSRange
+                let r: NSRange
                 if rule.group > 0 && rule.group < match.numberOfRanges {
-                    range = match.range(at: rule.group)
+                    r = match.range(at: rule.group)
                 } else {
-                    range = match.range
+                    r = match.range
                 }
-                guard range.location != NSNotFound else { return }
-                result.addAttribute(.foregroundColor, value: rule.color, range: range)
+                guard r.location != NSNotFound else { return }
+                out.append((r, rule.color))
             }
         }
+        return out
+    }
 
+    /// Re-highlights `range` of `storage` in place: resets the range to the
+    /// base attributes, then layers token colours. The storage's characters
+    /// are never replaced, so selection and undo are untouched.
+    func apply(to storage: NSTextStorage, range: NSRange) {
+        let length = storage.length
+        let clamped = NSIntersectionRange(range, NSRange(location: 0, length: length))
+        guard clamped.length > 0 else { return }
+        let text = storage.string
+        let tokens = spans(in: text, range: clamped)
+        storage.beginEditing()
+        storage.setAttributes(baseAttributes(), range: clamped)
+        for token in tokens {
+            storage.addAttribute(.foregroundColor, value: token.color, range: token.range)
+        }
+        storage.endEditing()
+    }
+
+    // MARK: Public API
+
+    func highlight(_ text: String) -> NSAttributedString {
+        let result = NSMutableAttributedString(string: text, attributes: baseAttributes())
+        let fullRange = NSRange(location: 0, length: (text as NSString).length)
+        // Rules are applied in order; comment rules come last so they
+        // override any keyword colouring that fell inside a comment.
+        for token in spans(in: text, range: fullRange) {
+            result.addAttribute(.foregroundColor, value: token.color, range: token.range)
+        }
         return result
     }
 

@@ -1532,3 +1532,37 @@ struct SFCCDebugBreakpoint: Sendable, Decodable, Equatable {
         case scriptPath = "script_path"
     }
 }
+
+// MARK: - Incremental highlighting
+
+/// One text edit, expressed in post-edit coordinates, handed to
+/// `HighlightPlanner` so it can decide how much to re-highlight.
+struct HighlightEdit: Sendable, Equatable {
+    /// Range the inserted (replacement) text now occupies.
+    var range: NSRange
+    /// The text that was replaced (empty for a pure insertion).
+    var deletedText: String
+}
+
+/// How much of the document to re-highlight after an edit.
+enum HighlightPlan: Sendable, Equatable {
+    /// Re-highlight just this range, in place.
+    case window(NSRange)
+    /// The edit may change tokens outside any local window (multi-line
+    /// comments / strings) — re-highlight the whole document, in place.
+    case full
+}
+
+// MARK: - Large-file mode
+
+/// Size threshold above which Athena disables highlighting, the minimap,
+/// git blame and LSP document sync for a file. `thresholdKB <= 0` disables
+/// large-file mode entirely.
+struct LargeFilePolicy: Sendable, Equatable {
+    static let defaultThresholdKB = 1024
+    var thresholdKB: Int = LargeFilePolicy.defaultThresholdKB
+
+    func isLarge(byteCount: Int) -> Bool {
+        thresholdKB > 0 && byteCount > thresholdKB * 1024
+    }
+}

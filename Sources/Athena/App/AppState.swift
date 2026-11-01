@@ -430,6 +430,16 @@ final class AppState {
     var editorFormatOnSave:      Bool    = false
     var editorAutoIndent:        Bool    = true
     var editorDetectIndentation: Bool    = true
+    /// Files larger than this (KB) open in large-file mode: no highlighting,
+    /// minimap, blame or LSP sync. 0 disables large-file mode.
+    var largeFileThresholdKB:    Int     = LargeFilePolicy.defaultThresholdKB
+    /// Tabs where the user chose "Enable Features Anyway".
+    var largeFileOverrides: Set<UUID> = []
+    /// Tabs whose large-file banner was dismissed.
+    var largeFileBannerDismissed: Set<UUID> = []
+    /// Large tabs the language server has not been told about (no `didOpen`
+    /// / `didChange`); re-synced with a fresh `didOpen` once they qualify.
+    @ObservationIgnored var lspSuspendedTabs: Set<UUID> = []
 
     // MARK: - Computed
 
@@ -720,7 +730,9 @@ final class AppState {
             // Bring up the language server (no-op if none is installed) and tell
             // it about the newly opened document. Fired unstructured so file
             // opening itself stays instant.
-            if let workspace {
+            let openedAsLarge = isLargeFile(tab)
+            if openedAsLarge { lspSuspendedTabs.insert(tab.id) }
+            if let workspace, !openedAsLarge {
                 Task {
                     do {
                         try await self.lspManager.startServer(for: language, workspaceURL: workspace.rootURL)
@@ -877,13 +889,46 @@ final class AppState {
         await restoreSession(for: url)
     }
 
+    // MARK: - Large-file mode
+
+    /// True when `tab` exceeds the large-file threshold and the user hasn't
+    /// opted back in. Drives: no highlighting, minimap, blame or LSP sync.
+    func isLargeFile(_ tab: TabModel) -> Bool {
+        guard !largeFileOverrides.contains(tab.id) else { return false }
+        return LargeFilePolicy(thresholdKB: largeFileThresholdKB)
+            .isLarge(byteCount: tab.content.utf8.count)
+    }
+
+    func dismissLargeFileBanner(_ id: UUID) {
+        largeFileBannerDismissed.insert(id)
+    }
+
+    /// Turns highlighting, minimap, blame and LSP back on for one tab.
+    func enableFeaturesForLargeFile(_ tab: TabModel) {
+        largeFileOverrides.insert(tab.id)
+        largeFileBannerDismissed.insert(tab.id)
+        guard let url = tab.fileURL else { return }
+        if lspSuspendedTabs.remove(tab.id) != nil {
+            let language = tab.language
+            let content = tab.content
+            Task {
+                if let ws = self.workspace {
+                    try? await self.lspManager.startServer(for: language, workspaceURL: ws.rootURL)
+                }
+                await self.lspManager.didOpen(fileURL: url, content: content)
+            }
+        }
+        Task { await loadBlame(for: tab) }
+    }
+
     // MARK: - Git Blame
 
     /// Loads (or returns cached) blame data for the file in `tab`.
     /// Only runs when a `.git` directory exists at the workspace root.
     func loadBlame(for tab: TabModel) async {
         guard let fileURL = tab.fileURL,
-              let ws = workspace else { return }
+              let ws = workspace,
+              !isLargeFile(tab) else { return }
         let gitDir = ws.rootURL.appendingPathComponent(".git")
         guard FileManager.default.fileExists(atPath: gitDir.path) else { return }
         let blame = await blameService.blame(fileURL: fileURL, workspaceURL: ws.rootURL)
@@ -1057,6 +1102,7 @@ final class AppState {
         async let fos  = settingsService.value(for: "editorFormatOnSave",      default: false)
         async let ai   = settingsService.value(for: "editorAutoIndent",        default: true)
         async let di   = settingsService.value(for: "editorDetectIndentation", default: true)
+        async let lft  = settingsService.value(for: "largeFileThresholdKB",    default: LargeFilePolicy.defaultThresholdKB)
         async let th   = settingsService.value(for: "theme",                   default: "athena-dark")
         async let ct   = settingsService.value(for: "customThemes",            default: [EditorTheme]())
 
@@ -1076,6 +1122,7 @@ final class AppState {
         editorFormatOnSave      = await fos
         editorAutoIndent        = await ai
         editorDetectIndentation = await di
+        largeFileThresholdKB    = await lft
         customThemes            = await ct
         let themeId             = await th
         currentTheme            = allThemes.first(where: { $0.id == themeId }) ?? EditorTheme.named(themeId)
@@ -2730,8 +2777,17 @@ final class AppState {
         setTabs(groupTabs, in: side)
 
         if let url = groupTabs[index].fileURL {
-            Task { await self.lspManager.didChange(fileURL: url, content: content) }
-            if activeTabId(in: side) == id {
+            let isLarge = isLargeFile(groupTabs[index])
+            if isLarge {
+                lspSuspendedTabs.insert(id)
+            } else if lspSuspendedTabs.remove(id) != nil {
+                // Back under the threshold (or the user opted in): the server
+                // never saw this document, so open it with the current text.
+                Task { await self.lspManager.didOpen(fileURL: url, content: content) }
+            } else {
+                Task { await self.lspManager.didChange(fileURL: url, content: content) }
+            }
+            if !isLarge, activeTabId(in: side) == id {
                 // Per-URL keyed state (the gutter's change bar) refreshes for
                 // either group's visible tab, regardless of focus.
                 scheduleGitLineChangesRefresh(tabId: id, fileURL: url)

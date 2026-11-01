@@ -210,9 +210,12 @@ struct CodeEditorView: View {
     @State private var findReplaceController: FindReplaceController? = nil
 
     private var blameInfo: [Int: BlameLine] {
-        guard let url = tab.fileURL else { return [:] }
+        guard let url = tab.fileURL, !isLargeFile else { return [:] }
         return appState.blameCache[url.path] ?? [:]
     }
+
+    /// Large-file mode: highlighting, minimap, blame and LSP sync are off.
+    private var isLargeFile: Bool { appState.isLargeFile(tab) }
 
     private var fileBreakpoints: Set<Int> {
         guard let path = tab.fileURL?.path else { return [] }
@@ -256,6 +259,9 @@ struct CodeEditorView: View {
         VStack(spacing: 0) {
             if tab.externallyModified {
                 ExternalChangeBanner(tab: tab)
+            }
+            if isLargeFile, !appState.largeFileBannerDismissed.contains(tab.id) {
+                LargeFileBanner(tab: tab)
             }
             if tab.language == .markdown {
                 markdownToolbar
@@ -307,6 +313,7 @@ struct CodeEditorView: View {
                 content: $tab.content,
                 language: tab.language,
                 theme: appState.currentTheme,
+                highlightingEnabled: !isLargeFile,
                 fontSize:         appState.editorFontSize,
                 fontFamily:       appState.editorFontFamily,
                 fontLigatures:    appState.editorFontLigatures,
@@ -455,7 +462,7 @@ struct CodeEditorView: View {
                 StickyScrollBarView(tab: tab, scrollFraction: scrollFraction, visibleFraction: visibleFraction)
             }
 
-            if appState.editorMinimapEnabled {
+            if appState.editorMinimapEnabled, !isLargeFile {
                 MinimapView(
                     content: tab.content,
                     language: tab.language,
@@ -638,6 +645,44 @@ private struct ExternalChangeBanner: View {
 
             Button("Reload") {
                 Task { await appState.reloadTabFromDisk(tab.id) }
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+        }
+        .padding(.horizontal, appState.sf(10))
+        .frame(height: appState.sf(32))
+        .background(Color.orange.opacity(0.15))
+        .overlay(alignment: .bottom) { Divider() }
+    }
+}
+
+// MARK: - LargeFileBanner
+
+/// Shown above an editor in large-file mode; dismissible, with an opt-in to
+/// re-enable the disabled features for this tab.
+private struct LargeFileBanner: View {
+    let tab: TabModel
+    @Environment(AppState.self) private var appState
+
+    var body: some View {
+        HStack(spacing: appState.sf(10)) {
+            Image(systemName: "gauge.with.dots.needle.33percent")
+                .foregroundColor(.orange)
+            Text("\(tab.title) is large (over \(appState.largeFileThresholdKB) KB): syntax highlighting, minimap, blame and language server are off.")
+                .font(.system(size: appState.sf(12)))
+                .lineLimit(1)
+
+            Spacer()
+
+            Button("Enable Anyway") {
+                appState.enableFeaturesForLargeFile(tab)
+            }
+            .buttonStyle(.plain)
+            .foregroundColor(.secondary)
+            .font(.system(size: appState.sf(12)))
+
+            Button("Dismiss") {
+                appState.dismissLargeFileBanner(tab.id)
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)

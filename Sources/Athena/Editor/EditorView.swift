@@ -14,6 +14,9 @@ struct EditorView: NSViewRepresentable {
     @Binding var content: String
     var language: Language
     var theme: EditorTheme = .athenaDracula
+    /// False in large-file mode (`LargeFilePolicy`): syntax highlighting is
+    /// skipped so typing and scrolling stay responsive on huge files.
+    var highlightingEnabled: Bool = true
     var fontSize:       CGFloat = 14
     var fontFamily:     String  = "JetBrains Mono"
     var fontLigatures:  Bool    = true
@@ -345,6 +348,8 @@ struct EditorView: NSViewRepresentable {
         let wsChanged    = coord.currentRenderWhitespace != renderWhitespace
         let conflictTrustChanged = coord.currentConflictScanTrusted != isConflictScanTrusted
         coord.currentConflictScanTrusted = isConflictScanTrusted
+        let highlightingToggled = coord.currentHighlightingEnabled != highlightingEnabled
+        coord.currentHighlightingEnabled = highlightingEnabled
 
         if themeChanged {
             coord.currentTheme = theme
@@ -395,7 +400,7 @@ struct EditorView: NSViewRepresentable {
             coord.consumePendingDefinitionScroll()
             coord.cancelActiveSnippet()
             coord.updateConflictHighlights(in: textView)
-        } else if themeChanged || fontChanged {
+        } else if themeChanged || fontChanged || highlightingToggled {
             coord.applyHighlighting(to: textView)
             coord.updateConflictHighlights(in: textView)   // tint colors are theme-derived
         } else if conflictTrustChanged {
@@ -613,6 +618,20 @@ extension EditorView {
         nonisolated(unsafe) private var commandObserver: NSObjectProtocol?
         // no mouseMonitor needed — using NSClickGestureRecognizer instead
 
+        // Incremental highlighting
+        var currentHighlightingEnabled = true
+        /// Recorded by `textView(_:shouldChangeTextIn:replacementString:)` and
+        /// consumed by the next `textDidChange`; `nil` means "unknown edit".
+        private var pendingHighlightEdit: PendingHighlightEdit?
+
+        private struct PendingHighlightEdit {
+            var affected: NSRange
+            var deletedText: String
+            var replacementLength: Int
+            var lengthBefore: Int
+            var isMultiRange: Bool
+        }
+
         // Blame annotation
         var blameAnnotationLabel: NSTextField?
         var currentBlameInfo: [Int: BlameLine] = [:]
@@ -717,6 +736,7 @@ extension EditorView {
         init(_ parent: EditorView) {
             self.parent              = parent
             self.currentLanguage     = parent.language
+            self.currentHighlightingEnabled = parent.highlightingEnabled
             self.currentTheme        = parent.theme
             self.currentFontSize     = parent.fontSize
             self.currentFontFamily   = parent.fontFamily
@@ -1622,35 +1642,63 @@ extension EditorView {
 
         // MARK: Highlighting
 
+        /// Whole-document pass, applied in place.
         func applyHighlighting(to textView: NSTextView) {
-            let attributed = highlighter.highlight(textView.string)
-
-            // Preserve every selected range — not just the primary one — so a
-            // multi-range selection (a ⌘D chain, or ⌥Click carets) survives
-            // this re-highlight, which runs after *every* keystroke via
-            // `textDidChange`. Using the singular `selectedRange`/`setSelectedRange`
-            // here would silently collapse a multi-range selection back down
-            // to one range right after the first character typed into it.
-            let selectedRanges = textView.selectedRanges
-            textView.textStorage?.setAttributedString(attributed)
-            let maxLocation = (textView.string as NSString).length
-            let validRanges = selectedRanges.filter { NSMaxRange($0.rangeValue) <= maxLocation }
-            if !validRanges.isEmpty {
-                textView.setSelectedRanges(validRanges, affinity: .downstream, stillSelecting: false)
-            }
-
-            // After overwriting all attributes, re-stamp import paths with
-            // NSLinkAttributeName so Cmd+Click fires textView(_:clickedOnLink:at:).
-            addImportLinkAttributes(to: textView)
+            applyHighlighting(to: textView, edit: nil)
         }
 
-        private func addImportLinkAttributes(to textView: NSTextView) {
+        /// Re-highlights in place - the text storage is never replaced, so
+        /// every selected range (a Cmd+D chain, Option+Click carets) and the
+        /// undo stack are untouched. With an `edit`, only a small window
+        /// around it is re-highlighted unless `HighlightPlanner` says the
+        /// edit may affect multi-line tokens, in which case the whole
+        /// document is.
+        private func applyHighlighting(to textView: NSTextView, edit: HighlightEdit?) {
+            guard let ts = textView.textStorage, ts.length > 0 else { return }
+            let fullRange = NSRange(location: 0, length: ts.length)
+
+            guard currentHighlightingEnabled else {
+                // Large-file mode: no tokenising. Only (re)stamp the base
+                // font/colour on a whole-document pass; typed text inherits it.
+                guard edit == nil else { return }
+                ts.beginEditing()
+                ts.setAttributes(highlighter.baseAttributes(), range: fullRange)
+                ts.endEditing()
+                return
+            }
+
+            var range = fullRange
+            if let edit {
+                let base = highlighter.baseForeground
+                let plan = HighlightPlanner.plan(
+                    text: ts.mutableString,
+                    edit: edit,
+                    language: currentLanguage,
+                    isNewlineColored: { index in
+                        guard index >= 0, index < ts.length,
+                              let color = ts.attribute(.foregroundColor, at: index, effectiveRange: nil) as? NSColor
+                        else { return false }
+                        return color != base
+                    }
+                )
+                if case .window(let window) = plan { range = window }
+            }
+
+            highlighter.apply(to: ts, range: range)
+
+            // `setAttributes` cleared the range's links; re-stamp import paths
+            // with NSLinkAttributeName so Cmd+Click fires textView(_:clickedOnLink:at:).
+            addImportLinkAttributes(to: textView, range: range)
+        }
+
+        private func addImportLinkAttributes(to textView: NSTextView, range: NSRange) {
             guard let ts = textView.textStorage else { return }
-            let text     = ts.string as NSString
+            let text     = ts.mutableString
             let keywords = ["import ", "require(", " from ", "@import", "#include", "export "]
-            var pos      = 0
+            var pos      = range.location
+            let limit    = min(NSMaxRange(range), text.length)
             ts.beginEditing()
-            while pos < text.length {
+            while pos < limit {
                 let lineRange = text.lineRange(for: NSRange(location: pos, length: 0))
                 let line      = text.substring(with: lineRange)
                 if keywords.contains(where: { line.contains($0) }) {
@@ -1689,7 +1737,7 @@ extension EditorView {
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
             parent.onContentChange(textView.string)
-            applyHighlighting(to: textView)
+            applyHighlighting(to: textView, edit: consumePendingHighlightEdit(for: textView))
 
             // Dismiss ghost text and hover tooltip on every keystroke; reschedule both triggers.
             completionDebounce?.cancel()
@@ -1750,6 +1798,7 @@ extension EditorView {
         /// e.g. bracket auto-close), which is harmless since it's a no-op
         /// whenever no snippet is active.
         func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
+            recordPendingHighlightEdit(in: textView, affected: affectedCharRange, replacement: replacementString)
             guard var snippet = activeSnippet else { return true }
             let delta = (replacementString?.utf16.count ?? 0) - affectedCharRange.length
             guard delta != 0 else { return true }
@@ -1767,6 +1816,39 @@ extension EditorView {
             }
             activeSnippet = snippet
             return true
+        }
+
+        // MARK: Pending edit bookkeeping (incremental highlighting)
+
+        private func recordPendingHighlightEdit(in textView: NSTextView, affected: NSRange, replacement: String?) {
+            guard let ts = textView.textStorage, let replacement,
+                  NSMaxRange(affected) <= ts.length else {
+                pendingHighlightEdit = nil
+                return
+            }
+            pendingHighlightEdit = PendingHighlightEdit(
+                affected: affected,
+                deletedText: ts.mutableString.substring(with: affected),
+                replacementLength: (replacement as NSString).length,
+                lengthBefore: ts.length,
+                isMultiRange: textView.selectedRanges.count > 1
+            )
+        }
+
+        /// The edit that produced the current `textDidChange`, or `nil` when
+        /// it can't be trusted (multi-range, programmatic edit that bypassed
+        /// `shouldChangeText`, or a length mismatch) - callers then do a full pass.
+        private func consumePendingHighlightEdit(for textView: NSTextView) -> HighlightEdit? {
+            defer { pendingHighlightEdit = nil }
+            guard let pending = pendingHighlightEdit, !pending.isMultiRange,
+                  textView.selectedRanges.count <= 1,
+                  let ts = textView.textStorage,
+                  ts.length == pending.lengthBefore - pending.affected.length + pending.replacementLength
+            else { return nil }
+            return HighlightEdit(
+                range: NSRange(location: pending.affected.location, length: pending.replacementLength),
+                deletedText: pending.deletedText
+            )
         }
 
         // MARK: Blame annotation
