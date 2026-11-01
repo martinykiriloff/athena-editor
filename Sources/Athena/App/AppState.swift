@@ -63,6 +63,11 @@ final class AppState {
     /// Files double-clicked while their preview open was still reading the
     /// file; `openFile` opens them permanent instead. See `keepOpen(_:)`.
     @ObservationIgnored var pendingPins: Set<URL> = []
+    // Hot exit (see AppState+Session.swift).
+    @ObservationIgnored var sessionStore = SessionStore()
+    @ObservationIgnored var pendingSessionSnapshot: SessionSnapshot?
+    @ObservationIgnored var sessionAutosaveEnabled = false
+    @ObservationIgnored var sessionAutosaveTask: Task<Void, Never>?
     static let closedTabLimit = 30
 
     /// Every assignment (workspace open/close, file-watcher rebuild, the
@@ -1308,6 +1313,11 @@ final class AppState {
     /// file tree is built, so both explicit "Open Folder" and the launch-time
     /// `restoreLastWorkspace()` path get their tabs back.
     private func restoreSession(for workspaceURL: URL) async {
+        if let snap = pendingSessionSnapshot, snap.workspacePath == workspaceURL.path {
+            pendingSessionSnapshot = nil
+            await applySessionSnapshot(snap)
+            return
+        }
         let sessions: [String: WorkspaceSession] = await settingsService.value(for: "workspaceSessions", default: [:])
         guard let session = sessions[workspaceURL.path], !session.tabs.isEmpty else { return }
 
