@@ -31,6 +31,9 @@ struct AthenaApp: App {
             MainWindowView()
                 .environment(appState)
                 .environment(updateService)
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+                    appState.saveSessionSnapshotSync()
+                }
                 .onAppear {
                     NSWindow.allowsAutomaticWindowTabbing = false
                     appState.applyAppearance()
@@ -44,7 +47,7 @@ struct AthenaApp: App {
                     appState.startDiagnosticsConsumer()
                     appState.startFileWatchConsumer()
                     Task { await appState.runToolChecks() }
-                    await appState.restoreLastWorkspace()
+                    await appState.restoreHotExitSession()
                     // Owned by updateService, not this view's .task — see
                     // scheduleAutoCheck's doc comment.
                     updateService.scheduleAutoCheck()

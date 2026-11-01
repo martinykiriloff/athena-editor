@@ -881,6 +881,52 @@ struct WorkspaceSession: Codable, Sendable {
     var activePath: String?
 }
 
+// MARK: - Hot Exit
+
+/// Size and modification time of a file on disk, taken when a session
+/// snapshot is written. Comparing it at restore time tells whether the file
+/// changed behind an unsaved buffer's back.
+struct DiskStamp: Codable, Sendable, Equatable {
+    var mtimeMillis: Int64
+    var size: Int64
+}
+
+/// One editor tab in a `SessionSnapshot`. `unsavedContent` is set only for a
+/// dirty tab; a clean tab is reopened from disk.
+struct SessionTabState: Codable, Sendable, Equatable {
+    /// `nil` for an Untitled tab.
+    var path: String?
+    var title: String
+    var cursorLine: Int
+    var cursorColumn: Int
+    var unsavedContent: String?
+    /// On-disk state of `path` at snapshot time (dirty file-backed tabs only).
+    var diskStamp: DiskStamp?
+    /// The tab was already flagged "changed on disk" when the snapshot was taken.
+    var externallyModified: Bool = false
+    var isMarkdownPreview: Bool = false
+}
+
+/// Everything hot exit restores on launch: workspace, both editor groups,
+/// active tabs, cursors and unsaved buffers. Stored as a single JSON file by
+/// `SessionStore`.
+struct SessionSnapshot: Codable, Sendable, Equatable {
+    static let currentVersion = 1
+
+    var version: Int = SessionSnapshot.currentVersion
+    var workspacePath: String?
+    var primaryTabs: [SessionTabState] = []
+    var primaryActiveIndex: Int?
+    /// `nil` when the editor was not split.
+    var secondaryTabs: [SessionTabState]?
+    var secondaryActiveIndex: Int?
+    var secondaryFocused: Bool = false
+
+    var isEmpty: Bool {
+        workspacePath == nil && primaryTabs.isEmpty && (secondaryTabs ?? []).isEmpty
+    }
+}
+
 // MARK: - Git
 
 struct GitStatus: Sendable {
