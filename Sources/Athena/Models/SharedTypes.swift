@@ -1532,3 +1532,57 @@ struct SFCCDebugBreakpoint: Sendable, Decodable, Equatable {
         case scriptPath = "script_path"
     }
 }
+
+// MARK: - Tasks (.vscode/tasks.json)
+
+/// One entry of `.vscode/tasks.json`'s `tasks` array.
+struct TaskDefinition: Identifiable, Sendable, Equatable {
+    enum Kind: String, Sendable { case shell, process }
+    enum Group: String, Sendable { case build, test, none }
+
+    var id: String { label }
+    var label: String
+    var kind: Kind = .shell
+    var command: String
+    var args: [String] = []
+    /// `options.cwd`, unsubstituted.
+    var cwd: String?
+    /// `options.env`, unsubstituted.
+    var env: [String: String] = [:]
+    var group: Group = .none
+    var isDefaultGroup: Bool = false
+    var dependsOn: [String] = []
+    /// `dependsOrder` was "sequence". Athena runs dependencies one after
+    /// another either way; kept so the parse is lossless.
+    var dependsSequence: Bool = false
+    var problemMatchers: [TaskProblemMatcher] = []
+    var detail: String?
+}
+
+/// The built-in problem matcher presets Athena understands.
+enum TaskProblemMatcher: String, Sendable, Equatable {
+    case tsc = "$tsc"
+    case eslintStylish = "$eslint-stylish"
+}
+
+enum TaskError: Error, Sendable, Equatable, LocalizedError {
+    case malformed(String)
+    case unknownTask(String)
+    case dependencyCycle([String])
+
+    var errorDescription: String? {
+        switch self {
+        case .malformed(let why):     return "tasks.json is not valid: \(why)"
+        case .unknownTask(let l):     return "No task labelled \"\(l)\""
+        case .dependencyCycle(let c): return "Task dependency cycle: \(c.joined(separator: " -> "))"
+        }
+    }
+}
+
+/// Values available to `${…}` substitution in a task's fields.
+struct TaskVariableContext: Sendable, Equatable {
+    var workspaceFolder: String
+    var activeFile: String?
+    var environment: [String: String] = [:]
+    var home: String = NSHomeDirectory()
+}

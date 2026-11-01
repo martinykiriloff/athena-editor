@@ -28,6 +28,7 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
     case previousTab        = "workbench.action.previousEditor"
     case goToLine           = "workbench.action.gotoLine"
     case goToSymbol         = "workbench.action.gotoSymbol"
+    case runTask            = "workbench.action.tasks.runTask"
     case nextProblem        = "editor.action.marker.nextInFiles"
     case previousProblem    = "editor.action.marker.prevInFiles"
     // Layout
@@ -93,6 +94,7 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
         case .previousTab:       return "Previous Editor"
         case .goToLine:          return "Go to Line"
         case .goToSymbol:        return "Go to Symbol"
+        case .runTask:           return "Run Task"
         case .nextProblem:       return "Go to Next Problem"
         case .previousProblem:   return "Go to Previous Problem"
         case .splitEditorRight:  return "Split Editor Right"
@@ -129,6 +131,8 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
         case .quickOpen, .commandPalette, .nextTab, .previousTab, .goToLine, .goToSymbol,
              .nextProblem, .previousProblem:
             return "Navigation"
+        case .runTask:
+            return "Tasks"
         case .toggleBreakpoint, .removeAllBreakpoints, .startOrContinueDebug, .stopDebug,
              .debugStepOver, .debugStepInto, .debugStepOut:
             return "Debug"
@@ -281,6 +285,7 @@ struct KeyBinding: Identifiable, Codable, Sendable {
         KeyBinding(action: .previousTab,       combo: KeyCombo(key: "tab", shift: true, control: true)),
         KeyBinding(action: .goToLine,          combo: KeyCombo(key: "g",   control: true)),
         KeyBinding(action: .goToSymbol,        combo: KeyCombo(key: "o",   command: true, shift: true)),
+        KeyBinding(action: .runTask,           combo: nil),
         KeyBinding(action: .nextProblem,       combo: KeyCombo(key: "f8")),
         KeyBinding(action: .previousProblem,   combo: KeyCombo(key: "f8",  shift: true)),
         // Layout — ⌘\ is VS Code's real macOS default for "Split Editor Right"

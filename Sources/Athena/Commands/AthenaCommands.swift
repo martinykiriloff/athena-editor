@@ -304,6 +304,10 @@ struct AthenaCommands: Commands {
                 performAction(.goToSymbol)
             }
 
+            Button("Run Task…") {
+                performAction(.runTask)
+            }
+
             Divider()
 
             // ⌥⇧F12 and F2 are owned by the keybinding monitor; clicks route
