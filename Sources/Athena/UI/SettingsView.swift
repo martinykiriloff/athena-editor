@@ -271,6 +271,25 @@ struct SettingsView: View {
                         appState.persistSetting(v, for: "editorFormatOnSave")
                     }
             }
+            SettingRow("Trim Trailing Whitespace") {
+                Toggle("Trim Trailing Whitespace", isOn: state.editorTrimTrailingWhitespace)
+                    .onChange(of: appState.editorTrimTrailingWhitespace) { _, v in
+                        appState.persistSetting(v, for: "editorTrimTrailingWhitespace")
+                    }
+            }
+            SettingRow("Insert Final Newline") {
+                Toggle("Insert Final Newline", isOn: state.editorInsertFinalNewline)
+                    .onChange(of: appState.editorInsertFinalNewline) { _, v in
+                        appState.persistSetting(v, for: "editorInsertFinalNewline")
+                    }
+            }
+            SettingRow("Use .editorconfig") {
+                Toggle("Use .editorconfig", isOn: state.editorUseEditorConfig)
+                    .onChange(of: appState.editorUseEditorConfig) { _, v in
+                        appState.persistSetting(v, for: "editorUseEditorConfig")
+                        appState.editorConfigCache.removeAll()
+                    }
+            }
         }
     }
 
@@ -704,7 +723,7 @@ enum SettingsIndex {
     static let indentation = SettingsIndexEntry(title: "Indentation", labels: ["Tab Size", "Insert Spaces", "Detect Indentation", "Auto Indent"])
     static let display = SettingsIndexEntry(title: "Display", labels: ["Word Wrap", "Line Numbers", "Render Whitespace", "Scroll Beyond Last Line"])
     static let cursor = SettingsIndexEntry(title: "Cursor", labels: ["Cursor Style", "Cursor Blinking"])
-    static let files = SettingsIndexEntry(title: "Files", labels: ["Format on Save"])
+    static let files = SettingsIndexEntry(title: "Files", labels: ["Format on Save", "Trim Trailing Whitespace", "Insert Final Newline", "Use .editorconfig"])
     static let theme = SettingsIndexEntry(title: "Theme", labels: ["Color Theme", "Import VS Code Theme"])
     static let minimap = SettingsIndexEntry(title: "Minimap", labels: ["Enable Minimap"])
     static let api = SettingsIndexEntry(title: "API", labels: ["Claude API Key", "Default Model"])
