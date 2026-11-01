@@ -10,6 +10,7 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
     case newFile            = "workbench.action.files.newUntitledFile"
     case closeTab           = "workbench.action.closeActiveEditor"
     case reopenClosedTab    = "workbench.action.reopenClosedEditor"
+    case showLocalHistory   = "athena.localHistory.show"
     // View
     case toggleSidebar      = "workbench.action.toggleSidebarVisibility"
     case toggleTerminal     = "workbench.action.terminal.toggleTerminal"
@@ -69,6 +70,7 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
         case .newFile:           return "New File"
         case .closeTab:          return "Close Editor"
         case .reopenClosedTab:   return "Reopen Closed Editor"
+        case .showLocalHistory:  return "Local History: Show for Active File"
         case .toggleSidebar:     return "Toggle Sidebar"
         case .toggleTerminal:    return "Toggle Terminal"
         case .newTerminal:       return "New Terminal"
@@ -119,7 +121,7 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
 
     var category: String {
         switch self {
-        case .saveFile, .newFile, .closeTab, .reopenClosedTab:
+        case .saveFile, .newFile, .closeTab, .reopenClosedTab, .showLocalHistory:
             return "File"
         case .toggleSidebar, .toggleTerminal, .newTerminal,
              .showExplorer, .showSourceControl, .showSearch, .showDatabase, .showClaude,
@@ -261,6 +263,7 @@ struct KeyBinding: Identifiable, Codable, Sendable {
         KeyBinding(action: .newFile,           combo: KeyCombo(key: "n",   command: true)),
         KeyBinding(action: .closeTab,          combo: KeyCombo(key: "w",   command: true)),
         KeyBinding(action: .reopenClosedTab,   combo: KeyCombo(key: "t",   command: true, shift: true)),
+        KeyBinding(action: .showLocalHistory,  combo: nil),
         // View
         KeyBinding(action: .toggleSidebar,     combo: KeyCombo(key: "b",   command: true)),
         KeyBinding(action: .toggleTerminal,    combo: KeyCombo(key: "backtick", control: true)),

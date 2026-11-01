@@ -14,6 +14,10 @@ final class AppState {
 
     let fileService: FileService
     let gitService: GitService
+    /// Per-file save snapshots (see `AppState+LocalHistory.swift`).
+    let localHistoryService = LocalHistoryService()
+    /// Presentation + selection state of `LocalHistoryView`.
+    var localHistory = LocalHistoryState()
     let claudeAgentService: ClaudeAgentService
     let claudeSessionStore: ClaudeSessionStore
     let searchService: SearchService
@@ -1503,6 +1507,7 @@ final class AppState {
 
         do {
             try await fileService.writeFile(url, content: tab.content)
+            await recordLocalHistory(of: url, content: tab.content)
             groupTabs = tabs(in: side)
             if let i = groupTabs.firstIndex(where: { $0.id == id }) {
                 groupTabs[i].isDirty = false
@@ -3388,6 +3393,8 @@ final class AppState {
             if let id = focusedTab?.id { closeTab(id) }
         case .reopenClosedTab:
             await reopenClosedTab()
+        case .showLocalHistory:
+            await showLocalHistory()
         case .splitEditorRight:
             splitEditorRight()
         case .toggleZenMode:
@@ -3530,6 +3537,7 @@ final class AppState {
 
                 do {
                     try await fileService.writeFile(url, content: contentToSave)
+                    await recordLocalHistory(of: url, content: contentToSave)
                     var groupTabs = tabs(in: side)
                     if let i = groupTabs.firstIndex(where: { $0.id == tab.id }) {
                         groupTabs[i].isDirty = false

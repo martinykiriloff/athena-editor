@@ -203,6 +203,10 @@ struct AthenaCommands: Commands {
                 performAction(.reopenClosedTab)
             }
 
+            Button("Local History…") {
+                performAction(.showLocalHistory)
+            }
+
             Button("Close Folder") {
                 NotificationCenter.default.post(name: .athenaCloseFolder, object: nil)
             }

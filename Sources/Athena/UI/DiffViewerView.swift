@@ -168,7 +168,7 @@ struct DiffViewerView: View {
 // MARK: - DiffHunkView
 
 /// One hunk's `@@ … @@` header plus its lines.
-private struct DiffHunkView: View {
+struct DiffHunkView: View {
     @Environment(AppState.self) private var appState
 
     let hunk: DiffHunk
