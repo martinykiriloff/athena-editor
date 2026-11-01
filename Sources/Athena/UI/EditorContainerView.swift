@@ -307,6 +307,8 @@ struct CodeEditorView: View {
         .overlay(alignment: .bottom) { Divider() }
     }
 
+    private var editorConfig: EditorConfigSettings { appState.editorConfig(for: tab.fileURL) }
+
     private var editorRow: some View {
         HStack(spacing: 0) {
             EditorView(
@@ -320,10 +322,10 @@ struct CodeEditorView: View {
                 lineHeight:       appState.editorLineHeight,
                 wordWrap:         appState.editorWordWrap,
                 renderWhitespace: appState.editorRenderWhitespace,
-                tabSize:          appState.editorTabSize,
-                insertSpaces:     appState.editorInsertSpaces,
+                tabSize:          editorConfig.effectiveIndentWidth ?? appState.editorTabSize,
+                insertSpaces:     editorConfig.indentStyleSpaces ?? appState.editorInsertSpaces,
                 autoIndent:       appState.editorAutoIndent,
-                detectIndentation: appState.editorDetectIndentation,
+                detectIndentation: appState.editorDetectIndentation && !editorConfig.specifiesIndentation,
                 blameInfo:        blameInfo,
                 diagnostics:      fileDiagnostics,
                 gitLineChanges:   fileGitLineChanges,

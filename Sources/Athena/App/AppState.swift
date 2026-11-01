@@ -440,6 +440,12 @@ final class AppState {
     /// Large tabs the language server has not been told about (no `didOpen`
     /// / `didChange`); re-synced with a fresh `didOpen` once they qualify.
     @ObservationIgnored var lspSuspendedTabs: Set<UUID> = []
+    var editorTrimTrailingWhitespace: Bool = false
+    var editorInsertFinalNewline: Bool   = false
+    var editorUseEditorConfig:   Bool    = true
+    /// Resolved .editorconfig settings keyed by file path; cleared whenever
+    /// an .editorconfig is saved or the setting changes.
+    @ObservationIgnored var editorConfigCache: [String: EditorConfigSettings] = [:]
 
     // MARK: - Computed
 
@@ -1103,6 +1109,9 @@ final class AppState {
         async let ai   = settingsService.value(for: "editorAutoIndent",        default: true)
         async let di   = settingsService.value(for: "editorDetectIndentation", default: true)
         async let lft  = settingsService.value(for: "largeFileThresholdKB",    default: LargeFilePolicy.defaultThresholdKB)
+        async let ttw  = settingsService.value(for: "editorTrimTrailingWhitespace", default: false)
+        async let ifn  = settingsService.value(for: "editorInsertFinalNewline", default: false)
+        async let uec  = settingsService.value(for: "editorUseEditorConfig",   default: true)
         async let th   = settingsService.value(for: "theme",                   default: "athena-dark")
         async let ct   = settingsService.value(for: "customThemes",            default: [EditorTheme]())
 
@@ -1123,6 +1132,9 @@ final class AppState {
         editorAutoIndent        = await ai
         editorDetectIndentation = await di
         largeFileThresholdKB    = await lft
+        editorTrimTrailingWhitespace = await ttw
+        editorInsertFinalNewline = await ifn
+        editorUseEditorConfig   = await uec
         customThemes            = await ct
         let themeId             = await th
         currentTheme            = allThemes.first(where: { $0.id == themeId }) ?? EditorTheme.named(themeId)
@@ -1467,6 +1479,16 @@ final class AppState {
             tab.content = formatted
             groupTabs[index].content = formatted
             setTabs(groupTabs, in: side)
+        }
+
+        let prepared = contentPreparedForSave(tab.content, url: url)
+        if prepared != tab.content {
+            tab.content = prepared
+            groupTabs = tabs(in: side)
+            if let i = groupTabs.firstIndex(where: { $0.id == id }) {
+                groupTabs[i].content = prepared
+                setTabs(groupTabs, in: side)
+            }
         }
 
         do {
@@ -3482,6 +3504,16 @@ final class AppState {
                     var groupTabs = tabs(in: side)
                     if let i = groupTabs.firstIndex(where: { $0.id == tab.id }) {
                         groupTabs[i].content = formatted
+                        setTabs(groupTabs, in: side)
+                    }
+                }
+
+                let prepared = contentPreparedForSave(contentToSave, url: url)
+                if prepared != contentToSave {
+                    contentToSave = prepared
+                    var groupTabs = tabs(in: side)
+                    if let i = groupTabs.firstIndex(where: { $0.id == tab.id }) {
+                        groupTabs[i].content = prepared
                         setTabs(groupTabs, in: side)
                     }
                 }
