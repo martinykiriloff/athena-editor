@@ -365,6 +365,12 @@ struct CodeEditorView: View {
                         fileURL: fileURL, line: line - 1, character: col - 1
                     )
                 },
+                onRequestDocumentHighlights: { line, col in
+                    guard let fileURL = tab.fileURL else { return [] }
+                    return await appState.lspManager.documentHighlights(
+                        fileURL: fileURL, line: line - 1, character: col - 1
+                    )
+                },
                 isDebugPaused: isDebuggerPaused,
                 onRequestDebugHover: { expression in
                     guard case .paused = appState.debugState else { return nil }

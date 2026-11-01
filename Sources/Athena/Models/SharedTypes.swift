@@ -1170,7 +1170,9 @@ struct DocumentSymbol: Identifiable, Sendable, Equatable {
 
     /// SF Symbol name for `kind`, one per LSP `SymbolKind` (1…26). Falls back
     /// to a generic glyph for anything outside that range.
-    var iconName: String {
+    var iconName: String { Self.iconName(forKind: kind) }
+
+    static func iconName(forKind kind: Int) -> String {
         switch kind {
         case 1:  return "doc.text"                        // File
         case 2:  return "shippingbox"                      // Module
@@ -1201,6 +1203,33 @@ struct DocumentSymbol: Identifiable, Sendable, Equatable {
         default: return "questionmark.square"
         }
     }
+}
+
+// MARK: - Document highlight / workspace symbol
+
+/// One `textDocument/documentHighlight` range, 0-based as on the wire.
+/// `kind`: 1 text, 2 read, 3 write (nil when the server omits it).
+struct DocumentHighlight: Sendable, Equatable {
+    var startLine: Int
+    var startCharacter: Int
+    var endLine: Int
+    var endCharacter: Int
+    var kind: Int?
+}
+
+/// One `workspace/symbol` result. `line`/`character` are 1-based, matching
+/// `DefinitionLocation`, so a pick can go straight to `AppState.navigateTo`.
+struct WorkspaceSymbol: Identifiable, Sendable, Equatable {
+    let id = UUID()
+    var name: String
+    var kind: Int
+    var containerName: String?
+    var fileURL: URL
+    var line: Int
+    var character: Int
+
+    var iconName: String { DocumentSymbol.iconName(forKind: kind) }
+    var location: DefinitionLocation { DefinitionLocation(fileURL: fileURL, line: line, character: character) }
 }
 
 /// Flattens a document-symbol tree into a depth-first list, pairing each

@@ -304,6 +304,10 @@ struct AthenaCommands: Commands {
                 performAction(.goToSymbol)
             }
 
+            Button("Go to Symbol in Workspace…") {
+                performAction(.goToWorkspaceSymbol)
+            }
+
             Divider()
 
             // ⌥⇧F12 and F2 are owned by the keybinding monitor; clicks route

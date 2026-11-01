@@ -59,6 +59,11 @@ actor LSPManager {
     /// Applies a server-initiated `workspace/applyEdit` (sent while running a
     /// code action's command). Set once by `AppState`.
     private var applyEditHandler: (@Sendable ([URL: [LSPTextEdit]]) async -> Bool)?
+    /// Server capabilities relevant to the symbol features, read from each
+    /// `initialize` reply. A language with no entry is treated as "unknown,
+    /// try it" so a server that omits capabilities isn't silently skipped.
+    private var supportsDocumentHighlight: [Language: Bool] = [:]
+    private var supportsWorkspaceSymbol: [Language: Bool] = [:]
 
     // MARK: - Public API
 
@@ -135,6 +140,7 @@ actor LSPManager {
                     // Drizzle's own authored snippets (plan.md item 16, "B5").
                     "completion": ["dynamicRegistration": false, "completionItem": ["snippetSupport": true]],
                     "hover":      ["dynamicRegistration": false],
+                    "documentHighlight": ["dynamicRegistration": false],
                     // `labelOffsetSupport` lets a server return each
                     // parameter's position inside the signature label as
                     // offsets rather than repeating the text, which is the
@@ -167,13 +173,20 @@ actor LSPManager {
                 // Commands behind code actions answer with a
                 // `workspace/applyEdit` request; see `handleServerRequest`.
                 "workspace": [
+                    "symbol": [
+                        "dynamicRegistration": false,
+                        "symbolKind": ["valueSet": Array(1...26)],
+                    ],
                     "applyEdit": true,
                     "workspaceEdit": ["documentChanges": true],
                 ],
             ],
         ]
 
-        _ = try await sendRequest(method: "initialize", params: initParams, language: language)
+        let initReply = try await sendRequest(method: "initialize", params: initParams, language: language)
+        let caps = Self.symbolCapabilities(fromInitializeReply: initReply)
+        supportsDocumentHighlight[language] = caps.documentHighlight
+        supportsWorkspaceSymbol[language] = caps.workspaceSymbol
 
         // Send initialized notification (no id, no response expected)
         sendNotification(method: "initialized", params: [:], language: language)
@@ -443,6 +456,97 @@ actor LSPManager {
         }
 
         return parseWorkspaceEdit(from: data)
+    }
+
+    // MARK: - Document highlight / workspace symbol
+
+    /// `textDocument/documentHighlight` at a 0-based position. Empty when no
+    /// server runs, the server doesn't advertise the capability, or the
+    /// request fails.
+    func documentHighlights(fileURL: URL, line: Int, character: Int) async -> [DocumentHighlight] {
+        let language = Language.detect(from: fileURL)
+        guard servers[language] != nil, supportsDocumentHighlight[language] ?? true else { return [] }
+        let params: [String: Any] = [
+            "textDocument": ["uri": fileURL.absoluteString],
+            "position": ["line": line, "character": character],
+        ]
+        guard let data = try? await sendRequest(method: "textDocument/documentHighlight", params: params, language: language) else {
+            return []
+        }
+        return Self.parseDocumentHighlights(from: data)
+    }
+
+    /// `workspace/symbol` against every running server that supports it,
+    /// merged. Servers answer concurrently so one slow server doesn't
+    /// serialize the others.
+    func workspaceSymbols(query: String) async -> [WorkspaceSymbol] {
+        let languages = servers.keys.filter { supportsWorkspaceSymbol[$0] ?? true }
+        return await withTaskGroup(of: [WorkspaceSymbol].self) { group in
+            for language in languages {
+                group.addTask { [self] in await self.workspaceSymbols(query: query, language: language) }
+            }
+            var all: [WorkspaceSymbol] = []
+            for await part in group { all += part }
+            return all
+        }
+    }
+
+    private func workspaceSymbols(query: String, language: Language) async -> [WorkspaceSymbol] {
+        guard servers[language] != nil else { return [] }
+        guard let data = try? await sendRequest(method: "workspace/symbol", params: ["query": query], language: language) else {
+            return []
+        }
+        return Self.parseWorkspaceSymbols(from: data)
+    }
+
+    /// Reads `documentHighlightProvider` / `workspaceSymbolProvider` from an
+    /// `initialize` reply. Each is `true`, an options object, or absent/false.
+    /// An unparseable reply yields `true` for both (unknown, so try).
+    static func symbolCapabilities(fromInitializeReply data: Data) -> (documentHighlight: Bool, workspaceSymbol: Bool) {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let result = json["result"] as? [String: Any],
+              let caps = result["capabilities"] as? [String: Any] else { return (true, true) }
+        func enabled(_ key: String) -> Bool {
+            guard let v = caps[key] else { return false }
+            if let b = v as? Bool { return b }
+            return v is [String: Any]
+        }
+        return (enabled("documentHighlightProvider"), enabled("workspaceSymbolProvider"))
+    }
+
+    /// Parses a `textDocument/documentHighlight` reply (`DocumentHighlight[] | null`).
+    static func parseDocumentHighlights(from data: Data) -> [DocumentHighlight] {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let result = json["result"] as? [[String: Any]] else { return [] }
+        return result.compactMap { entry in
+            guard let range = entry["range"] as? [String: Any],
+                  let s = range["start"] as? [String: Any], let e = range["end"] as? [String: Any],
+                  let sl = s["line"] as? Int, let sc = s["character"] as? Int,
+                  let el = e["line"] as? Int, let ec = e["character"] as? Int else { return nil }
+            return DocumentHighlight(startLine: sl, startCharacter: sc, endLine: el, endCharacter: ec,
+                                     kind: entry["kind"] as? Int)
+        }
+    }
+
+    /// Parses a `workspace/symbol` reply: `SymbolInformation[]` (location has
+    /// a range) or `WorkspaceSymbol[]` (location may be `{uri}` only, in
+    /// which case the position falls back to the file's first line).
+    static func parseWorkspaceSymbols(from data: Data) -> [WorkspaceSymbol] {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let result = json["result"] as? [[String: Any]] else { return [] }
+        return result.compactMap { entry in
+            guard let name = entry["name"] as? String, let kind = entry["kind"] as? Int,
+                  let loc = entry["location"] as? [String: Any],
+                  let uriString = loc["uri"] as? String, let url = URL(string: uriString) else { return nil }
+            var line = 1, character = 1
+            if let range = loc["range"] as? [String: Any], let start = range["start"] as? [String: Any],
+               let l = start["line"] as? Int, let c = start["character"] as? Int {
+                line = l + 1; character = c + 1
+            }
+            let container = (entry["containerName"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            return WorkspaceSymbol(name: name, kind: kind, containerName: container,
+                                   fileURL: url, line: line, character: character)
+        }
     }
 
     /// Whether `language` has a server running or installed to launch.

@@ -147,6 +147,7 @@ struct MainWindowView: View {
             .frame(minWidth: 900, minHeight: 600)
             .background(Color(nsColor: .windowBackgroundColor))
             .overlay { if appState.showQuickOpen { QuickOpenView() } }
+            .overlay { if appState.showWorkspaceSymbols { WorkspaceSymbolView() } }
             .overlay { if appState.showDiffViewer { DiffViewerView() } }
             // Break the notification chain into two modifiers so the type-checker
             // doesn't time out on CI (each ViewModifier is type-checked independently).

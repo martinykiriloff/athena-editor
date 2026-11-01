@@ -78,6 +78,9 @@ struct EditorView: NSViewRepresentable {
     /// Requests LSP hover text (markdown/plaintext, already flattened to a
     /// plain string) for the given 1-based line/column.
     var onRequestHover: (Int, Int) async -> String? = { _, _ in nil }
+    /// LSP `documentHighlight` ranges (0-based line/character) for the symbol
+    /// at a 1-based line/column.
+    var onRequestDocumentHighlights: (Int, Int) async -> [DocumentHighlight] = { _, _ in [] }
     /// True while the debugger is paused (`AppState.debugState` is
     /// `.paused`) — a plain value, not a closure, so checking it is free
     /// (mirrors `breakpoints`/`debugLine` below). Gates the hover chain's
@@ -1737,6 +1740,58 @@ extension EditorView {
             updateDiagnosticHighlights(in: textView)
             updateConflictHighlights(in: textView)
             updateActiveSnippetTracking(for: textView)
+            scheduleSymbolHighlights(in: textView)
+        }
+
+        // MARK: Symbol occurrence highlight (LSP documentHighlight)
+
+        private var symbolHighlightTask: Task<Void, Never>?
+        private var symbolHighlightGeneration = 0
+
+        /// Clears the current occurrence highlight immediately, then after a
+        /// short pause asks the server for the new caret's occurrences.
+        /// Generation-checked on return so a slow reply for an old caret or
+        /// edited text can't paint over a newer state.
+        func scheduleSymbolHighlights(in textView: NSTextView) {
+            symbolHighlightTask?.cancel()
+            symbolHighlightGeneration &+= 1
+            let generation = symbolHighlightGeneration
+            (textView.layoutManager as? AthenaLayoutManager)?.setSymbolHighlights([])
+            guard textView.selectedRange().length == 0, parent.fileURL != nil else { return }
+            let (line, col) = cursorPosition(in: textView)
+            let textLength = (textView.string as NSString).length
+            symbolHighlightTask = Task { [weak self] in
+                let clock = ContinuousClock()
+                try? await clock.sleep(until: clock.now.advanced(by: .milliseconds(250)))
+                guard !Task.isCancelled, let self else { return }
+                let highlights = await self.parent.onRequestDocumentHighlights(line, col)
+                guard !Task.isCancelled, generation == self.symbolHighlightGeneration,
+                      let tv = self.textView, (tv.string as NSString).length == textLength else { return }
+                let ns = tv.string as NSString
+                let lineStarts = Self.lineStartOffsets(ns)
+                func offset(_ l: Int, _ c: Int) -> Int? {
+                    guard lineStarts.indices.contains(l) else { return nil }
+                    return min(lineStarts[l] + c, ns.length)
+                }
+                let ranges: [NSRange] = highlights.compactMap { h in
+                    guard let s = offset(h.startLine, h.startCharacter),
+                          let e = offset(h.endLine, h.endCharacter), e > s else { return nil }
+                    return NSRange(location: s, length: e - s)
+                }
+                // A lone occurrence is just the symbol itself; skip the noise.
+                (tv.layoutManager as? AthenaLayoutManager)?.setSymbolHighlights(ranges.count > 1 ? ranges : [])
+            }
+        }
+
+        private static func lineStartOffsets(_ text: NSString) -> [Int] {
+            var starts = [0]
+            var i = 0
+            while i < text.length {
+                let c = text.character(at: i)
+                if c == 0x0A { starts.append(i + 1) }
+                i += 1
+            }
+            return starts
         }
 
         /// Keeps the active snippet's tab-stop ranges correct as edits land

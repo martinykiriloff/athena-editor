@@ -311,6 +311,8 @@ final class AppState {
     /// ">" to land directly in command-palette mode (⇧⌘P), "@" for Go to
     /// Symbol (⇧⌘O).
     var quickOpenPrefill: String = ""
+    /// ⌘T "Go to Symbol in Workspace" overlay (LSP `workspace/symbol`).
+    var showWorkspaceSymbols: Bool = false
 
     // MARK: - Explorer (file tree context menu)
 
@@ -3335,6 +3337,8 @@ final class AppState {
             presentQuickOpen(prefill: ">")
         case .goToSymbol:
             presentQuickOpen(prefill: "@")
+        case .goToWorkspaceSymbol:
+            showWorkspaceSymbols = true
         case .nextTab:
             cycleTab(forward: true)
         case .previousTab:
