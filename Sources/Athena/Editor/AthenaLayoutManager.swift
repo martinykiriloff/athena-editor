@@ -7,6 +7,39 @@ final class AthenaLayoutManager: NSLayoutManager {
     var dotColor: NSColor = NSColor.gray
     var showWhitespace: Bool = true
 
+    /// Ranges of the LSP `documentHighlight` occurrences under the caret,
+    /// painted behind the glyphs in `drawBackground`. Kept here rather than
+    /// as text-storage or temporary `.backgroundColor` attributes so they
+    /// can't collide with syntax highlighting, bracket matching or conflict
+    /// tints (all of which add/remove `.backgroundColor` over ranges).
+    private(set) var symbolHighlightRanges: [NSRange] = []
+    var symbolHighlightColor: NSColor = NSColor.systemYellow.withAlphaComponent(0.22)
+
+    func setSymbolHighlights(_ ranges: [NSRange]) {
+        guard ranges != symbolHighlightRanges else { return }
+        let old = symbolHighlightRanges
+        symbolHighlightRanges = ranges
+        let length = textStorage?.length ?? 0
+        for r in old + ranges where NSMaxRange(r) <= length {
+            invalidateDisplay(forCharacterRange: r)
+        }
+    }
+
+    override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
+        super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
+        guard !symbolHighlightRanges.isEmpty, let container = textContainers.first else { return }
+        let length = textStorage?.length ?? 0
+        symbolHighlightColor.setFill()
+        for range in symbolHighlightRanges where range.length > 0 && NSMaxRange(range) <= length {
+            let glyphs = glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            guard NSIntersectionRange(glyphs, glyphsToShow).length > 0 else { continue }
+            enumerateEnclosingRects(forGlyphRange: glyphs, withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
+                                    in: container) { rect, _ in
+                NSBezierPath(roundedRect: rect.offsetBy(dx: origin.x, dy: origin.y), xRadius: 2, yRadius: 2).fill()
+            }
+        }
+    }
+
     override func drawGlyphs(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
         super.drawGlyphs(forGlyphRange: glyphsToShow, at: origin)
 
