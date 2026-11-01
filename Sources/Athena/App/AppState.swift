@@ -220,6 +220,7 @@ final class AppState {
     var runningScriptKeys: Set<String> = []
     @ObservationIgnored private var runningScriptProcesses: [String: Process] = [:]
     let npmScriptService: NPMScriptService = NPMScriptService()
+    let taskCenter = TaskCenter()   // .vscode/tasks.json — see AppState+Tasks.swift
 
     // Selected package + script for the Scripts bottom panel.
     var selectedNPMPackageId:   String? = nil
@@ -3428,6 +3429,8 @@ final class AppState {
             presentQuickOpen()
         case .commandPalette:
             presentQuickOpen(prefill: ">")
+        case .runTask:
+            presentTaskPicker()
         case .goToSymbol:
             presentQuickOpen(prefill: "@")
         case .nextTab:

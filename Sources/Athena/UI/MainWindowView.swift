@@ -147,6 +147,7 @@ struct MainWindowView: View {
             .frame(minWidth: 900, minHeight: 600)
             .background(Color(nsColor: .windowBackgroundColor))
             .overlay { if appState.showQuickOpen { QuickOpenView() } }
+            .overlay { if appState.taskCenter.showPicker { TaskPickerView() } }
             .overlay { if appState.showDiffViewer { DiffViewerView() } }
             .overlay { if appState.localHistory.isPresented { LocalHistoryView() } }
             // Break the notification chain into two modifiers so the type-checker
