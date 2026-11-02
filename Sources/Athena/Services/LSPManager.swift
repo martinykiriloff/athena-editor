@@ -64,6 +64,10 @@ actor LSPManager {
     /// try it" so a server that omits capabilities isn't silently skipped.
     private var supportsDocumentHighlight: [Language: Bool] = [:]
     private var supportsWorkspaceSymbol: [Language: Bool] = [:]
+    /// Wave 2 capabilities (inlay hints, semantic tokens, code lens,
+    /// hierarchies, linked editing, file operations) per running server.
+    /// Unlike the symbol features, an absent entry means "not supported".
+    var extraCapabilities: [Language: LSPExtraCapabilities] = [:]
 
     // MARK: - Public API
 
@@ -141,6 +145,20 @@ actor LSPManager {
                     "completion": ["dynamicRegistration": false, "completionItem": ["snippetSupport": true]],
                     "hover":      ["dynamicRegistration": false],
                     "documentHighlight": ["dynamicRegistration": false],
+                    "inlayHint": ["dynamicRegistration": false],
+                    "semanticTokens": [
+                        "dynamicRegistration": false,
+                        "requests": ["full": true],
+                        "tokenTypes": Self.semanticTokenTypes,
+                        "tokenModifiers": Self.semanticTokenModifiers,
+                        "formats": ["relative"],
+                        "overlappingTokenSupport": false,
+                        "multilineTokenSupport": false,
+                    ],
+                    "codeLens": ["dynamicRegistration": false],
+                    "callHierarchy": ["dynamicRegistration": false],
+                    "typeHierarchy": ["dynamicRegistration": false],
+                    "linkedEditingRange": ["dynamicRegistration": false],
                     // `labelOffsetSupport` lets a server return each
                     // parameter's position inside the signature label as
                     // offsets rather than repeating the text, which is the
@@ -178,6 +196,8 @@ actor LSPManager {
                         "symbolKind": ["valueSet": Array(1...26)],
                     ],
                     "applyEdit": true,
+                    "didChangeWatchedFiles": ["dynamicRegistration": false],
+                    "fileOperations": ["willRename": true, "didRename": true],
                     "workspaceEdit": ["documentChanges": true],
                 ],
             ],
@@ -187,6 +207,7 @@ actor LSPManager {
         let caps = Self.symbolCapabilities(fromInitializeReply: initReply)
         supportsDocumentHighlight[language] = caps.documentHighlight
         supportsWorkspaceSymbol[language] = caps.workspaceSymbol
+        extraCapabilities[language] = Self.extraCapabilities(fromInitializeReply: initReply)
 
         // Send initialized notification (no id, no response expected)
         sendNotification(method: "initialized", params: [:], language: language)
@@ -202,6 +223,7 @@ actor LSPManager {
 
         servers[language]?.process.terminate()
         servers[language] = nil
+        extraCapabilities[language] = nil
     }
 
     /// Cleans up after `process` (the language server for `language`) exits —
@@ -219,6 +241,7 @@ actor LSPManager {
             continuation.resume(throwing: LSPError.serverTerminated(language))
         }
         servers[language] = nil
+        extraCapabilities[language] = nil
     }
 
     /// Requests completions at the given position. `triggerCharacter`, when
@@ -1017,6 +1040,27 @@ actor LSPManager {
               let continuation = server.pending.removeValue(forKey: id) else { return }
         servers[language] = server
         continuation.resume(throwing: LSPError.requestTimedOut(method))
+    }
+
+    // MARK: Internal helpers for `LSPManager+Extras.swift`
+
+    /// Languages with a running (initialized or initializing) server.
+    var runningLanguages: [Language] { Array(servers.keys) }
+
+    /// The server's last `publishDiagnostics` array for `url`, verbatim.
+    func allRawDiagnostics(for url: URL) -> [[String: Any]] {
+        rawDiagnostics[url].flatMap { try? JSONSerialization.jsonObject(with: $0) as? [[String: Any]] } ?? []
+    }
+
+    /// Sends a request and returns the raw reply, or nil on any failure.
+    func rpc(_ method: String, _ params: [String: Any], language: Language) async -> Data? {
+        guard servers[language] != nil else { return nil }
+        return try? await sendRequest(method: method, params: params, language: language)
+    }
+
+    /// Fire-and-forget notification to one server.
+    func notify(_ method: String, _ params: [String: Any], language: Language) {
+        sendNotification(method: method, params: params, language: language)
     }
 
     private func sendNotification(method: String, params: [String: Any], language: Language) {
