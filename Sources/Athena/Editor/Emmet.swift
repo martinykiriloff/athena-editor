@@ -471,7 +471,14 @@ enum Emmet {
         flavor: MarkupFlavor, unit: String, base: String, out: inout Output
     ) {
         func num(_ s: String) -> String { applyNumbering(s, index: index, total: total) }
-        let text = node.text.map(num)
+        var text = node.text.map(num)
+        var children = node.children
+        // `p>{hi}`: a lone text child stays on the element's line.
+        if children.count == 1, let only = children.first, !only.isGroup, only.repeatCount == 1,
+           only.tag == nil, only.id == nil, only.classes.isEmpty, only.attrs.isEmpty, let t = only.text {
+            text = (text ?? "") + num(t)
+            children = []
+        }
 
         if node.tag == nil, node.id == nil, node.classes.isEmpty, node.attrs.isEmpty {
             out.append(text ?? "")
@@ -512,11 +519,11 @@ enum Emmet {
             return
         }
         out.append(">")
-        if node.children.isEmpty {
+        if children.isEmpty {
             if let text { out.append(text) } else { out.stop() }
         } else {
             if let text { out.append(text) }
-            render(node.children, parentTag: tag, depth: depth + 1, index: index, total: total,
+            render(children, parentTag: tag, depth: depth + 1, index: index, total: total,
                    flavor: flavor, unit: unit, base: base, out: &out)
             out.append("\n" + base + String(repeating: unit, count: depth))
         }
