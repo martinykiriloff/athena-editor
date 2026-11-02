@@ -185,6 +185,14 @@ private struct TabItemView: View {
         case .markdown:   return .white
         case .image:      return .pink
         case .plaintext:  return .secondary
+        case .yaml, .toml, .env:   return .gray
+        case .sql:                 return .teal
+        case .shell, .dockerfile:  return .mint
+        case .php, .graphql:       return .indigo
+        case .java, .kotlin, .ruby: return .red
+        case .c, .cpp:             return .blue
+        case .vue:                 return .green
+        case .svelte:              return .orange
         }
     }
 }

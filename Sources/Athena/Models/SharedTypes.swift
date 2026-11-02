@@ -447,13 +447,28 @@ enum Language: String, Sendable, CaseIterable {
     case markdown
     case image
     case plaintext
+    case yaml
+    case sql
+    case shell
+    case php
+    case java
+    case kotlin
+    case c
+    case cpp
+    case ruby
+    case vue
+    case svelte
+    case toml
+    case graphql
+    case env
+    case dockerfile
 
     /// Returns the file extensions associated with this language.
     var fileExtensions: [String] {
         switch self {
         case .swift:      return ["swift"]
-        case .typescript: return ["ts", "tsx"]
-        case .javascript: return ["js", "jsx", "mjs"]
+        case .typescript: return ["ts", "tsx", "mts", "cts"]
+        case .javascript: return ["js", "jsx", "mjs", "cjs"]
         case .python:     return ["py"]
         case .rust:       return ["rs"]
         case .go:         return ["go"]
@@ -469,11 +484,45 @@ enum Language: String, Sendable, CaseIterable {
         // XML source; there is no "open as text" escape hatch yet.
         case .image:      return ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "tiff", "tif"]
         case .plaintext:  return []
+        case .yaml:       return ["yaml", "yml"]
+        case .sql:        return ["sql"]
+        case .shell:      return ["sh", "bash", "zsh", "mk"]
+        case .php:        return ["php"]
+        case .java:       return ["java"]
+        case .kotlin:     return ["kt", "kts"]
+        case .c:          return ["c", "h"]
+        case .cpp:        return ["cpp", "cc", "cxx", "hpp", "hh", "hxx"]
+        case .ruby:       return ["rb", "rake", "gemspec"]
+        case .vue:        return ["vue"]
+        case .svelte:     return ["svelte"]
+        case .toml:       return ["toml"]
+        case .graphql:    return ["graphql", "gql"]
+        case .env:        return ["env"]
+        case .dockerfile: return ["dockerfile"]
         }
     }
 
-    /// Detects the language for a given file URL based on its path extension.
+    /// Whole file names that identify a language regardless of extension:
+    /// `Dockerfile`, `.env`, `Makefile` and friends. Case-insensitive.
+    static func detect(fileName: String) -> Language? {
+        let name = fileName.lowercased()
+        switch name {
+        case "dockerfile", "containerfile": return .dockerfile
+        case "makefile", "gnumakefile", ".bashrc", ".bash_profile", ".zshrc", ".zprofile",
+             ".zshenv", ".profile": return .shell
+        case "gemfile", "rakefile", "podfile", "fastfile": return .ruby
+        case ".env": return .env
+        default: break
+        }
+        if name.hasPrefix("dockerfile.") { return .dockerfile }
+        if name.hasPrefix(".env.") { return .env }
+        return nil
+    }
+
+    /// Detects the language for a given file URL: well-known file names
+    /// first, then the path extension.
     static func detect(from url: URL) -> Language {
+        if let named = detect(fileName: url.lastPathComponent) { return named }
         let ext = url.pathExtension.lowercased()
         for language in Language.allCases {
             if language.fileExtensions.contains(ext) {
@@ -481,6 +530,72 @@ enum Language: String, Sendable, CaseIterable {
             }
         }
         return .plaintext
+    }
+
+    /// Human-readable name for the status bar and Settings.
+    var displayName: String {
+        switch self {
+        case .swift: return "Swift"
+        case .typescript: return "TypeScript"
+        case .javascript: return "JavaScript"
+        case .python: return "Python"
+        case .rust: return "Rust"
+        case .go: return "Go"
+        case .json: return "JSON"
+        case .css: return "CSS"
+        case .html: return "HTML"
+        case .isml: return "ISML"
+        case .ds: return "DS"
+        case .markdown: return "Markdown"
+        case .image: return "Image"
+        case .plaintext: return "Plaintext"
+        case .yaml: return "YAML"
+        case .sql: return "SQL"
+        case .shell: return "Shell"
+        case .php: return "PHP"
+        case .java: return "Java"
+        case .kotlin: return "Kotlin"
+        case .c: return "C"
+        case .cpp: return "C++"
+        case .ruby: return "Ruby"
+        case .vue: return "Vue"
+        case .svelte: return "Svelte"
+        case .toml: return "TOML"
+        case .graphql: return "GraphQL"
+        case .env: return ".env"
+        case .dockerfile: return "Dockerfile"
+        }
+    }
+
+    /// Line-comment token used by Toggle Line Comment; "" when line comments
+    /// aren't well-defined for the language.
+    var lineCommentToken: String {
+        switch self {
+        case .python, .yaml, .shell, .ruby, .toml, .graphql, .env, .dockerfile:
+            return "#"
+        case .swift, .typescript, .javascript, .rust, .go, .css, .ds,
+             .php, .java, .kotlin, .c, .cpp:
+            return "//"
+        case .sql:
+            return "--"
+        case .json, .html, .isml, .markdown, .plaintext, .image, .vue, .svelte:
+            return ""
+        }
+    }
+
+    /// The LSP `languageId` for `didOpen`. JSX/TSX and SCSS/Less get their own
+    /// ids so servers parse them correctly.
+    func lspLanguageId(for url: URL) -> String {
+        let ext = url.pathExtension.lowercased()
+        switch self {
+        case .typescript: return ext == "tsx" ? "typescriptreact" : "typescript"
+        case .javascript: return ext == "jsx" ? "javascriptreact" : "javascript"
+        case .css:        return ext == "scss" ? "scss" : (ext == "less" ? "less" : "css")
+        case .json:       return ext == "jsonc" ? "jsonc" : "json"
+        case .shell:      return "shellscript"
+        case .env:        return "dotenv"
+        default:          return rawValue
+        }
     }
 }
 
@@ -1717,4 +1832,20 @@ struct TaskVariableContext: Sendable, Equatable {
     var activeFile: String?
     var environment: [String: String] = [:]
     var home: String = NSHomeDirectory()
+}
+
+// MARK: - Language server overrides
+
+/// A user's replacement for a language's built-in server launch command.
+/// Empty fields mean "use the default".
+struct LanguageServerOverride: Codable, Sendable, Equatable {
+    /// Absolute path (`~` allowed) or a bare command name looked up on `$PATH`.
+    var path: String = ""
+    /// Space-separated arguments replacing the defaults (e.g. `--stdio`).
+    var arguments: String = ""
+
+    var isEmpty: Bool {
+        path.trimmingCharacters(in: .whitespaces).isEmpty
+            && arguments.trimmingCharacters(in: .whitespaces).isEmpty
+    }
 }

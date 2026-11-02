@@ -29,6 +29,8 @@ actor LSPManager {
     // MARK: State
 
     private var servers: [Language: LSPServerProcess] = [:]
+    /// User-configured launch commands (Settings -> Language Servers).
+    private var serverOverrides: [Language: LanguageServerOverride] = [:]
     /// Continuation feeding `diagnosticsStream()`; nil until a consumer subscribes.
     private var diagnosticsContinuation: AsyncStream<(URL, [Diagnostic])>.Continuation?
     /// Cached result of resolving the user's real login-shell `$PATH`; see
@@ -755,7 +757,7 @@ actor LSPManager {
         let params: [String: Any] = [
             "textDocument": [
                 "uri":        fileURL.absoluteString,
-                "languageId": language.rawValue,
+                "languageId": language.lspLanguageId(for: fileURL),
                 "version":    1,
                 "text":       content,
             ],
@@ -805,82 +807,39 @@ actor LSPManager {
 
     // MARK: - Executable discovery
 
-    /// Resolves the executable *and* its arguments for `language`'s server.
-    /// Arguments are per-server, not a shared `--stdio`: only
-    /// `typescript-language-server` takes that flag. `sourcekit-lsp`, `pylsp`,
-    /// `rust-analyzer` and `gopls` all speak stdio by default and reject an
-    /// unknown option — `sourcekit-lsp` exits 64 on `--stdio`, which surfaced
-    /// as `serverTerminated` while awaiting `initialize`.
-    private func launchCommand(for language: Language) async -> (executable: String, arguments: [String])? {
-        switch language {
-        case .swift:
-            if let path = firstExecutable(at: ["/usr/bin/sourcekit-lsp"]) {
-                return (path, [])
-            }
-            if let xcrun = firstExecutable(at: ["/usr/bin/xcrun"]) {
-                return (xcrun, ["sourcekit-lsp"])
-            }
-            return nil
-        case .typescript, .javascript:
-            return await executablePath(for: language).map { ($0, ["--stdio"]) }
-        default:
-            return await executablePath(for: language).map { ($0, []) }
-        }
-    }
-
-    /// Fixed install locations are checked first (cheap, no process spawn),
-    /// then the user's real login-shell `$PATH` (see `resolvedUserPath()`) —
-    /// this is what makes a version-manager-installed server (e.g.
-    /// `typescript-language-server` via nvm, living under
-    /// `~/.nvm/versions/node/<version>/bin`) discoverable at all: a
-    /// GUI-launched app only inherits a minimal `PATH`
-    /// (`/usr/bin:/bin:/usr/sbin:/sbin`), which none of nvm/pyenv/rbenv ever
-    /// touch — they only extend `PATH` via shell rc files.
+    /// Resolves the executable *and* its arguments for `language`'s server via
+    /// `LanguageServerCatalog` (per-server arguments, user overrides, `$PATH`
+    /// then fixed install locations). Arguments are per-server, not a shared
+    /// `--stdio`: `sourcekit-lsp`, `pylsp`, `rust-analyzer` and `gopls` all
+    /// speak stdio by default and reject an unknown option — `sourcekit-lsp`
+    /// exits 64 on `--stdio`, which surfaced as `serverTerminated` while
+    /// awaiting `initialize`.
     ///
-    /// Fallbacks list `/opt/homebrew` (native arm64) before `/usr/local` (the
-    /// Intel Homebrew prefix, which runs under Rosetta after a migration).
-    private func executablePath(for language: Language) async -> String? {
-        switch language {
-        case .typescript, .javascript:
-            return await firstExecutable(named: "typescript-language-server") ?? firstExecutable(at: [
-                "/opt/homebrew/bin/typescript-language-server",
-                "/usr/local/bin/typescript-language-server",
-            ])
-        case .python:
-            return await firstExecutable(named: "pylsp") ?? firstExecutable(at: [
-                "/opt/homebrew/bin/pylsp",
-                "/usr/local/bin/pylsp",
-            ])
-        case .rust:
-            return await firstExecutable(named: "rust-analyzer") ?? firstExecutable(at: [
-                "/opt/homebrew/bin/rust-analyzer",
-                "/usr/local/bin/rust-analyzer",
-                (NSHomeDirectory() as NSString).appendingPathComponent(".cargo/bin/rust-analyzer"),
-            ])
-        case .go:
-            return await firstExecutable(named: "gopls") ?? firstExecutable(at: [
-                "/opt/homebrew/bin/gopls",
-                "/usr/local/bin/gopls",
-            ])
-        default:
-            return nil
-        }
-    }
-
-    private func firstExecutable(at paths: [String]) -> String? {
-        paths.first { FileManager.default.isExecutableFile(atPath: $0) }
-    }
-
-    /// Searches every directory in the user's resolved `$PATH` for an
-    /// executable named `name`, in order (first match wins, matching shell
-    /// `PATH` lookup semantics).
-    private func firstExecutable(named name: String) async -> String? {
+    /// `$PATH` is the user's real login-shell one (see `resolvedUserPath()`):
+    /// that is what makes a version-manager-installed server (e.g. via nvm,
+    /// under `~/.nvm/versions/node/<version>/bin`) discoverable, since a
+    /// GUI-launched app only inherits a minimal `PATH`.
+    private func launchCommand(for language: Language) async -> (executable: String, arguments: [String])? {
         let path = await resolvedUserPath()
+        let lookups = LanguageServerLookups(
+            executableNamed: { name in LSPManager.firstExecutable(named: name, inPath: path) },
+            isExecutable: { FileManager.default.isExecutableFile(atPath: $0) }
+        )
+        let launch = await LanguageServerCatalog.resolve(
+            language: language, override: serverOverrides[language], lookups: lookups)
+        return launch.map { ($0.executable, $0.arguments) }
+    }
+
+    /// Replaces the user's per-language launch overrides. A running server
+    /// keeps its old command until restarted (`stopServer(for:)`).
+    func setServerOverrides(_ overrides: [Language: LanguageServerOverride]) {
+        serverOverrides = overrides
+    }
+
+    nonisolated static func firstExecutable(named name: String, inPath path: String) -> String? {
         for directory in path.split(separator: ":") {
             let candidate = (String(directory) as NSString).appendingPathComponent(name)
-            if FileManager.default.isExecutableFile(atPath: candidate) {
-                return candidate
-            }
+            if FileManager.default.isExecutableFile(atPath: candidate) { return candidate }
         }
         return nil
     }

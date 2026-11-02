@@ -138,7 +138,7 @@ struct StatusBarView: View {
 
                 // Language
                 if let tab = appState.focusedTab {
-                    Text(tab.language.rawValue.capitalized)
+                    Text(tab.language.displayName)
                 }
             }
             .padding(.trailing, appState.sf(12))
