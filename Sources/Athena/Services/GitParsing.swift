@@ -112,7 +112,9 @@ enum GitGraphLayout {
             }
 
             let touched = Set(incoming).union(outgoing).union([lane])
-            let pass = before.subtracting(incoming).filter { !touched.contains($0) }.sorted()
+            // Lanes that were open above and don't end here keep running
+            // through the row (including one this commit merges into).
+            let pass = before.subtracting(incoming).sorted()
             // Trim trailing free lanes so the width shrinks again.
             while let last = active.last, last == nil { active.removeLast() }
             let used = (Set(pass).union(touched).max() ?? 0) + 1
