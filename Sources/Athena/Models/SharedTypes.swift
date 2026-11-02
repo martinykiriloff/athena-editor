@@ -2328,6 +2328,7 @@ struct AuditReport: Sendable, Equatable {
     var vulnerabilities: [AuditVulnerability]
     /// severity -> count, from the report's own metadata when present.
     var counts: [String: Int]
+}
 
 // MARK: - Debugger extras (breakpoint options, exception breakpoints)
 
@@ -2430,5 +2431,4 @@ struct SQLHistoryEntry: Sendable, Codable, Equatable, Identifiable {
     var sql: String
     var connectionName: String
     var date: Date
-}
 }
