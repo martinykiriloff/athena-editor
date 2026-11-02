@@ -471,6 +471,8 @@ struct SettingsView: View {
     @State private var aiLoaded: Bool = false
     @State private var ollamaModels: [String] = []
     @State private var isFetchingOllamaModels: Bool = false
+    /// Warning when the selected Ollama model can't fill in the middle.
+    @State private var ollamaModelNote: String?
 
     private let availableModels = [
         "claude-opus-4-8",
@@ -589,6 +591,15 @@ struct SettingsView: View {
                 Text("Any model available in Ollama works. Run `ollama pull <model>` to install.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if let ollamaModelNote {
+                    Label(ollamaModelNote, systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+                EmptyView()
+                    .task(id: appState.ollamaEndpoint + "|" + appState.ollamaModel) {
+                        ollamaModelNote = Self.ollamaNote(for: await appState.ollamaModelCapabilities())
+                    }
             }
 
             if appState.ghostTextProvider == .openAICompatible {
@@ -657,6 +668,9 @@ struct SettingsView: View {
                         appState.persistSetting(v, for: "ghostTextTemperature")
                     }
                 }
+            }
+
+            if appState.ghostTextProvider != .none {
                 HStack {
                     Text("Max Tokens")
                     Spacer()
@@ -674,11 +688,69 @@ struct SettingsView: View {
                     .onChange(of: appState.includeGhostTextContext) { _, v in
                         appState.persistSetting(v, for: "includeGhostTextContext")
                     }
-                Text("Prepends the file's imports and the enclosing function/class to every request — off if it hurts latency more than it helps quality.")
+                Text("The file's imports and enclosing symbol, outlines of imported files, language-server definitions of symbols you just used, and similar code from open tabs. Secrets (.env, keys, credentials) are never included.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if appState.ghostTextProvider == .claude {
+                Toggle("Send code from other files to Claude", isOn: Bindable(appState).ghostTextShareContextWithCloud)
+                    .disabled(!appState.includeGhostTextContext)
+                    .onChange(of: appState.ghostTextShareContextWithCloud) { _, v in
+                        appState.persistSetting(v, for: "ghostTextShareContextWithCloud")
+                    }
+                Text("Off: Claude sees only the file you are editing. On: also excerpts of open tabs, imported files and definitions, which improves suggestions.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack {
+                    Text("Daily request limit")
+                    Spacer()
+                    Stepper(
+                        appState.ghostTextCloudDailyLimit == 0 ? "No limit" : "\(appState.ghostTextCloudDailyLimit)",
+                        value: Bindable(appState).ghostTextCloudDailyLimit,
+                        in: 0...20000, step: 250
+                    )
+                    .frame(width: 180)
+                    .onChange(of: appState.ghostTextCloudDailyLimit) { _, v in
+                        appState.persistSetting(v, for: "ghostTextCloudDailyLimit")
+                    }
+                }
+                Text("Used today: \(appState.ghostTextCloudUsage.day == AppState.dayStamp(Date()) ? appState.ghostTextCloudUsage.count : 0) requests. Requests are at least 0.4 s apart and pause automatically when the API asks Athena to slow down.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Toggle("Next edit suggestions (experimental)", isOn: Bindable(appState).nextEditPredictionEnabled)
+                    .onChange(of: appState.nextEditPredictionEnabled) { _, v in
+                        appState.persistSetting(v, for: "nextEditPredictionEnabled")
+                    }
+                Text("After you pause, Claude predicts the next change elsewhere in the file. Tab jumps to it, Tab again applies it, Esc dismisses. Each prediction is one more request.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if appState.ghostTextProvider != .none {
+                DisclosureGroup("Turn off in languages (\(appState.ghostTextDisabledLanguages.count))") {
+                    ForEach(Language.allCases.filter { $0 != .image }, id: \.self) { language in
+                        Toggle(language.displayName, isOn: Binding(
+                            get: { appState.ghostTextDisabledLanguages.contains(language.rawValue) },
+                            set: { off in
+                                if off { appState.ghostTextDisabledLanguages.insert(language.rawValue) }
+                                else { appState.ghostTextDisabledLanguages.remove(language.rawValue) }
+                                appState.persistSetting(appState.ghostTextDisabledLanguages.sorted(), for: "ghostTextDisabledLanguages")
+                            }
+                        ))
+                    }
+                }
+                Text("Tab accepts · ⌘→ accepts one word · ⌥] / ⌥[ shows alternatives · ⌥\\ asks now · Esc dismisses. This session: \(appState.ghostTextShownCount) shown, \(appState.ghostTextAcceptedCount) accepted.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    /// What to tell the user about the selected Ollama model, if anything.
+    static func ollamaNote(for caps: InlineCompletionService.OllamaCapabilities) -> String? {
+        guard !caps.insert else { return nil }
+        return "This model can't fill in the middle, so it only sees code before the caret. A code model such as qwen2.5-coder completes code better."
     }
 
     // MARK: - Updates Tab

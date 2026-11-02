@@ -1687,6 +1687,13 @@ enum InlineCompletionEvent: Sendable, Equatable {
     case rateLimited(until: Date)
 }
 
+/// Cloud ghost-text requests made on one calendar day (`yyyy-MM-dd`, local
+/// time), for the daily cap.
+struct GhostTextCloudUsage: Codable, Sendable, Equatable {
+    var day: String = ""
+    var count: Int = 0
+}
+
 /// A predicted follow-up edit elsewhere in the file (next-edit suggestion).
 /// `range` is UTF-16, valid only for the buffer `docVersion` it was made from.
 struct NextEditPrediction: Sendable, Equatable {

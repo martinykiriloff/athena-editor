@@ -213,11 +213,36 @@ final class AppState {
     var ghostTextTemperature: Double = 0.1
     var ghostTextMaxTokens:   Int    = 96
     var ghostTextDebounceMs:  Int    = 700
-    /// Prepends a compact "imports + enclosing symbol" block to local-LLM
-    /// prompts (see `buildGhostTextContext()`) — off skips that work
-    /// entirely, useful if it hurts latency more than it helps quality on a
-    /// slow/CPU-only local model.
+    /// Gives ghost text context beyond the code around the caret: the
+    /// file's imports and enclosing symbol, outlines of imported files,
+    /// language-server definitions, and similar code from open tabs (see
+    /// `gatherInlineContext`). Off skips that work entirely — useful when it
+    /// hurts latency more than it helps on a slow, CPU-only local model.
     var includeGhostTextContext: Bool = true
+    /// Whether code from *other* files may be sent to the cloud provider.
+    /// Off by default: with it off, Claude sees only the file being edited.
+    /// Local providers never leave the machine and always get the context.
+    var ghostTextShareContextWithCloud: Bool = false
+    /// Languages (raw values) where ghost text is never requested.
+    var ghostTextDisabledLanguages: Set<String> = []
+    /// Cap on cloud ghost-text requests per calendar day; 0 means no cap.
+    var ghostTextCloudDailyLimit: Int = 2000
+    /// Cloud requests used today, persisted so the cap survives relaunch.
+    var ghostTextCloudUsage = GhostTextCloudUsage()
+    /// Experimental: predict the next edit elsewhere in the file (Claude only).
+    var nextEditPredictionEnabled: Bool = false
+    /// Requests in flight — the status bar shows a spinner while > 0.
+    var inlineCompletionsInFlight: Int = 0
+    /// This session's suggestions shown and accepted (Settings → AI).
+    var ghostTextShownCount: Int = 0
+    var ghostTextAcceptedCount: Int = 0
+    /// No cloud request before this (set from a 429/529 `retry-after`).
+    @ObservationIgnored var cloudBackoffUntil: Date?
+    @ObservationIgnored var lastCloudRequestAt: Date?
+    /// Definition snippets from the language server, by file + identifier.
+    @ObservationIgnored var definitionSnippetCache: [String: (snippet: InlineContextSnippet?, at: Date)] = [:]
+    /// Outlines of imported files, by path, valid while the mtime matches.
+    @ObservationIgnored var importOutlineCache: [String: (modified: Date, outline: String)] = [:]
 
     // MARK: - NPM Scripts
     var npmPackages: [NPMPackageInfo] = []
@@ -1217,6 +1242,11 @@ final class AppState {
         async let gtm  = settingsService.value(for: "ghostTextMaxTokens",     default: 96)
         async let gtd  = settingsService.value(for: "ghostTextDebounceMs",    default: 700)
         async let gtc  = settingsService.value(for: "includeGhostTextContext", default: true)
+        async let gtcc = settingsService.value(for: "ghostTextShareContextWithCloud", default: false)
+        async let gtdl = settingsService.value(for: "ghostTextDisabledLanguages", default: [String]())
+        async let gtcl = settingsService.value(for: "ghostTextCloudDailyLimit", default: 2000)
+        async let gtcu = settingsService.value(for: "ghostTextCloudUsage", default: GhostTextCloudUsage())
+        async let nep  = settingsService.value(for: "nextEditPredictionEnabled", default: false)
         ghostTextProvider = GhostTextProvider(rawValue: await gtp) ?? .none
         await loadLanguageServerOverrides()
         // An empty string is a valid `Codable` decode, not a missing key, so
@@ -1237,6 +1267,11 @@ final class AppState {
         ghostTextMaxTokens       = await gtm
         ghostTextDebounceMs      = await gtd
         includeGhostTextContext = await gtc
+        ghostTextShareContextWithCloud = await gtcc
+        ghostTextDisabledLanguages = Set(await gtdl)
+        ghostTextCloudDailyLimit = await gtcl
+        ghostTextCloudUsage = await gtcu
+        nextEditPredictionEnabled = await nep
 
         // Claude API key (shared with chat) — stored in the Keychain
         await loadClaudeAPIKey()
@@ -1344,94 +1379,7 @@ final class AppState {
     }
 
     // MARK: - AI Ghost Text
-
-    /// Dispatches to the selected ghost-text provider, all implemented in
-    /// `InlineCompletionService`. Local providers (Ollama, OpenAI-compatible)
-    /// get a compact code-context header prepended via
-    /// `buildGhostTextContext()`; Claude's tight cloud prompt is unchanged.
-    /// A local provider's connectivity/server errors land in `statusMessage`;
-    /// `nil` otherwise covers "no provider configured", "empty response",
-    /// and "request cancelled by the next keystroke" alike.
-    /// Streams ghost-text events for one editor query.
-    func inlineCompletionStream(_ query: InlineCompletionQuery) -> AsyncStream<InlineCompletionEvent> {
-        AsyncStream { continuation in
-            let task = Task { @MainActor [weak self] in
-                let text = await self?.requestInlineCompletion(prefix: query.prefix, suffix: query.suffix)
-                continuation.yield(.finished(text))
-                continuation.finish()
-            }
-            continuation.onTermination = { _ in task.cancel() }
-        }
-    }
-
-    func requestInlineCompletion(prefix: String, suffix: String) async -> String? {
-        switch ghostTextProvider {
-        case .none:
-            return nil
-
-        case .claude:
-            return await inlineCompletionService.requestClaude(prefix: prefix, suffix: suffix, apiKey: claudeAPIKey)
-
-        case .ollama:
-            let endpoint = ollamaEndpoint.isEmpty ? Self.defaultOllamaEndpoint : ollamaEndpoint
-            let model    = ollamaModel.isEmpty    ? Self.defaultOllamaModel    : ollamaModel
-            let result = await inlineCompletionService.requestOllama(
-                prefix: prefix, suffix: suffix, contextHeader: buildGhostTextContext(),
-                endpoint: endpoint, model: model,
-                temperature: ghostTextTemperature, maxTokens: ghostTextMaxTokens
-            )
-            if let statusMessage = result.statusMessage { self.statusMessage = statusMessage }
-            return result.text
-
-        case .openAICompatible:
-            guard !localOAIEndpoint.isEmpty, !localOAIModel.isEmpty else { return nil }
-            let result = await inlineCompletionService.requestOpenAICompatible(
-                prefix: prefix, contextHeader: buildGhostTextContext(),
-                endpoint: localOAIEndpoint, model: localOAIModel, apiKey: localOAIAPIKey,
-                temperature: ghostTextTemperature, maxTokens: ghostTextMaxTokens
-            )
-            if let statusMessage = result.statusMessage { self.statusMessage = statusMessage }
-            return result.text
-        }
-    }
-
-    /// Builds the compact "imports + enclosing symbol" block local-LLM ghost
-    /// text prepends to its prompt — the biggest lever on suggestion quality
-    /// beyond raw trailing text, and free to compute: `documentSymbols` is
-    /// already a live, kept-current tree for the focused tab (same one
-    /// `breadcrumbPath` reads), so this issues zero extra LSP calls. Returns
-    /// `""` when the toggle is off or there's nothing to say.
-    private func buildGhostTextContext() -> String {
-        guard includeGhostTextContext else { return "" }
-
-        var lines: [String] = []
-
-        let imports = importLines(in: focusedTab?.content ?? "").prefix(8)
-        if !imports.isEmpty {
-            lines.append("imports:\n\(imports.joined(separator: "\n"))")
-        }
-
-        let cursorLine = focusedTab?.cursorLine ?? 1
-        let symbolPath = breadcrumbSymbolPath(in: documentSymbols, containingLine: cursorLine)
-            .map(\.name).joined(separator: ".")
-        if !symbolPath.isEmpty {
-            lines.append("inside: \(symbolPath)")
-        }
-
-        guard !lines.isEmpty else { return "" }
-        // Keep the header itself bounded — a huge import list or deeply
-        // nested symbol path shouldn't crowd out the actual prefix/suffix
-        // text on a latency-sensitive local model.
-        return String(lines.joined(separator: "\n").prefix(500)) + "\n\n"
-    }
-
-    /// Fetches installed Ollama model names for the Settings "Fetch models"
-    /// button — falls back to the existing free-text field when empty
-    /// (Ollama not running yet, wrong endpoint, etc.).
-    func fetchOllamaModels() async -> [String] {
-        let endpoint = ollamaEndpoint.isEmpty ? Self.defaultOllamaEndpoint : ollamaEndpoint
-        return await inlineCompletionService.fetchOllamaModels(endpoint: endpoint)
-    }
+    // See AppState+InlineCompletion.swift.
 
     // MARK: - Session Restore
 

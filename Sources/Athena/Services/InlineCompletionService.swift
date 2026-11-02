@@ -1,310 +1,511 @@
 // InlineCompletionService.swift
-// Athena — cloud/local LLM backends for AI ghost-text inline completion.
+// Athena — cloud/local LLM backends for AI ghost-text inline completion:
+// streaming requests, a result cache, and per-model capability discovery.
 // Swift 6, strict concurrency.
 
 import Foundation
-
-/// One inline-completion request's outcome: `text` is the cleaned suggestion
-/// (nil when there's nothing usable), `statusMessage` is set only on a real
-/// connectivity/server error worth surfacing to the user — not on a debounce
-/// cancellation or an empty-but-successful response.
-struct InlineCompletionResult: Sendable {
-    var text: String?
-    var statusMessage: String?
-
-    static let empty = InlineCompletionResult(text: nil, statusMessage: nil)
-}
 
 // MARK: - InlineCompletionService
 
 actor InlineCompletionService {
 
+    // MARK: Configuration
+
+    enum Backend: Sendable, Equatable {
+        case claude(apiKey: String)
+        case ollama(endpoint: String, model: String)
+        case openAICompatible(endpoint: String, model: String, apiKey: String)
+
+        /// Identifies the model for cache keys (never includes a key).
+        var cacheID: String {
+            switch self {
+            case .claude:                                 return "claude|\(InlineCompletionService.claudeModel)"
+            case .ollama(let endpoint, let model):        return "ollama|\(endpoint)|\(model)"
+            case .openAICompatible(let endpoint, let model, _): return "oai|\(endpoint)|\(model)"
+            }
+        }
+    }
+
+    struct Config: Sendable, Equatable {
+        var backend: Backend
+        var temperature: Double
+        var maxTokens: Int
+        /// Used in Qwen's repository prompt (`<|repo_name|>`).
+        var repoName: String
+    }
+
+    /// What `/api/show` says a local Ollama model can do.
+    struct OllamaCapabilities: Sendable, Equatable {
+        /// Accepts `suffix` (real fill-in-middle).
+        var insert: Bool
+        /// A thinking model — send `think: false` for completions.
+        var thinking: Bool
+    }
+
+    static let claudeModel = "claude-haiku-5-5"
+
     // MARK: State
 
-    /// `(endpoint, model)` pairs — joined as `"endpoint|model"` — that
-    /// rejected Ollama's fill-in-middle `suffix` field at least once this
-    /// session, so later requests skip straight to prompt-only instead of
-    /// re-discovering the same failure on every keystroke.
+    /// Finished suggestions by request fingerprint. Only complete,
+    /// uncancelled answers are stored, so a cached hit is always whole.
+    private var cache: [Int: String] = [:]
+    private var cacheOrder: [Int] = []
+    private static let cacheLimit = 128
+
+    private var capabilities: [String: OllamaCapabilities] = [:]
+    /// `endpoint|model` pairs that rejected `suffix` at least once.
     private var suffixUnsupported: Set<String> = []
+    /// OpenAI-compatible endpoints without llama.cpp's `/infill`.
+    private var infillUnsupported: Set<String> = []
+
+    // MARK: - Streaming
+
+    /// A finished suggestion for this request, if one is cached.
+    func cachedSuggestion(for request: InlineCompletionRequest, backend: Backend) -> String? {
+        cache[Self.cacheKey(request, backend: backend)]
+    }
+
+    /// Streams one suggestion. Cancelling the consumer (or dropping the
+    /// stream) cancels the network request.
+    nonisolated func stream(_ request: InlineCompletionRequest, config: Config) -> AsyncStream<InlineCompletionEvent> {
+        AsyncStream { continuation in
+            let task = Task {
+                await self.run(request, config: config, continuation: continuation)
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    private func run(
+        _ request: InlineCompletionRequest,
+        config: Config,
+        continuation: AsyncStream<InlineCompletionEvent>.Continuation
+    ) async {
+        let key = Self.cacheKey(request, backend: config.backend)
+        if let hit = cache[key] {
+            continuation.yield(.finished(hit))
+            return
+        }
+
+        let outcome: Outcome
+        switch config.backend {
+        case .claude(let apiKey):
+            outcome = await runClaude(request, apiKey: apiKey, config: config, continuation: continuation)
+        case .ollama(let endpoint, let model):
+            outcome = await runOllama(request, endpoint: endpoint, model: model, config: config, continuation: continuation)
+        case .openAICompatible(let endpoint, let model, let apiKey):
+            outcome = await runOpenAICompatible(request, endpoint: endpoint, model: model, apiKey: apiKey,
+                                                config: config, continuation: continuation)
+        }
+
+        switch outcome {
+        case .finished(let text):
+            if let text, !Task.isCancelled { store(text, for: key) }
+            continuation.yield(.finished(text))
+        case .failed(let message):
+            continuation.yield(.failed(message))
+            continuation.yield(.finished(nil))
+        case .rateLimited(let until, let message):
+            continuation.yield(.rateLimited(until: until))
+            continuation.yield(.failed(message))
+            continuation.yield(.finished(nil))
+        case .cancelled:
+            break
+        }
+    }
+
+    private enum Outcome {
+        case finished(String?)
+        case failed(String)
+        case rateLimited(until: Date, message: String)
+        case cancelled
+    }
 
     // MARK: - Claude (cloud)
 
-    /// Calls claude-haiku for a short inline code completion at the cursor.
-    /// Returns `nil` when the request fails — matches the pre-extraction
-    /// behavior (Claude ghost text has never surfaced its own errors here).
-    func requestClaude(prefix: String, suffix: String, apiKey: String) async -> String? {
-        guard !apiKey.isEmpty else { return nil }
-
-        let context = String(prefix.suffix(600)) + "<CURSOR>" + String(suffix.prefix(200))
+    private func runClaude(
+        _ request: InlineCompletionRequest,
+        apiKey: String,
+        config: Config,
+        continuation: AsyncStream<InlineCompletionEvent>.Continuation
+    ) async -> Outcome {
+        guard !apiKey.isEmpty else { return .failed("Claude ghost text needs an API key (Settings → AI).") }
+        let prompt = InlinePromptBuilder.claude(request)
+        // Haiku 5.5: thinking off and low effort for latency; no
+        // temperature (non-default sampling values are rejected).
         let body: [String: Any] = [
-            "model":      "claude-haiku-4-5-20251001",
-            "max_tokens": 80,
-            "system":     "You are a code completion engine. Output ONLY the text that should appear at <CURSOR>. No explanation, no markdown, no backticks. Complete at most one line.",
-            "messages":   [["role": "user", "content": context]],
+            "model":         Self.claudeModel,
+            "max_tokens":    max(config.maxTokens, 64),
+            "stream":        true,
+            "thinking":      ["type": "disabled"],
+            "output_config": ["effort": "low"],
+            "system":        prompt.system,
+            "messages":      [["role": "user", "content": prompt.user]],
         ]
-
         var req = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue(apiKey,               forHTTPHeaderField: "x-api-key")
         req.setValue("2023-06-01",         forHTTPHeaderField: "anthropic-version")
-        req.timeoutInterval = 10
-        guard let data = try? JSONSerialization.data(withJSONObject: body) else { return nil }
-        req.httpBody = data
+        req.timeoutInterval = 15
 
-        guard
-            let (respData, _) = try? await URLSession.shared.data(for: req),
-            let json = try? JSONSerialization.jsonObject(with: respData) as? [String: Any],
-            let content = json["content"] as? [[String: Any]],
-            let text = content.first?["text"] as? String,
-            !text.isEmpty
-        else { return nil }
-
-        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let promptTail = String(request.prefix.suffix(400))
+        return await streamLines(req, body: body, label: "Claude", promptTail: promptTail,
+                                 mode: request.mode, continuation: continuation) { line in
+            guard line.hasPrefix("data:") else { return .skip }
+            let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+            guard let json = Self.json(payload) else { return .skip }
+            switch json["type"] as? String {
+            case "content_block_delta":
+                let delta = json["delta"] as? [String: Any]
+                guard delta?["type"] as? String == "text_delta", let text = delta?["text"] as? String else { return .skip }
+                return .append(text)
+            case "message_stop":
+                return .done
+            case "error":
+                let error = json["error"] as? [String: Any]
+                return .error("Claude: \(error?["message"] as? String ?? "stream error")")
+            default:
+                return .skip
+            }
+        }
     }
 
     // MARK: - Ollama (local)
 
-    /// Requests a completion from Ollama's native `/api/generate`, using
-    /// real fill-in-middle (`prompt` + `suffix`) when the `(endpoint, model)`
-    /// pair hasn't already told us it rejects `suffix` — some instruct
-    /// models ("does not support insert") only accept prompt-only. On a
-    /// first-time rejection, falls back to prompt-only within the same call
-    /// (so this request still returns a usable suggestion) and remembers the
-    /// fallback for the rest of the session.
-    func requestOllama(
-        prefix: String,
-        suffix: String,
-        contextHeader: String,
+    private func runOllama(
+        _ request: InlineCompletionRequest,
         endpoint: String,
         model: String,
-        temperature: Double,
-        maxTokens: Int
-    ) async -> InlineCompletionResult {
-        let base = endpoint.hasSuffix("/") ? String(endpoint.dropLast()) : endpoint
-        guard let url = URL(string: "\(base)/api/generate") else { return .empty }
+        config: Config,
+        continuation: AsyncStream<InlineCompletionEvent>.Continuation
+    ) async -> Outcome {
+        let base = Self.trimSlash(endpoint)
+        guard let url = URL(string: "\(base)/api/generate") else { return .failed("Invalid Ollama endpoint: \(endpoint)") }
+        let caps = await ollamaCapabilities(endpoint: base, model: model)
+        let pairKey = "\(base)|\(model)"
 
-        let promptHead = contextHeader + String(prefix.suffix(2000))
-        let suffixTail = String(suffix.prefix(500))
-        let cacheKey   = "\(endpoint)|\(model)"
-        let trySuffix  = !suffixTail.isEmpty && !suffixUnsupported.contains(cacheKey)
+        var options: [String: Any] = [
+            "temperature": request.variant > 0 ? max(config.temperature, 0.6) : config.temperature,
+            "num_predict": config.maxTokens,
+        ]
+        var body: [String: Any] = ["model": model, "stream": true]
+        if caps.thinking { body["think"] = false }
+        let promptTail: String
 
-        func body(includeSuffix: Bool) -> [String: Any] {
-            var b: [String: Any] = [
-                "model":  model,
-                "prompt": promptHead,
-                "stream": false,
-                "options": [
-                    "temperature": temperature,
-                    "num_predict": maxTokens,
-                ],
-            ]
-            if includeSuffix { b["suffix"] = suffixTail }
-            return b
+        if let family = InlinePromptBuilder.FIMFamily.detect(model: model) {
+            // Raw mode: Athena writes the model's own FIM tokens, which is
+            // what lets several files sit in one prompt.
+            body["raw"] = true
+            body["prompt"] = InlinePromptBuilder.rawFIM(request, family: family, repoName: config.repoName)
+            options["stop"] = family.stopTokens
+            promptTail = String(request.prefix.suffix(400))
+        } else {
+            let generic = InlinePromptBuilder.commentedPrompt(request)
+            body["prompt"] = generic.prompt
+            if caps.insert, !generic.suffix.isEmpty, !suffixUnsupported.contains(pairKey) {
+                body["suffix"] = generic.suffix
+            }
+            promptTail = String(generic.prompt.suffix(400))
+        }
+        body["options"] = options
+
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 30
+
+        let parse: @Sendable (String) -> LineResult = { line in
+            guard let json = Self.json(Substring(line)) else { return .skip }
+            if let error = json["error"] as? String { return .error("Ollama (model \(model)): \(error)") }
+            if let piece = json["response"] as? String, !piece.isEmpty { return .append(piece) }
+            return (json["done"] as? Bool) == true ? .done : .skip
         }
 
-        func send(includeSuffix: Bool) async throws -> (Data, URLResponse) {
-            var req = URLRequest(url: url)
-            req.httpMethod = "POST"
-            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.timeoutInterval = 20
-            req.httpBody = try JSONSerialization.data(withJSONObject: body(includeSuffix: includeSuffix))
-            return try await Self.dataWithConnectionRetry(for: req)
+        let outcome = await streamLines(req, body: body, label: "Ollama (model \(model))", promptTail: promptTail,
+                                        mode: request.mode, continuation: continuation, parse: parse)
+        // Some instruct templates refuse `suffix` despite advertising it;
+        // remember and retry prompt-only once.
+        if case .failed(let message) = outcome, body["suffix"] != nil,
+           message.localizedCaseInsensitiveContains("suffix") || message.localizedCaseInsensitiveContains("insert") {
+            suffixUnsupported.insert(pairKey)
+            body["suffix"] = nil
+            return await streamLines(req, body: body, label: "Ollama (model \(model))", promptTail: promptTail,
+                                     mode: request.mode, continuation: continuation, parse: parse)
         }
-
-        do {
-            var (respData, response) = try await send(includeSuffix: trySuffix)
-
-            if trySuffix, let http = response as? HTTPURLResponse, http.statusCode != 200 {
-                let detail = String(data: respData, encoding: .utf8) ?? ""
-                if detail.localizedCaseInsensitiveContains("suffix") || detail.localizedCaseInsensitiveContains("insert") {
-                    suffixUnsupported.insert(cacheKey)
-                    (respData, response) = try await send(includeSuffix: false)
-                }
-            }
-
-            if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-                let detail = String(data: respData, encoding: .utf8)?.prefix(200) ?? ""
-                return InlineCompletionResult(text: nil, statusMessage: "Ollama error \(http.statusCode) (model \(model)): \(detail)")
-            }
-
-            guard
-                let json = try? JSONSerialization.jsonObject(with: respData) as? [String: Any],
-                let text = json["response"] as? String
-            else { return .empty }
-
-            return InlineCompletionResult(text: Self.cleanInlineCompletion(text, prefix: promptHead), statusMessage: nil)
-        } catch {
-            // Every keystroke cancels the in-flight request and schedules a
-            // new one for the updated cursor position (see EditorView's
-            // ghostDebounce). If a request was already waiting on Ollama's
-            // reply when the next keystroke landed, Swift's URLSession
-            // async/await bridge cancels that in-flight task automatically,
-            // surfacing as URLError.cancelled — routine debounce behavior,
-            // not a connectivity failure. Don't scare the user with
-            // "unreachable" for a request Athena itself tore down.
-            if let urlError = error as? URLError, urlError.code == .cancelled {
-                return .empty
-            }
-            return InlineCompletionResult(text: nil, statusMessage: "Ollama unreachable at \(base): \(error.localizedDescription)")
+        if case .failed(let message) = outcome, message.contains("unreachable") {
+            return .failed("Ollama unreachable at \(base) — is `ollama serve` running?")
         }
+        return outcome
+    }
+
+    /// Asks `POST /api/show` what the model supports, once per session.
+    /// On failure assumes fill-in-middle works (the request will say
+    /// otherwise) and that the model doesn't think.
+    func ollamaCapabilities(endpoint: String, model: String) async -> OllamaCapabilities {
+        let base = Self.trimSlash(endpoint)
+        let key = "\(base)|\(model)"
+        if let known = capabilities[key] { return known }
+        guard let url = URL(string: "\(base)/api/show") else { return OllamaCapabilities(insert: true, thinking: false) }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 5
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["model": model])
+        guard
+            let (data, response) = try? await URLSession.shared.data(for: req),
+            (response as? HTTPURLResponse)?.statusCode == 200,
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return OllamaCapabilities(insert: true, thinking: false) }
+
+        let list = json["capabilities"] as? [String] ?? []
+        let template = json["template"] as? String ?? ""
+        let caps = OllamaCapabilities(
+            insert: list.contains("insert") || template.contains(".Suffix"),
+            thinking: list.contains("thinking")
+        )
+        capabilities[key] = caps
+        return caps
     }
 
     /// Fetches installed model names from Ollama's `GET /api/tags`, for the
-    /// Settings "Fetch models" picker. Returns an empty array on any failure
-    /// (Ollama not running yet, wrong endpoint, etc.) — callers fall back to
-    /// the existing free-text field.
+    /// Settings "Fetch models" picker. Empty on any failure.
     func fetchOllamaModels(endpoint: String) async -> [String] {
-        let base = endpoint.hasSuffix("/") ? String(endpoint.dropLast()) : endpoint
+        let base = Self.trimSlash(endpoint)
         guard let url = URL(string: "\(base)/api/tags") else { return [] }
-
         var req = URLRequest(url: url)
         req.timeoutInterval = 5
-
         guard
             let (data, response) = try? await URLSession.shared.data(for: req),
             let http = response as? HTTPURLResponse, http.statusCode == 200,
             let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let models = json["models"] as? [[String: Any]]
         else { return [] }
-
         return models.compactMap { $0["name"] as? String }.sorted()
     }
 
     // MARK: - Generic OpenAI-compatible local server
 
-    /// Requests a completion from any server speaking the OpenAI
-    /// `/completions` shape (LM Studio, llama.cpp's `server`, vLLM, …) —
-    /// `endpoint` is expected to already include the `/v1` prefix those
-    /// servers use (e.g. `http://127.0.0.1:1234/v1`). Prompt-only: unlike
-    /// Ollama's native API, `suffix`/fill-in-middle isn't standardized
-    /// across OpenAI-compatible servers, so this always sends prompt-only.
-    func requestOpenAICompatible(
-        prefix: String,
-        contextHeader: String,
+    /// Tries llama.cpp's `/infill` first (real fill-in-middle with extra
+    /// files); servers without it (LM Studio, vLLM…) fall back to the
+    /// OpenAI `/completions` shape, prompt-only, remembered per endpoint.
+    private func runOpenAICompatible(
+        _ request: InlineCompletionRequest,
         endpoint: String,
         model: String,
         apiKey: String,
-        temperature: Double,
-        maxTokens: Int
-    ) async -> InlineCompletionResult {
-        let base = endpoint.hasSuffix("/") ? String(endpoint.dropLast()) : endpoint
-        guard let url = URL(string: "\(base)/completions") else { return .empty }
+        config: Config,
+        continuation: AsyncStream<InlineCompletionEvent>.Continuation
+    ) async -> Outcome {
+        let base = Self.trimSlash(endpoint)
+        let temperature = request.variant > 0 ? max(config.temperature, 0.6) : config.temperature
 
-        let promptHead = contextHeader + String(prefix.suffix(2000))
+        func authorized(_ url: URL) -> URLRequest {
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            // Only when set: servers without auth never expect the header.
+            if !apiKey.isEmpty { req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
+            req.timeoutInterval = 30
+            return req
+        }
+
+        let sseText: @Sendable (String, String) -> LineResult = { line, field in
+            guard line.hasPrefix("data:") else { return .skip }
+            let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+            if payload == "[DONE]" { return .done }
+            guard let json = Self.json(payload) else { return .skip }
+            if let error = json["error"] as? [String: Any] { return .error("Local model server: \(error["message"] as? String ?? "error")") }
+            if field == "content" {
+                if let piece = json["content"] as? String, !piece.isEmpty { return .append(piece) }
+                return (json["stop"] as? Bool) == true ? .done : .skip
+            }
+            let choice = (json["choices"] as? [[String: Any]])?.first
+            if let piece = choice?["text"] as? String, !piece.isEmpty { return .append(piece) }
+            return .skip
+        }
+
+        if !infillUnsupported.contains(base), let url = URL(string: "\(Self.serverRoot(base))/infill") {
+            let pieces = InlinePromptBuilder.infill(request)
+            let body: [String: Any] = [
+                "input_prefix": pieces.prefix,
+                "input_suffix": pieces.suffix,
+                "input_extra":  pieces.extra,
+                "n_predict":    config.maxTokens,
+                "temperature":  temperature,
+                "stream":       true,
+            ]
+            let outcome = await streamLines(authorized(url), body: body, label: "Local model server (model \(model))",
+                                            promptTail: String(pieces.prefix.suffix(400)), mode: request.mode,
+                                            continuation: continuation) { sseText($0, "content") }
+            switch outcome {
+            case .failed(let message) where !message.contains("unreachable"):
+                // An HTTP error: no /infill here. Fall through to /completions.
+                infillUnsupported.insert(base)
+            default:
+                // Success, cancellation, or the server being down.
+                return outcome
+            }
+        }
+
+        guard let url = URL(string: "\(base)/completions") else { return .failed("Invalid endpoint: \(endpoint)") }
+        let generic = InlinePromptBuilder.commentedPrompt(request)
         let body: [String: Any] = [
             "model":       model,
-            "prompt":      promptHead,
-            "max_tokens":  maxTokens,
+            "prompt":      generic.prompt,
+            "max_tokens":  config.maxTokens,
             "temperature": temperature,
-            "stream":      false,
+            "stream":      true,
         ]
+        return await streamLines(authorized(url), body: body, label: "Local model server (model \(model))",
+                                 promptTail: String(generic.prompt.suffix(400)), mode: request.mode,
+                                 continuation: continuation) { sseText($0, "text") }
+    }
 
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        // Only set when non-empty — an empty bearer token would break servers
-        // (llama.cpp's `server`, most local LM Studio setups) that don't
-        // require auth at all and never expect the header to be present.
-        if !apiKey.isEmpty {
-            req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        }
-        req.timeoutInterval = 20
-        guard let data = try? JSONSerialization.data(withJSONObject: body) else { return .empty }
+    // MARK: - Shared streaming loop
+
+    enum LineResult: Sendable {
+        case append(String)
+        case done
+        case error(String)
+        case skip
+    }
+
+    /// Sends `body` to `req`, feeds each response line to `parse`, and
+    /// yields the cleaned cumulative text as it grows. Mid-line requests
+    /// stop at the first line break — nothing past it can be used.
+    private func streamLines(
+        _ request: URLRequest,
+        body: [String: Any],
+        label: String,
+        promptTail: String,
+        mode: InlineCompletionMode,
+        continuation: AsyncStream<InlineCompletionEvent>.Continuation,
+        parse: @Sendable (String) -> LineResult
+    ) async -> Outcome {
+        var req = request
+        guard let data = try? JSONSerialization.data(withJSONObject: body) else { return .failed("\(label): bad request") }
         req.httpBody = data
 
         do {
-            let (respData, response) = try await Self.dataWithConnectionRetry(for: req)
-
+            let (bytes, response) = try await Self.bytesWithConnectionRetry(for: req)
             if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-                let detail = String(data: respData, encoding: .utf8)?.prefix(200) ?? ""
-                return InlineCompletionResult(text: nil, statusMessage: "Local model server error \(http.statusCode) (model \(model)): \(detail)")
+                var detail = ""
+                for try await line in bytes.lines {
+                    detail += line
+                    if detail.count > 400 { break }
+                }
+                let message = "\(label) error \(http.statusCode): \(Self.errorMessage(in: detail))"
+                if http.statusCode == 429 || http.statusCode == 529 {
+                    let seconds = (http.value(forHTTPHeaderField: "retry-after")).flatMap(Double.init) ?? 30
+                    return .rateLimited(until: Date().addingTimeInterval(seconds), message: message)
+                }
+                return .failed(message)
             }
 
-            guard
-                let json = try? JSONSerialization.jsonObject(with: respData) as? [String: Any],
-                let choices = json["choices"] as? [[String: Any]],
-                let text = choices.first?["text"] as? String
-            else { return .empty }
-
-            return InlineCompletionResult(text: Self.cleanInlineCompletion(text, prefix: promptHead), statusMessage: nil)
+            var raw = ""
+            var lastYielded: String?
+            lineLoop: for try await line in bytes.lines {
+                if Task.isCancelled { return .cancelled }
+                switch parse(line) {
+                case .append(let piece):
+                    raw += piece
+                    if let cleaned = InlinePromptBuilder.clean(raw, promptTail: promptTail, final: false),
+                       cleaned != lastYielded {
+                        lastYielded = cleaned
+                        continuation.yield(.text(cleaned))
+                        if mode == .midLine, cleaned.contains("\n") { break lineLoop }
+                    }
+                case .done:
+                    break lineLoop
+                case .error(let message):
+                    return .failed(message)
+                case .skip:
+                    continue
+                }
+            }
+            if Task.isCancelled { return .cancelled }
+            return .finished(InlinePromptBuilder.clean(raw, promptTail: promptTail, final: true))
         } catch {
-            if let urlError = error as? URLError, urlError.code == .cancelled {
-                return .empty
-            }
-            return InlineCompletionResult(text: nil, statusMessage: "Local model server unreachable at \(base): \(error.localizedDescription)")
+            // Every keystroke cancels the in-flight request; URLSession
+            // surfaces that as URLError.cancelled — routine, not a failure.
+            if Task.isCancelled { return .cancelled }
+            if let urlError = error as? URLError, urlError.code == .cancelled { return .cancelled }
+            return .failed("\(label) unreachable: \(error.localizedDescription)")
         }
     }
 
-    // MARK: - Shared request/response helpers
+    // MARK: - Helpers
 
     /// Performs `req` and retries on connection-level failures (host not yet
     /// listening, connection lost) that are typically transient — e.g. a
-    /// local server still finishing startup. Does not retry HTTP error
-    /// responses or other URL errors (those surface immediately).
-    private static func dataWithConnectionRetry(
+    /// local server still finishing startup.
+    private static func bytesWithConnectionRetry(
         for req: URLRequest,
         attempts: Int = 3,
         initialDelay: Duration = .milliseconds(300)
-    ) async throws -> (Data, URLResponse) {
+    ) async throws -> (URLSession.AsyncBytes, URLResponse) {
         var delay = initialDelay
         for _ in 1..<attempts {
             do {
-                return try await URLSession.shared.data(for: req)
-            } catch let error as URLError where Self.isTransientConnectionError(error) {
+                return try await URLSession.shared.bytes(for: req)
+            } catch let error as URLError where error.code == .cannotConnectToHost || error.code == .networkConnectionLost {
                 // ContinuousClock, not Task.sleep(for:) — avoids a Swift 6.2
-                // release-toolchain crash in swift_task_dealloc from colliding
-                // cross-module Task.sleep(for:) specializations
+                // release-toolchain crash in swift_task_dealloc
                 // (https://github.com/swiftlang/swift/issues/86204).
                 let clock = ContinuousClock()
                 try await clock.sleep(until: clock.now.advanced(by: delay))
                 delay *= 2
             }
         }
-        // Final attempt: let any error (transient or not) propagate to the caller.
-        return try await URLSession.shared.data(for: req)
+        return try await URLSession.shared.bytes(for: req)
     }
 
-    private static func isTransientConnectionError(_ error: URLError) -> Bool {
-        switch error.code {
-        case .cannotConnectToHost, .networkConnectionLost:
-            return true
-        default:
-            return false
+    private func store(_ text: String, for key: Int) {
+        if cache[key] == nil { cacheOrder.append(key) }
+        cache[key] = text
+        if cacheOrder.count > Self.cacheLimit {
+            cache[cacheOrder.removeFirst()] = nil
         }
     }
 
-    /// Strips markdown fences and any echoed prefix from a raw model completion,
-    /// returning `nil` when nothing usable remains. Instruct models like
-    /// qwen3-coder reproduce the prompt before continuing it, so we cut the
-    /// longest suffix of `prefix` that the response repeats at its head.
-    private static func cleanInlineCompletion(_ raw: String, prefix: String) -> String? {
-        var text = raw
+    /// Everything that changes the answer: model, alternative, mode, file,
+    /// and the text right around the caret (edits far away don't).
+    static func cacheKey(_ request: InlineCompletionRequest, backend: Backend) -> Int {
+        var hasher = Hasher()
+        hasher.combine(backend.cacheID)
+        hasher.combine(request.variant)
+        hasher.combine(request.mode.rawValue)
+        hasher.combine(request.path)
+        hasher.combine(String(request.prefix.suffix(1500)))
+        hasher.combine(String(request.suffix.prefix(400)))
+        return hasher.finalize()
+    }
 
-        // Drop a leading ```lang fence and any trailing ``` fence.
-        if text.hasPrefix("```") {
-            if let firstNewline = text.firstIndex(of: "\n") {
-                text = String(text[text.index(after: firstNewline)...])
-            }
-            if let fence = text.range(of: "```") {
-                text = String(text[..<fence.lowerBound])
-            }
+    private static func json(_ text: Substring) -> [String: Any]? {
+        guard let data = text.data(using: .utf8) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    }
+
+    private static func json(_ text: String) -> [String: Any]? { json(Substring(text)) }
+
+    /// The `message` of a JSON error body, or the body itself, shortened.
+    static func errorMessage(in body: String) -> String {
+        if let json = json(body) {
+            if let error = json["error"] as? [String: Any], let message = error["message"] as? String { return message }
+            if let message = json["error"] as? String { return message }
         }
-        text = text.trimmingCharacters(in: .newlines)
+        return String(body.prefix(200))
+    }
 
-        // Remove echoed prompt: find the longest suffix of `prefix` (up to 400
-        // chars) that the response repeats at its start, and drop it.
-        let maxOverlap = min(prefix.count, text.count, 400)
-        if maxOverlap > 0 {
-            for len in stride(from: maxOverlap, through: 1, by: -1) {
-                if text.hasPrefix(String(prefix.suffix(len))) {
-                    text = String(text.dropFirst(len))
-                    break
-                }
-            }
-        }
+    private static func trimSlash(_ endpoint: String) -> String {
+        endpoint.hasSuffix("/") ? String(endpoint.dropLast()) : endpoint
+    }
 
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+    /// `http://host:8080/v1` → `http://host:8080` (llama.cpp serves
+    /// `/infill` at the root, beside its OpenAI-compatible `/v1`).
+    static func serverRoot(_ base: String) -> String {
+        base.hasSuffix("/v1") ? String(base.dropLast(3)) : base
     }
 }

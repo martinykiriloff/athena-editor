@@ -498,8 +498,10 @@ struct CodeEditorView: View {
                     return try? await appState.lspManager.resolve(itemID: itemID, language: language)
                 },
                 onRequestGhostText: { query in
-                    appState.inlineCompletionStream(query)
+                    appState.inlineCompletionStream(query, tab: tab)
                 },
+                onGhostTextShown: { appState.recordGhostTextShown() },
+                onGhostTextAccepted: { appState.recordGhostTextAccepted() },
                 ghostTextDebounceMs: appState.ghostTextDebounceMs
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)

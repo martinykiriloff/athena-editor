@@ -132,6 +132,17 @@ struct StatusBarView: View {
 
             // ── Right cluster ─────────────────────────────────────────────
             HStack(spacing: appState.sf(12)) {
+                // Ghost text request in flight
+                if appState.inlineCompletionsInFlight > 0 {
+                    HStack(spacing: appState.sf(4)) {
+                        ProgressView().controlSize(.mini)
+                        Text("AI")
+                    }
+                    .foregroundStyle(.secondary)
+                    .help("Waiting for an inline suggestion")
+                    .accessibilityLabel("Inline suggestion loading")
+                }
+
                 // Generic status message
                 if !appState.statusMessage.isEmpty {
                     Text(appState.statusMessage)
