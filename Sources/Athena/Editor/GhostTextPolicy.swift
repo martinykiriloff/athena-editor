@@ -98,6 +98,7 @@ enum GhostTextPolicy {
             }
             text = String(text.reversed().drop(while: { $0 == " " || $0 == "\t" }).reversed())
         case .endOfLine:
+            text = trimToBlock(text, suffix: suffix)
             text = trimRepeatedSuffix(text, suffix: suffix)
         }
         return text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : text
@@ -114,6 +115,57 @@ enum GhostTextPolicy {
             }
         }
         return text
+    }
+
+    /// Plain continuations run on past the block being written (closing
+    /// it, then starting the next function). Stop where the block ends:
+    /// at a line that closes more than the suggestion opened — dropping it
+    /// when the code after the caret already has that closer — or at a
+    /// blank line once everything opened is closed again.
+    static func trimToBlock(_ text: String, suffix: String) -> String {
+        let lines = text.components(separatedBy: "\n")
+        guard lines.count > 1 else { return text }
+        let nextSuffixLine = suffix
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .first(where: { !$0.isEmpty }) ?? ""
+        var depth = 0
+        for (index, line) in lines.enumerated() {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if index > 0, trimmed.isEmpty, depth <= 0 {
+                return lines[..<index].joined(separator: "\n")
+            }
+            depth += bracketBalance(of: line)
+            if depth < 0 {
+                // This line closes the enclosing block.
+                let alreadyThere = index > 0 && !nextSuffixLine.isEmpty
+                    && (trimmed == nextSuffixLine || nextSuffixLine.hasPrefix(trimmed))
+                return lines[..<(alreadyThere ? index : index + 1)].joined(separator: "\n")
+            }
+        }
+        return text
+    }
+
+    /// Opening minus closing brackets on a line, ignoring string contents.
+    static func bracketBalance(of line: String) -> Int {
+        var balance = 0
+        var quote: Character?
+        var escaped = false
+        for c in line {
+            if let q = quote {
+                if escaped { escaped = false }
+                else if c == "\\" { escaped = true }
+                else if c == q { quote = nil }
+                continue
+            }
+            switch c {
+            case "\"", "'", "`": quote = c
+            case "(", "[", "{": balance += 1
+            case ")", "]", "}": balance -= 1
+            default: break
+            }
+        }
+        return balance
     }
 
     /// Models sometimes finish a block and then carry on into code that

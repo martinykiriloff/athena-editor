@@ -199,6 +199,23 @@ struct InlineCleanTests {
         #expect(InlinePromptBuilder.clean("\n\nreturn 1", promptTail: "{\n  ", final: true) == "return 1")
     }
 
+    @Test func extractsCodeFromAChatAnswer() {
+        let raw = "Sure! Here's the completed function:\n\n```typescript\nreturn a + b\n```\n\n### Explanation"
+        #expect(InlinePromptBuilder.clean(raw, promptTail: "{\n  ", final: true) == "return a + b")
+    }
+
+    @Test func dropsARepeatedSpace() {
+        #expect(InlinePromptBuilder.clean(" useState(0)", promptTail: "const [a, b] = ", final: true) == "useState(0)")
+        #expect(InlinePromptBuilder.clean(" return a", promptTail: "{\n  ", final: true) == "return a")
+    }
+
+    @Test func codeBelowTheCaret() {
+        #expect(InlinePromptBuilder.hasCodeBelow("\n  return label\n}") == true)
+        #expect(InlinePromptBuilder.hasCodeBelow("\n}\n") == false)
+        #expect(InlinePromptBuilder.hasCodeBelow("   \n\n  });") == false)
+        #expect(InlinePromptBuilder.hasCodeBelow("") == false)
+    }
+
     @Test func stopsAtFIMTokens() {
         #expect(InlinePromptBuilder.clean("a + b<|endoftext|>junk", promptTail: "x = ", final: true) == "a + b")
     }
@@ -389,7 +406,10 @@ struct InlineCompletionStreamingTests {
             temperature: 0.1, maxTokens: 64, repoName: "shop"
         )
         _ = await collect(service.stream(request(), config: config))
-        #expect(InlineMockURLProtocol.body("\(host)/api/generate")?["suffix"] == nil)
+        let sent = InlineMockURLProtocol.body("\(host)/api/generate")
+        #expect(sent?["suffix"] == nil)
+        // A chat model gets a plain continuation, not its chat template.
+        #expect(sent?["raw"] as? Bool == true)
     }
 
     @Test func claudeStreamsTextDeltas() async {

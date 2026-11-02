@@ -60,7 +60,7 @@ endif
 
 # ── Phony targets ──────────────────────────────────────────────────────────────
 
-.PHONY: notarize notarize-check all run build-debug build-release bundle dmg dmg-pretty test icon clean open help
+.PHONY: notarize notarize-check all run build-debug build-release bundle dmg dmg-pretty test bench-fim icon clean open help
 
 all: bundle
 
@@ -190,6 +190,12 @@ test:
 	@echo "🧪 Running FileWatchService tests (own process — see AthenaFileWatchTests' header comment)…"
 	$(SWIFT_ENV) swift test $(TEST_FLAGS) --filter AthenaFileWatchTests
 
+# Local-model ghost-text benchmark (needs Ollama running and the models
+# pulled). Override ATHENA_FIM_MODELS / ATHENA_OLLAMA to choose what to measure.
+bench-fim:
+	@echo "📏 Fill-in-middle benchmark (look for [fim] lines)…"
+	ATHENA_FIM_BENCH=1 $(SWIFT_ENV) swift test $(TEST_FLAGS) --filter InlineCompletionBenchmark
+
 # ── Open in Xcode (for GUI archive / notarisation) ────────────────────────────
 
 open:
@@ -211,6 +217,7 @@ help:
 	@echo "  make dmg          release DMG  →  $(APP_NAME)-<version>.dmg"
 	@echo "  make dmg-pretty   polished DMG (needs: brew install create-dmg)"
 	@echo "  make test         run Swift test suite"
+	@echo "  make bench-fim    benchmark local ghost-text models (needs Ollama)"
 	@echo "  make icon         re-render the app icon from IconGen.swift"
 	@echo "  make open         open Package.swift in Xcode"
 	@echo "  make clean        remove .build/, .app, .dmg files"

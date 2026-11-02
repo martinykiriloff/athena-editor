@@ -152,7 +152,7 @@ actor InlineCompletionService {
 
         let promptTail = String(request.prefix.suffix(400))
         return await streamLines(req, body: body, label: "Claude", promptTail: promptTail,
-                                 mode: request.mode, continuation: continuation) { line in
+                                 singleLine: request.mode == .midLine, continuation: continuation) { line in
             guard line.hasPrefix("data:") else { return .skip }
             let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
             guard let json = Self.json(payload) else { return .skip }
@@ -246,6 +246,8 @@ actor InlineCompletionService {
         var body: [String: Any] = ["model": model, "stream": true]
         if caps.thinking { body["think"] = false }
         let promptTail: String
+        /// The model won't see the code after the caret.
+        var blind = false
 
         if let family = InlinePromptBuilder.FIMFamily.detect(model: model) {
             // Raw mode: Athena writes the model's own FIM tokens, which is
@@ -254,14 +256,24 @@ actor InlineCompletionService {
             body["prompt"] = InlinePromptBuilder.rawFIM(request, family: family, repoName: config.repoName)
             options["stop"] = family.stopTokens
             promptTail = String(request.prefix.suffix(400))
-        } else {
+        } else if caps.insert, !suffixUnsupported.contains(pairKey) {
+            // The model's own template wraps prompt + suffix in its FIM tokens.
             let generic = InlinePromptBuilder.commentedPrompt(request)
             body["prompt"] = generic.prompt
-            if caps.insert, !generic.suffix.isEmpty, !suffixUnsupported.contains(pairKey) {
-                body["suffix"] = generic.suffix
-            }
+            if !generic.suffix.isEmpty { body["suffix"] = generic.suffix }
             promptTail = String(generic.prompt.suffix(400))
+        } else {
+            // No fill-in-middle (a chat model such as qwen3): bypass the chat
+            // template, which would make it answer in prose, and let it
+            // continue the code as plain text.
+            let generic = InlinePromptBuilder.commentedPrompt(request)
+            body["raw"] = true
+            body["think"] = nil
+            body["prompt"] = generic.prompt
+            promptTail = String(generic.prompt.suffix(400))
+            blind = true
         }
+        let singleLine = blind && InlinePromptBuilder.hasCodeBelow(request.suffix)
         body["options"] = options
 
         var req = URLRequest(url: url)
@@ -277,15 +289,19 @@ actor InlineCompletionService {
         }
 
         let outcome = await streamLines(req, body: body, label: "Ollama (model \(model))", promptTail: promptTail,
-                                        mode: request.mode, continuation: continuation, parse: parse)
+                                        singleLine: request.mode == .midLine || singleLine,
+                                        continuation: continuation, parse: parse)
         // Some instruct templates refuse `suffix` despite advertising it;
         // remember and retry prompt-only once.
         if case .failed(let message) = outcome, body["suffix"] != nil,
            message.localizedCaseInsensitiveContains("suffix") || message.localizedCaseInsensitiveContains("insert") {
             suffixUnsupported.insert(pairKey)
             body["suffix"] = nil
+            body["raw"] = true
+            body["think"] = nil
             return await streamLines(req, body: body, label: "Ollama (model \(model))", promptTail: promptTail,
-                                     mode: request.mode, continuation: continuation, parse: parse)
+                                     singleLine: request.mode == .midLine || InlinePromptBuilder.hasCodeBelow(request.suffix),
+                                     continuation: continuation, parse: parse)
         }
         if case .failed(let message) = outcome, message.contains("unreachable") {
             return .failed("Ollama unreachable at \(base) — is `ollama serve` running?")
@@ -390,7 +406,8 @@ actor InlineCompletionService {
                 "stream":       true,
             ]
             let outcome = await streamLines(authorized(url), body: body, label: "Local model server (model \(model))",
-                                            promptTail: String(pieces.prefix.suffix(400)), mode: request.mode,
+                                            promptTail: String(pieces.prefix.suffix(400)),
+                                            singleLine: request.mode == .midLine,
                                             continuation: continuation) { sseText($0, "content") }
             switch outcome {
             case .failed(let message) where !message.contains("unreachable"):
@@ -412,7 +429,8 @@ actor InlineCompletionService {
             "stream":      true,
         ]
         return await streamLines(authorized(url), body: body, label: "Local model server (model \(model))",
-                                 promptTail: String(generic.prompt.suffix(400)), mode: request.mode,
+                                 promptTail: String(generic.prompt.suffix(400)),
+                                 singleLine: request.mode == .midLine || InlinePromptBuilder.hasCodeBelow(request.suffix),
                                  continuation: continuation) { sseText($0, "text") }
     }
 
@@ -426,14 +444,15 @@ actor InlineCompletionService {
     }
 
     /// Sends `body` to `req`, feeds each response line to `parse`, and
-    /// yields the cleaned cumulative text as it grows. Mid-line requests
+    /// yields the cleaned cumulative text as it grows. `singleLine`
+    /// requests (mid-line, or a model that can't see code below the caret)
     /// stop at the first line break — nothing past it can be used.
     private func streamLines(
         _ request: URLRequest,
         body: [String: Any],
         label: String,
         promptTail: String,
-        mode: InlineCompletionMode,
+        singleLine: Bool,
         continuation: AsyncStream<InlineCompletionEvent>.Continuation,
         parse: @Sendable (String) -> LineResult
     ) async -> Outcome {
@@ -468,7 +487,7 @@ actor InlineCompletionService {
                        cleaned != lastYielded {
                         lastYielded = cleaned
                         continuation.yield(.text(cleaned))
-                        if mode == .midLine, cleaned.contains("\n") { break lineLoop }
+                        if singleLine, cleaned.contains("\n") { break lineLoop }
                     }
                 case .done:
                     break lineLoop
@@ -479,7 +498,12 @@ actor InlineCompletionService {
                 }
             }
             if Task.isCancelled { return .cancelled }
-            return .finished(InlinePromptBuilder.clean(raw, promptTail: promptTail, final: true))
+            var final = InlinePromptBuilder.clean(raw, promptTail: promptTail, final: true)
+            if singleLine, let text = final, let newline = text.firstIndex(of: "\n") {
+                let firstLine = String(text[..<newline])
+                final = firstLine.trimmingCharacters(in: .whitespaces).isEmpty ? nil : firstLine
+            }
+            return .finished(final)
         } catch {
             // Every keystroke cancels the in-flight request; URLSession
             // surfaces that as URLError.cancelled — routine, not a failure.

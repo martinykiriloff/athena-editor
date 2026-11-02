@@ -141,6 +141,18 @@ enum InlinePromptBuilder {
         return (prompt, s.suffix)
     }
 
+    /// Whether real code (not just closing brackets) follows the caret's
+    /// line. A model that can't see the suffix would otherwise rewrite it,
+    /// so such models are held to one line there.
+    static func hasCodeBelow(_ suffix: String) -> Bool {
+        let lines = suffix.components(separatedBy: "\n").dropFirst()
+        guard let next = lines.map({ $0.trimmingCharacters(in: .whitespaces) }).first(where: { !$0.isEmpty }) else {
+            return false
+        }
+        let closers = Set(")]};,")
+        return !next.allSatisfy { closers.contains($0) || $0 == " " }
+    }
+
     /// llama.cpp `/infill` body pieces: prefix, suffix, and extra files.
     static func infill(_ request: InlineCompletionRequest) -> (prefix: String, suffix: String, extra: [[String: String]]) {
         let s = slice(request, window: .local)
@@ -224,6 +236,13 @@ enum InlinePromptBuilder {
             if !settled { return nil }
         }
 
+        // Chat-style answers ("Sure! Here's the function:\n\n```ts …"): the
+        // code is the first fenced block, the lead-in is prose.
+        if let fence = text.range(of: "```"), fence.lowerBound != text.startIndex {
+            let leadIn = text[..<fence.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+            if leadIn.hasSuffix(":") { text = String(text[fence.lowerBound...]) }
+        }
+
         // Drop a leading ```lang fence (models often put a blank line
         // before it) and anything from a closing fence on.
         let unfenced = text.drop(while: { $0 == "\n" || $0 == "\r" })
@@ -242,9 +261,14 @@ enum InlinePromptBuilder {
         let caretLineIsBlank = caretLine.trimmingCharacters(in: .whitespaces).isEmpty
         if caretLineIsBlank {
             // Already on a fresh, indented line: a leading newline is noise,
-            // and so is the model re-typing the indentation.
+            // and so is the model re-typing (some of) the indentation.
             while text.hasPrefix("\n") || text.hasPrefix("\r") { text.removeFirst() }
-            if !caretLine.isEmpty, text.hasPrefix(caretLine) { text.removeFirst(caretLine.count) }
+            if !caretLine.isEmpty {
+                while text.hasPrefix(" ") || text.hasPrefix("\t") { text.removeFirst() }
+            }
+        } else if caretLine.hasSuffix(" ") || caretLine.hasSuffix("\t") {
+            // "= " + " useState(0)": tokenisers often repeat the space.
+            while text.hasPrefix(" ") || text.hasPrefix("\t") { text.removeFirst() }
         } else {
             // At the end of real code a newline starts the next line; keep one.
             while text.hasPrefix("\n\n") { text.removeFirst() }

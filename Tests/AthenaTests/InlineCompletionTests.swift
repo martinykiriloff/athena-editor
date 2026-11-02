@@ -68,7 +68,25 @@ struct GhostTextFitTests {
         let suggestion = "  return a + b\n}\n\nfunction next() {"
         let suffix = "\n\nfunction next() {\n  return 1\n}"
         #expect(GhostTextPolicy.fit(suggestion, mode: .endOfLine, restOfLine: "", suffix: suffix)
-                == "  return a + b\n}\n")
+                == "  return a + b\n}")
+    }
+
+    @Test func continuationStopsAtTheEndOfTheBlock() {
+        // The closing brace is already after the caret: don't repeat it,
+        // and don't run on into the next function.
+        let raw = "return values.reduce((t, v) => t + v, 0)\n}\n\nexport function average() {"
+        #expect(GhostTextPolicy.fit(raw, mode: .endOfLine, restOfLine: "", suffix: "\n}\n") == "return values.reduce((t, v) => t + v, 0)")
+        // No closer after the caret: the suggestion closes the block itself.
+        #expect(GhostTextPolicy.fit(raw, mode: .endOfLine, restOfLine: "", suffix: "") == "return values.reduce((t, v) => t + v, 0)\n}")
+        // An inner block the suggestion opens and closes is kept whole.
+        let nested = "if (x) {\n  y()\n}\nreturn z"
+        #expect(GhostTextPolicy.fit(nested, mode: .endOfLine, restOfLine: "", suffix: "\n}") == nested)
+    }
+
+    @Test func bracketBalanceIgnoresStrings() {
+        #expect(GhostTextPolicy.bracketBalance(of: "foo(\"(\", [1, 2]") == 1)
+        #expect(GhostTextPolicy.bracketBalance(of: "})") == -2)
+        #expect(GhostTextPolicy.bracketBalance(of: "'}' + `${a}`") == 0)
     }
 
     @Test func endOfLineLeavesUnrelatedTextAlone() {
