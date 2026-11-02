@@ -763,6 +763,8 @@ enum EditorCommand: Sendable {
     case findReferences
     case renameSymbol
     case quickFix
+    /// Refactor menu (⌃T); a group restricts it to one kind of refactoring.
+    case refactor(RefactorGroup?)
     case moveLineUp
     case moveLineDown
     case copyLineUp
@@ -880,6 +882,58 @@ struct CodeAction: Identifiable, Sendable {
     var language: Language
 
     var isQuickFix: Bool { kind?.hasPrefix("quickfix") ?? false }
+}
+
+// MARK: - Refactorings
+
+/// The refactoring families of the Refactor menu, from the LSP code action
+/// kinds `refactor.extract`, `.inline`, `.move` and `.rewrite` (plain
+/// `refactor` and unknown sub-kinds land in `.other`).
+enum RefactorGroup: Int, CaseIterable, Sendable {
+    case extract, inline, move, rewrite, other
+
+    var title: String {
+        switch self {
+        case .extract: return "Extract"
+        case .inline:  return "Inline"
+        case .move:    return "Move"
+        case .rewrite: return "Rewrite"
+        case .other:   return "Refactor"
+        }
+    }
+}
+
+extension CodeAction {
+    /// True for `refactor` and any `refactor.*` kind; quick fixes and
+    /// `source.*` actions (organize imports…) are not refactorings.
+    var isRefactor: Bool {
+        guard let kind else { return false }
+        return kind == "refactor" || kind.hasPrefix("refactor.")
+    }
+
+    var refactorGroup: RefactorGroup {
+        guard let kind, isRefactor else { return .other }
+        let parts = kind.split(separator: ".")
+        guard parts.count >= 2 else { return .other }
+        switch parts[1] {
+        case "extract": return .extract
+        case "inline":  return .inline
+        case "move":    return .move
+        case "rewrite": return .rewrite
+        default:        return .other
+        }
+    }
+
+    /// The refactorings among `actions`, grouped in menu order (empty
+    /// groups dropped). `only` keeps a single group.
+    static func refactorMenu(_ actions: [CodeAction], only: RefactorGroup? = nil) -> [(group: RefactorGroup, actions: [CodeAction])] {
+        let refactors = actions.filter(\.isRefactor)
+        return RefactorGroup.allCases.compactMap { group in
+            if let only, only != group { return nil }
+            let inGroup = refactors.filter { $0.refactorGroup == group }
+            return inGroup.isEmpty ? nil : (group, inGroup)
+        }
+    }
 }
 
 /// A closed editor tab remembered for Reopen Closed Editor (⇧⌘T): the file
@@ -1976,4 +2030,63 @@ struct LSPExtraCapabilities: Sendable, Equatable {
     var codeActions = false
     var willRenameFilters: [FileOperationFilter] = []
     var didRenameFilters: [FileOperationFilter] = []
+}
+
+// MARK: - Framework awareness
+
+/// A route found by scanning a framework's conventions: a Next.js `app/` or
+/// `pages/` file, or a NestJS controller handler.
+struct FrameworkRoute: Identifiable, Sendable, Equatable {
+    enum Framework: String, Sendable { case next = "Next.js", nest = "NestJS" }
+    enum Kind: String, Sendable { case page = "Page", api = "API", handler = "Handler" }
+
+    var route: String
+    var kind: Kind
+    var framework: Framework
+    var fileURL: URL
+    /// 1-based line of the declaration (1 for file-based routes).
+    var line: Int = 1
+    /// HTTP method for NestJS handlers.
+    var method: String?
+
+    var id: String { "\(framework.rawValue)|\(method ?? "")|\(route)|\(fileURL.path):\(line)" }
+}
+
+/// One package of an npm/pnpm/yarn workspace.
+struct WorkspacePackage: Identifiable, Sendable, Equatable {
+    var name: String
+    var directory: URL
+    /// Path below the workspace root.
+    var relativePath: String
+    var scriptNames: [String]
+    var id: String { directory.path }
+}
+
+/// What `WorkspaceDetector` learned about the opened folder.
+struct WorkspaceLayout: Sendable, Equatable {
+    enum Orchestrator: String, Sendable { case turbo = "Turborepo", nx = "Nx", lerna = "Lerna" }
+    var manager: NPMPackageManager
+    var orchestrator: Orchestrator?
+    var packages: [WorkspacePackage]
+    var isMonorepo: Bool { !packages.isEmpty }
+}
+
+/// One row of the generic framework palette (routes, workspace packages).
+struct FrameworkPaletteItem: Identifiable, Sendable {
+    enum Target: Sendable {
+        case file(URL, line: Int)
+        case npmPackage(id: String)
+    }
+    var id: String
+    var title: String
+    var subtitle: String
+    var badge: String
+    var icon: String
+    var target: Target
+}
+
+/// Content of the generic framework palette (routes, workspace packages).
+struct FrameworkPalette: Sendable {
+    var title: String
+    var items: [FrameworkPaletteItem]
 }

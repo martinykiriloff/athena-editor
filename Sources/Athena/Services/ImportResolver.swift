@@ -105,6 +105,59 @@ actor ImportResolver {
         }
     }
 
+    // MARK: - Alias completion
+
+    /// Import specifiers to offer for the partial string `partial` typed in
+    /// an import of `dir`'s file, from the nearest tsconfig/jsconfig `paths`:
+    /// the alias roots themselves (`@/`) while the partial is still a prefix
+    /// of one, then the entries of the mapped directory once the alias
+    /// prefix is complete (extensions dropped, directories end in `/`).
+    static func aliasCompletions(forPartial partial: String, from dir: URL, workspaceURL: URL?) -> [String] {
+        var current = dir.standardizedFileURL
+        let stop = workspaceURL?.standardizedFileURL.path
+        let fm = FileManager.default
+        var results: [String] = []
+        while true {
+            for name in ["tsconfig.json", "jsconfig.json"] {
+                let configURL = current.appendingPathComponent(name)
+                guard let options = compilerOptions(at: configURL, depth: 0) else { continue }
+                let base = options.baseUrl.map { current.appendingPathComponent($0).standardized } ?? options.configDir
+                for (pattern, targets) in options.paths {
+                    guard let star = pattern.firstIndex(of: "*") else {
+                        if pattern.hasPrefix(partial) { results.append(pattern) }
+                        continue
+                    }
+                    let aliasPrefix = String(pattern[..<star])
+                    if aliasPrefix.hasPrefix(partial) && partial.count < aliasPrefix.count {
+                        results.append(aliasPrefix)
+                        continue
+                    }
+                    guard partial.hasPrefix(aliasPrefix) else { continue }
+                    let rest = String(partial.dropFirst(aliasPrefix.count))
+                    let slash = rest.lastIndex(of: "/")
+                    let subdir = slash.map { String(rest[..<$0]) } ?? ""
+                    let stem = slash.map { String(rest[rest.index(after: $0)...]) } ?? rest
+                    for target in targets {
+                        let mapped = target.replacingOccurrences(of: "*", with: subdir)
+                        let listDir = base.appendingPathComponent(mapped).standardized
+                        guard let items = try? fm.contentsOfDirectory(atPath: listDir.path) else { continue }
+                        for item in items.sorted() where !item.hasPrefix(".") && item != "node_modules" {
+                            let isDirectory = isDir(listDir.appendingPathComponent(item))
+                            let display = isDirectory ? item + "/" : (item as NSString).deletingPathExtension
+                            guard display.hasPrefix(stem) else { continue }
+                            let prefix = aliasPrefix + (subdir.isEmpty ? "" : subdir + "/")
+                            results.append(prefix + display)
+                        }
+                    }
+                }
+            }
+            if !results.isEmpty || current.path == stop || current.path == "/" { break }
+            current = current.deletingLastPathComponent()
+        }
+        var seen = Set<String>()
+        return results.filter { seen.insert($0).inserted }
+    }
+
     private struct CompilerOptions {
         var baseUrl: String?
         var paths: [String: [String]]

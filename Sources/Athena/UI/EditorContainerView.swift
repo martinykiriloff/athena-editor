@@ -382,6 +382,9 @@ struct CodeEditorView: View {
                 },
                 onRequestHover: { line, col in
                     guard let fileURL = tab.fileURL else { return nil }
+                    if let text = await appState.packageJSONHover(fileURL: fileURL, content: tab.content, line: line) {
+                        return text
+                    }
                     return try? await appState.lspManager.hover(
                         fileURL: fileURL, line: line - 1, character: col - 1
                     )
@@ -455,8 +458,12 @@ struct CodeEditorView: View {
                         drizzleItems = []
                     }
                     // Merge: Drizzle first, then LSP; deduplicate by label
+                    let tailwindItems = appState.tailwindCompletions(content: tab.content, line: line, col: col)
+                    let aliasItems = tab.fileURL.map {
+                        appState.importAliasCompletions(content: tab.content, line: line, col: col, fileURL: $0)
+                    } ?? []
                     var seen = Set<String>()
-                    return (drizzleItems + lspItems).filter { seen.insert($0.label).inserted }
+                    return (aliasItems + tailwindItems + drizzleItems + lspItems).filter { seen.insert($0.label).inserted }
                 },
                 onResolveCompletionDoc: { itemID in
                     guard let fileURL = tab.fileURL else { return nil }

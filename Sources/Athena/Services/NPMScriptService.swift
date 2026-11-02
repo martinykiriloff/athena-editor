@@ -56,12 +56,21 @@ actor NPMScriptService {
             }
         }
 
+        // Workspace packages (pnpm/npm/yarn workspaces) wherever they live.
+        let seen = Set(packages.map(\.id))
+        for member in WorkspaceDetector.detect(in: workspace).packages {
+            let manifest = member.directory.appendingPathComponent("package.json")
+            if !seen.contains(manifest.path), let pkg = parsePackage(at: manifest, fallbackRoot: workspace) {
+                packages.append(pkg)
+            }
+        }
+
         return packages
     }
 
     // MARK: - Private
 
-    private func parsePackage(at url: URL) -> NPMPackageInfo? {
+    private func parsePackage(at url: URL, fallbackRoot: URL? = nil) -> NPMPackageInfo? {
         guard let data = try? Data(contentsOf: url),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let rawScripts = json["scripts"] as? [String: String],
@@ -70,7 +79,7 @@ actor NPMScriptService {
 
         let name = json["name"] as? String ?? url.deletingLastPathComponent().lastPathComponent
         let dir  = url.deletingLastPathComponent()
-        let pm   = detectPackageManager(in: dir)
+        let pm   = detectPackageManager(in: dir, fallbackRoot: fallbackRoot)
         let scripts = rawScripts
             .sorted { $0.key.localizedCompare($1.key) == .orderedAscending }
             .map { NPMScript(name: $0.key, command: $0.value) }
@@ -78,10 +87,12 @@ actor NPMScriptService {
         return NPMPackageInfo(id: url.path, path: url, name: name, scripts: scripts, packageManager: pm)
     }
 
-    private func detectPackageManager(in dir: URL) -> NPMPackageManager {
+    private func detectPackageManager(in dir: URL, fallbackRoot: URL? = nil) -> NPMPackageManager {
         let fm = FileManager.default
         if fm.fileExists(atPath: dir.appendingPathComponent("pnpm-lock.yaml").path) { return .pnpm }
         if fm.fileExists(atPath: dir.appendingPathComponent("yarn.lock").path)      { return .yarn  }
+        // Workspace members share the root's lockfile.
+        if let fallbackRoot { return WorkspaceDetector.detect(in: fallbackRoot).manager }
         return .npm
     }
 }

@@ -376,6 +376,7 @@ struct EditorView: NSViewRepresentable {
 
         let coord = context.coordinator
         coord.parent = self          // keep fileURL and callbacks fresh on every render
+        (textView.layoutManager as? AthenaLayoutManager)?.tailwindSwatches = TailwindSupport.supportsSwatches(fileURL: fileURL)
         coord.currentTabSize      = tabSize
         coord.currentInsertSpaces = insertSpaces
         coord.currentDetectIndentation = detectIndentation
@@ -1101,10 +1102,11 @@ extension EditorView {
                 guard tv.window?.firstResponder === tv else { return }
                 decorations.perform(command)
             case .goToLine, .toggleComment, .indent, .outdent, .selectNextOccurrence,
-                 .findReferences, .renameSymbol, .quickFix,
+                 .findReferences, .renameSymbol, .quickFix, .refactor,
                  .moveLineUp, .moveLineDown, .copyLineUp, .copyLineDown, .deleteLine:
                 guard tv.window?.firstResponder === tv else { return }
                 switch command {
+                case .refactor(let group): requestQuickFix(tv, refactorGroup: group, refactorOnly: true)
                 case .goToLine:      promptGoToLine(tv)
                 case .toggleComment: toggleComment(tv)
                 case .indent:        shiftIndent(tv, indent: true)
@@ -1228,7 +1230,7 @@ extension EditorView {
         /// Asks the language server for code actions at the selection and
         /// pops a menu of them at the caret. A reply that arrives after the
         /// text or selection changed is dropped rather than shown stale.
-        private func requestQuickFix(_ tv: NSTextView) {
+        private func requestQuickFix(_ tv: NSTextView, refactorGroup: RefactorGroup? = nil, refactorOnly: Bool = false) {
             let selection = tv.selectedRange()
             let text = tv.string
             let start = position(in: text, at: selection.location)
@@ -1237,8 +1239,39 @@ extension EditorView {
                 guard let self else { return }
                 let actions = await self.parent.onRequestCodeActions(start, end)
                 guard tv.string == text, tv.selectedRange() == selection else { return }
-                self.showQuickFixMenu(actions, in: tv)
+                if refactorOnly {
+                    self.showRefactorMenu(actions, group: refactorGroup, in: tv)
+                } else {
+                    self.showQuickFixMenu(actions, in: tv)
+                }
             }
+        }
+
+        /// The Refactor menu (⌃T): only `refactor*` actions, under a header
+        /// per family. Choosing one goes through `codeActionChosen`, the
+        /// same path as Quick Fix.
+        private func showRefactorMenu(_ actions: [CodeAction], group: RefactorGroup?, in tv: NSTextView) {
+            let sections = CodeAction.refactorMenu(actions, only: group)
+            pendingCodeActions = sections.flatMap(\.actions)
+            let menu = NSMenu()
+            menu.autoenablesItems = false
+            if sections.isEmpty {
+                let item = NSMenuItem(title: "No refactorings available here", action: nil, keyEquivalent: "")
+                item.isEnabled = false
+                menu.addItem(item)
+            }
+            var tag = 0
+            for section in sections {
+                menu.addItem(NSMenuItem.sectionHeader(title: section.group.title))
+                for action in section.actions {
+                    let item = NSMenuItem(title: action.title, action: #selector(codeActionChosen(_:)), keyEquivalent: "")
+                    item.target = self
+                    item.tag = tag
+                    tag += 1
+                    menu.addItem(item)
+                }
+            }
+            menu.popUp(positioning: nil, at: caretMenuPoint(in: tv), in: tv)
         }
 
         private func showQuickFixMenu(_ actions: [CodeAction], in tv: NSTextView) {

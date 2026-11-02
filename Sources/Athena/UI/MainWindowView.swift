@@ -150,6 +150,8 @@ struct MainWindowView: View {
             .overlay { if appState.taskCenter.showPicker { TaskPickerView() } }
             .overlay { if appState.trust.promptPresented { WorkspaceTrustPromptView() } }
             .overlay { if appState.showWorkspaceSymbols { WorkspaceSymbolView() } }
+            .overlay { if appState.showSearchEverywhere { SearchEverywhereView() } }
+            .overlay { if appState.frameworkPalette != nil { FrameworkPaletteView() } }
             .overlay { if appState.showDiffViewer { DiffViewerView() } }
             .overlay { if appState.localHistory.isPresented { LocalHistoryView() } }
             // Break the notification chain into two modifiers so the type-checker

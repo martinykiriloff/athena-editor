@@ -133,7 +133,7 @@ struct WorkspaceSymbolView: View {
 
 // MARK: - Row
 
-private struct WorkspaceSymbolRow: View {
+struct WorkspaceSymbolRow: View {
     let symbol: WorkspaceSymbol
     let isSelected: Bool
     @Environment(AppState.self) private var appState

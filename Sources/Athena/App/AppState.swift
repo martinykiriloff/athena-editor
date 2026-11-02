@@ -326,6 +326,14 @@ final class AppState {
     var quickOpenPrefill: String = ""
     /// ⌘T "Go to Symbol in Workspace" overlay (LSP `workspace/symbol`).
     var showWorkspaceSymbols: Bool = false
+    /// Search Everywhere overlay (files, symbols, actions, text).
+    var showSearchEverywhere: Bool = false
+    /// Generic list palette for Next/Nest routes and workspace packages.
+    var frameworkPalette: FrameworkPalette?
+    /// Monorepo layout and Tailwind flag, refreshed when a folder opens.
+    var workspaceLayout: WorkspaceLayout?
+    var isTailwindWorkspace: Bool = false
+    @ObservationIgnored let packageVersionService = PackageVersionService()
 
     // MARK: - Explorer (file tree context menu)
 
@@ -920,6 +928,7 @@ final class AppState {
         AppState.registerRecentWorkspace(url)
 
         await discoverNPMPackages()
+        await refreshFrameworkInfo()
         // Load SFCC connections here, not (only) in the SFCC sidebar's
         // `.task` — otherwise auto-upload silently does nothing until the
         // panel is first opened in a launch.
@@ -3535,6 +3544,19 @@ final class AppState {
             postEditorCommand(.renameSymbol)
         case .quickFix:
             postEditorCommand(.quickFix)
+        case .refactorThis:    postEditorCommand(.refactor(nil))
+        case .refactorExtract: postEditorCommand(.refactor(.extract))
+        case .refactorInline:  postEditorCommand(.refactor(.inline))
+        case .refactorMove:    postEditorCommand(.refactor(.move))
+        case .refactorRewrite: postEditorCommand(.refactor(.rewrite))
+        case .safeDelete:
+            await safeDeleteAtCaret()
+        case .searchEverywhere:
+            showSearchEverywhere = true
+        case .showRoutes:
+            await presentRoutePalette()
+        case .showWorkspacePackages:
+            presentWorkspacePackagePalette()
         case .moveLineUp:
             postEditorCommand(.moveLineUp)
         case .moveLineDown:

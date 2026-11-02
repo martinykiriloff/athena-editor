@@ -201,6 +201,31 @@ final class AthenaLayoutManager: NSLayoutManager {
         }
     }
 
+    // MARK: - Tailwind colour bars
+
+    /// Set per file (see `TailwindSupport.supportsSwatches`): paints a thin
+    /// bar of the utility's colour under `bg-red-500`-style tokens.
+    var tailwindSwatches: Bool = false
+
+    private func drawTailwindColorBars(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
+        guard tailwindSwatches, let textStorage, let container = textContainers.first else { return }
+        let charRange = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
+        for token in TailwindSupport.colorTokens(in: textStorage.string, range: charRange) {
+            let glyphs = glyphRange(forCharacterRange: token.range, actualCharacterRange: nil)
+            let color = NSColor(
+                srgbRed: CGFloat((token.hex >> 16) & 0xFF) / 255,
+                green: CGFloat((token.hex >> 8) & 0xFF) / 255,
+                blue: CGFloat(token.hex & 0xFF) / 255,
+                alpha: CGFloat(token.alpha))
+            color.setFill()
+            enumerateEnclosingRects(forGlyphRange: glyphs, withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
+                                    in: container) { rect, _ in
+                let bar = NSRect(x: rect.minX + origin.x, y: rect.maxY + origin.y - 3, width: rect.width, height: 3)
+                NSBezierPath(roundedRect: bar, xRadius: 1.5, yRadius: 1.5).fill()
+            }
+        }
+    }
+
     // MARK: - Line-end annotations (inlay hints, code lens)
 
     /// One piece of dim text drawn after the end of a line. Never part of the
@@ -298,6 +323,7 @@ final class AthenaLayoutManager: NSLayoutManager {
     override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
         super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
         drawIndentGuides(forGlyphRange: glyphsToShow, at: origin)
+        drawTailwindColorBars(forGlyphRange: glyphsToShow, at: origin)
         guard !symbolHighlightRanges.isEmpty, let container = textContainers.first else { return }
         let length = textStorage?.length ?? 0
         symbolHighlightColor.setFill()
