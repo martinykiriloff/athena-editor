@@ -42,7 +42,7 @@ extension AppState {
     /// Every diagnostic ordered by file path, then line and column — the
     /// order the Problems panel lists them in and F8 walks.
     var sortedDiagnostics: [Diagnostic] {
-        diagnostics.values.joined().sorted(by: Self.problemOrder)
+        mergedDiagnostics.values.joined().sorted(by: Self.problemOrder)
     }
 
     nonisolated static func problemOrder(_ a: Diagnostic, _ b: Diagnostic) -> Bool {

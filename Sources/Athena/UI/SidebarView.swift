@@ -35,6 +35,8 @@ struct SidebarView: View {
                     NPMScriptsView()
                 case .debug:
                     DebugSidebarView()
+                case .testing:
+                    TestingView()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -57,6 +59,7 @@ struct SidebarView: View {
         case .sfcc:       return "SFCC Sandboxes"
         case .npm:        return "NPM Scripts"
         case .debug:      return "Run & Debug"
+        case .testing:    return "Testing"
         }
     }
 }

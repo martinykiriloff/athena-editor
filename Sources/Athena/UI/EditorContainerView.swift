@@ -224,7 +224,7 @@ struct CodeEditorView: View {
 
     private var fileDiagnostics: [Diagnostic] {
         guard let url = tab.fileURL else { return [] }
-        return appState.diagnostics[url] ?? []
+        return appState.allDiagnostics(for: url)
     }
 
     private var fileGitLineChanges: [Int: GitLineChangeType] {
@@ -339,8 +339,7 @@ struct CodeEditorView: View {
                 detectIndentation: appState.editorDetectIndentation && !editorConfig.specifiesIndentation,
                 blameInfo:        blameInfo,
                 diagnostics:      fileDiagnostics,
-                gitLineChanges:   fileGitLineChanges,
-                isConflictScanTrusted: fileIsConflictScanTrusted,
+                gitLineChanges:   fileGitLineChanges,                isConflictScanTrusted: fileIsConflictScanTrusted,
                 fileURL:          tab.fileURL,
                 overlayAppState:  appState,
                 isFocusedGroup:   appState.focusedGroup == side,
@@ -429,6 +428,8 @@ struct CodeEditorView: View {
                     guard let path = tab.fileURL?.path else { return }
                     appState.toggleBreakpoint(filePath: path, line: line)
                 },
+                testMarks: isLargeFile ? [:] : appState.testGutterMarks(for: tab),
+                onRunTest: { line in appState.runTest(at: line, in: tab) },
                 onCompareConflict: { region in
                     guard let url = tab.fileURL else { return }
                     appState.openDiffViewer(forConflict: region, in: url)
