@@ -14,6 +14,8 @@ struct UpdateRelease: Sendable, Equatable {
     let notes: String
     let downloadURL: URL
     let pageURL: URL?
+    /// `<asset>.sha256` published alongside the archive. Install is refused without it.
+    var checksumURL: URL? = nil
 }
 
 enum UpdateState: Sendable, Equatable {
@@ -162,7 +164,7 @@ final class UpdateService {
         pendingVersion = release.version
         state = .downloading
         do {
-            let appURL = try await downloadAndExtract(from: release.downloadURL)
+            let appURL = try await downloadAndExtract(from: release.downloadURL, checksumURL: release.checksumURL)
             state = .readyToInstall(appURL: appURL)
             await prepare()
             installAndRelaunch(newAppURL: appURL)
@@ -236,16 +238,27 @@ private func fetchLatestRelease(owner: String, repo: String) async throws -> Upd
     else {
         throw UpdateError.noArchive(version)
     }
+    let checksumAsset = release.assets.first { $0.name == asset.name + ".sha256" || $0.name == asset.name + ".sha256sum" }
     return UpdateRelease(
         version: version,
         notes: release.body ?? "",
         downloadURL: downloadURL,
-        pageURL: release.htmlURL.flatMap(URL.init(string:))
+        pageURL: release.htmlURL.flatMap(URL.init(string:)),
+        checksumURL: checksumAsset.flatMap { URL(string: $0.browserDownloadURL) }
     )
 }
 
-private func downloadAndExtract(from downloadURL: URL) async throws -> URL {
+private func downloadAndExtract(from downloadURL: URL, checksumURL: URL?) async throws -> URL {
     let (tmpFile, _) = try await URLSession.shared.download(from: downloadURL)
+
+    // Verify the archive against its published SHA-256 before unpacking anything.
+    var checksumText: String?
+    if let checksumURL {
+        let (data, _) = try await URLSession.shared.data(from: checksumURL)
+        checksumText = String(decoding: data, as: UTF8.self)
+    }
+    try UpdateVerifier.verifyChecksum(file: tmpFile, checksumText: checksumText,
+                                      assetName: downloadURL.lastPathComponent)
 
     let workDir = FileManager.default.temporaryDirectory
                     .appendingPathComponent("AthenaUpdate")
@@ -268,6 +281,8 @@ private func downloadAndExtract(from downloadURL: URL) async throws -> URL {
     guard let appURL = contents.first(where: { $0.lastPathComponent == "Athena.app" }) else {
         throw UpdateError.appNotFound
     }
+    // Refuse to swap in an app whose signature does not verify.
+    try await UpdateVerifier.verifyCodeSignature(of: appURL)
     return appURL
 }
 

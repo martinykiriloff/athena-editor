@@ -56,7 +56,7 @@ endif
 
 # ── Phony targets ──────────────────────────────────────────────────────────────
 
-.PHONY: all run build-debug build-release bundle dmg dmg-pretty test icon clean open help
+.PHONY: notarize notarize-check all run build-debug build-release bundle dmg dmg-pretty test icon clean open help
 
 all: bundle
 
@@ -160,6 +160,23 @@ dmg-pretty: bundle
 	    "$(DMG_NAME)" \
 	    "$(APP_BUNDLE)"
 	@echo "✅ $(DMG_NAME) ready"
+
+# ── Notarisation (UNTESTED: needs Apple Developer credentials) ─────────────────
+# Requires a notarytool keychain profile created once with:
+#   xcrun notarytool store-credentials <profile> --apple-id ... --team-id ... --password ...
+# then:  make notarize NOTARY_PROFILE=<profile> SIGN_ID="Developer ID Application: Name (TEAMID)"
+# This target has never been run; it needs a paid Apple Developer account.
+
+notarize-check:
+	@test -n "$(NOTARY_PROFILE)" || { echo "❌ NOTARY_PROFILE is not set (name of an 'xcrun notarytool store-credentials' profile). Aborting."; exit 1; }
+	@test "$(SIGN_ID)" != "-" || { echo "❌ SIGN_ID must be a 'Developer ID Application' identity, not ad-hoc. Aborting."; exit 1; }
+
+notarize: notarize-check
+	@$(MAKE) dmg SIGN_ID="$(SIGN_ID)"
+	xcrun notarytool submit "$(DMG_NAME)" --keychain-profile "$(NOTARY_PROFILE)" --wait
+	xcrun stapler staple "$(DMG_NAME)"
+	@shasum -a 256 "$(DMG_NAME)" > "$(DMG_NAME).sha256"
+	@echo "✅ Notarised $(DMG_NAME); checksum in $(DMG_NAME).sha256"
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
