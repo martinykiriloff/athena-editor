@@ -316,6 +316,18 @@ struct AthenaCommands: Commands {
                 performAction(.goToWorkspaceSymbol)
             }
 
+            Button("Search Everywhere…") {
+                performAction(.searchEverywhere)
+            }
+
+            Button("Go to Route…") {
+                performAction(.showRoutes)
+            }
+
+            Button("Workspace Packages…") {
+                performAction(.showWorkspacePackages)
+            }
+
             Divider()
 
             // ⌥⇧F12 and F2 are owned by the keybinding monitor; clicks route
@@ -331,6 +343,14 @@ struct AthenaCommands: Commands {
             // ⌘., F8 and ⇧F8 are owned by the keybinding monitor.
             Button("Quick Fix…") {
                 performAction(.quickFix)
+            }
+
+            Button("Refactor This…") {
+                performAction(.refactorThis)
+            }
+
+            Button("Safe Delete") {
+                performAction(.safeDelete)
             }
 
             Divider()

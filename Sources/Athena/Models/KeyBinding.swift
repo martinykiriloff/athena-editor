@@ -31,6 +31,9 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
     case goToSymbol         = "workbench.action.gotoSymbol"
     case runTask            = "workbench.action.tasks.runTask"
     case goToWorkspaceSymbol = "workbench.action.showAllSymbols"
+    case searchEverywhere   = "athena.searchEverywhere"
+    case showRoutes         = "athena.framework.showRoutes"
+    case showWorkspacePackages = "athena.framework.showWorkspacePackages"
     case nextProblem        = "editor.action.marker.nextInFiles"
     case previousProblem    = "editor.action.marker.prevInFiles"
     // Layout
@@ -46,6 +49,12 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
     case findReferences      = "editor.action.referenceSearch.trigger"
     case renameSymbol        = "editor.action.rename"
     case quickFix            = "editor.action.quickFix"
+    case refactorThis        = "editor.action.refactor"
+    case refactorExtract     = "editor.action.refactor.extract"
+    case refactorInline      = "editor.action.refactor.inline"
+    case refactorMove        = "editor.action.refactor.move"
+    case refactorRewrite     = "editor.action.refactor.rewrite"
+    case safeDelete          = "athena.refactor.safeDelete"
     case moveLineUp          = "editor.action.moveLinesUpAction"
     case moveLineDown        = "editor.action.moveLinesDownAction"
     case copyLineUp          = "editor.action.copyLinesUpAction"
@@ -99,6 +108,9 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
         case .goToSymbol:        return "Go to Symbol"
         case .runTask:           return "Run Task"
         case .goToWorkspaceSymbol: return "Go to Symbol in Workspace"
+        case .searchEverywhere:  return "Search Everywhere"
+        case .showRoutes:        return "Go to Route (Next.js / NestJS)…"
+        case .showWorkspacePackages: return "Workspace Packages: Run Script…"
         case .nextProblem:       return "Go to Next Problem"
         case .previousProblem:   return "Go to Previous Problem"
         case .splitEditorRight:  return "Split Editor Right"
@@ -112,6 +124,12 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
         case .findReferences:    return "Find All References"
         case .renameSymbol:      return "Rename Symbol"
         case .quickFix:          return "Quick Fix"
+        case .refactorThis:      return "Refactor This…"
+        case .refactorExtract:   return "Refactor: Extract…"
+        case .refactorInline:    return "Refactor: Inline…"
+        case .refactorMove:      return "Refactor: Move…"
+        case .refactorRewrite:   return "Refactor: Rewrite…"
+        case .safeDelete:        return "Safe Delete"
         case .moveLineUp:        return "Move Line Up"
         case .moveLineDown:      return "Move Line Down"
         case .copyLineUp:        return "Copy Line Up"
@@ -133,7 +151,8 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
              .zoomIn, .zoomOut, .resetZoom, .splitEditorRight, .toggleZenMode:
             return "View"
         case .quickOpen, .commandPalette, .nextTab, .previousTab, .goToLine, .goToSymbol,
-             .goToWorkspaceSymbol,             .nextProblem, .previousProblem:
+             .goToWorkspaceSymbol, .searchEverywhere, .showRoutes, .showWorkspacePackages,
+             .nextProblem, .previousProblem:
             return "Navigation"
         case .runTask:
             return "Tasks"
@@ -144,6 +163,7 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
             return "SFCC"
         case .findInFile, .findAndReplace, .toggleComment, .indentLine, .outdentLine,
              .selectNextOccurrence, .findReferences, .renameSymbol, .quickFix,
+             .refactorThis, .refactorExtract, .refactorInline, .refactorMove, .refactorRewrite, .safeDelete,
              .moveLineUp, .moveLineDown, .copyLineUp, .copyLineDown, .deleteLine:
             return "Editor"
         }
@@ -292,6 +312,10 @@ struct KeyBinding: Identifiable, Codable, Sendable {
         KeyBinding(action: .goToSymbol,        combo: KeyCombo(key: "o",   command: true, shift: true)),
         KeyBinding(action: .runTask,           combo: KeyCombo(key: "r",   command: true, option: true)),
         KeyBinding(action: .goToWorkspaceSymbol, combo: KeyCombo(key: "t", command: true)),
+        // Search Everywhere: double-⇧ is unreliable in the key monitor, so ⌥⌘O.
+        KeyBinding(action: .searchEverywhere,  combo: KeyCombo(key: "o", command: true, option: true)),
+        KeyBinding(action: .showRoutes,        combo: nil),
+        KeyBinding(action: .showWorkspacePackages, combo: nil),
         KeyBinding(action: .nextProblem,       combo: KeyCombo(key: "f8")),
         KeyBinding(action: .previousProblem,   combo: KeyCombo(key: "f8",  shift: true)),
         // Layout — ⌘\ is VS Code's real macOS default for "Split Editor Right"
@@ -317,6 +341,14 @@ struct KeyBinding: Identifiable, Codable, Sendable {
         // Rename Symbol is plain F2, per VS Code, as directed.
         KeyBinding(action: .renameSymbol,       combo: KeyCombo(key: "f2")),
         KeyBinding(action: .quickFix,           combo: KeyCombo(key: ".",  command: true)),
+        // Refactor menu: WebStorm's ⌃T. The per-family entries and Safe
+        // Delete are palette-only.
+        KeyBinding(action: .refactorThis,       combo: KeyCombo(key: "t",  control: true)),
+        KeyBinding(action: .refactorExtract,    combo: nil),
+        KeyBinding(action: .refactorInline,     combo: nil),
+        KeyBinding(action: .refactorMove,       combo: nil),
+        KeyBinding(action: .refactorRewrite,    combo: nil),
+        KeyBinding(action: .safeDelete,         combo: nil),
         // Find All References deliberately deviates from VS Code's plain
         // ⇧F12: on stock Mac keyboard settings ("Use F1, F2, etc. keys as
         // standard function keys" off, the default), F12 alone is the

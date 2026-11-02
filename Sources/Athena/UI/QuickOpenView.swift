@@ -545,7 +545,7 @@ struct QuickOpenView: View {
 
 // MARK: - Row
 
-private struct QuickOpenRow: View {
+struct QuickOpenRow: View {
     let name: String
     /// Workspace-relative directory, precomputed by `QuickOpenEntry`.
     let relativeDirectory: String?
@@ -587,7 +587,7 @@ private struct QuickOpenRow: View {
 
 // MARK: - Command palette row
 
-private struct CommandPaletteRow: View {
+struct CommandPaletteRow: View {
     let binding: KeyBinding
     let isSelected: Bool
     @Environment(AppState.self) private var appState
@@ -628,7 +628,7 @@ private struct CommandPaletteRow: View {
 
 // MARK: - Symbol palette row (Go to Symbol, ⇧⌘O)
 
-private struct SymbolPaletteRow: View {
+struct SymbolPaletteRow: View {
     let symbol: DocumentSymbol
     let depth: Int
     let isSelected: Bool
