@@ -94,8 +94,115 @@ final class AthenaLayoutManager: NSLayoutManager {
         if !dropped.isEmpty { foldChips = [] }
     }
 
+    // MARK: - Fold chips
+
+    private func drawFoldChips(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
+        guard !foldState.merged.isEmpty, let ts = textStorage, let container = textContainers.first else { return }
+        let ns = ts.string as NSString
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let label = "\u{22EF}" as NSString
+        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: foldChipColor]
+        let labelSize = label.size(withAttributes: attrs)
+        for m in foldState.merged where m.location > 0 && NSMaxRange(m) <= ns.length {
+            let glyph = glyphIndexForCharacter(at: m.location - 1)
+            guard NSLocationInRange(glyph, glyphsToShow) else { continue }
+            let frag = lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+            let used = lineFragmentUsedRect(forGlyphAt: glyph, effectiveRange: nil)
+            _ = container
+            let chip = NSRect(x: origin.x + used.maxX + 4, y: origin.y + frag.minY + 2,
+                              width: labelSize.width + 10, height: max(4, frag.height - 4))
+            foldChipColor.withAlphaComponent(0.22).setFill()
+            NSBezierPath(roundedRect: chip, xRadius: 3, yRadius: 3).fill()
+            label.draw(at: NSPoint(x: chip.minX + 5, y: chip.minY + (chip.height - labelSize.height) / 2), withAttributes: attrs)
+            foldChips.removeAll { $0.range == m }
+            foldChips.append((chip, m))
+        }
+    }
+
+    /// The hidden range whose chip contains `point` (text-view coordinates).
+    func foldChipRange(at point: NSPoint) -> NSRange? {
+        foldChips.first { $0.rect.contains(point) }?.range
+    }
+
+    // MARK: - Indent guides
+
+    var showIndentGuides: Bool = false
+    var indentWidth: Int = 4
+    var guideColor: NSColor = NSColor.gray.withAlphaComponent(0.3)
+
+    private static func indentInfo(_ ns: NSString, line: NSRange, tab: Int) -> (columns: Int, blank: Bool, tabsOnly: Bool) {
+        var cols = 0, i = line.location, sawSpace = false
+        let end = NSMaxRange(line)
+        while i < end {
+            let c = ns.character(at: i)
+            if c == 0x20 { cols += 1; sawSpace = true } else if c == 0x09 { cols += tab } else { break }
+            i += 1
+        }
+        let blank = i >= end || ns.character(at: i) == 0x0A || ns.character(at: i) == 0x0D
+        return (cols, blank, !sawSpace)
+    }
+
+    /// Indent columns for a blank line: the smaller of the nearest non-blank
+    /// lines above and below, so guides run unbroken through empty lines.
+    private static func blankLineColumns(_ ns: NSString, line: NSRange, tab: Int) -> Int {
+        func neighbour(forward: Bool) -> Int? {
+            var probe = line
+            for _ in 0..<60 {
+                if forward {
+                    guard NSMaxRange(probe) < ns.length else { return nil }
+                    probe = ns.lineRange(for: NSRange(location: NSMaxRange(probe), length: 0))
+                } else {
+                    guard probe.location > 0 else { return nil }
+                    probe = ns.lineRange(for: NSRange(location: probe.location - 1, length: 0))
+                }
+                let info = indentInfo(ns, line: probe, tab: tab)
+                if !info.blank { return info.columns }
+            }
+            return nil
+        }
+        let up = neighbour(forward: false), down = neighbour(forward: true)
+        switch (up, down) {
+        case let (a?, b?): return min(a, b)
+        case let (a?, nil): return a
+        case let (nil, b?): return b
+        default: return 0
+        }
+    }
+
+    private func drawIndentGuides(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
+        guard showIndentGuides, indentWidth > 0, let ts = textStorage, ts.length > 0,
+              let container = textContainers.first else { return }
+        let ns = ts.string as NSString
+        let font = (ts.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
+            ?? NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+        let spaceW = (" " as NSString).size(withAttributes: [.font: font]).width
+        let tab = indentWidth
+        guideColor.setFill()
+        enumerateLineFragments(forGlyphRange: glyphsToShow) { rect, _, _, fragGlyphs, _ in
+            let chars = self.characterRange(forGlyphRange: fragGlyphs, actualGlyphRange: nil)
+            guard chars.location < ns.length else { return }
+            let line = ns.lineRange(for: NSRange(location: chars.location, length: 0))
+            let info = Self.indentInfo(ns, line: line, tab: tab)
+            let cols = info.blank ? Self.blankLineColumns(ns, line: line, tab: tab) : info.columns
+            guard cols > 0 else { return }
+            let baseX = origin.x + rect.minX + container.lineFragmentPadding
+            var column = 0, k = 0
+            while column < cols {
+                var x = baseX + CGFloat(column) * spaceW
+                if !info.blank, info.tabsOnly, line.location + k < ns.length {
+                    let g = self.glyphIndexForCharacter(at: line.location + k)
+                    x = origin.x + self.lineFragmentRect(forGlyphAt: g, effectiveRange: nil).minX + self.location(forGlyphAt: g).x
+                }
+                NSRect(x: x.rounded(), y: origin.y + rect.minY, width: 1, height: rect.height).fill()
+                column += tab
+                k += 1
+            }
+        }
+    }
+
     override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
         super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
+        drawIndentGuides(forGlyphRange: glyphsToShow, at: origin)
         guard !symbolHighlightRanges.isEmpty, let container = textContainers.first else { return }
         let length = textStorage?.length ?? 0
         symbolHighlightColor.setFill()
@@ -111,6 +218,7 @@ final class AthenaLayoutManager: NSLayoutManager {
 
     override func drawGlyphs(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
         super.drawGlyphs(forGlyphRange: glyphsToShow, at: origin)
+        drawFoldChips(forGlyphRange: glyphsToShow, at: origin)
 
         guard showWhitespace, let textStorage else { return }
         let nsString = textStorage.string as NSString

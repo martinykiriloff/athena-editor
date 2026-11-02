@@ -40,10 +40,18 @@ final class AthenaTextView: NSTextView {
     /// pending/visible hover tooltip should be cancelled/dismissed.
     var onHoverExit: (() -> Void)?
 
+    /// Called with the hidden range whose ellipsis chip was clicked.
+    var onFoldChipClick: ((NSRange) -> Void)?
+
     // MARK: - Mouse handling
 
     override func mouseDown(with event: NSEvent) {
         onMouseDown?()
+        if let lm = layoutManager as? AthenaLayoutManager,
+           let chip = lm.foldChipRange(at: convert(event.locationInWindow, from: nil)) {
+            onFoldChipClick?(chip)
+            return
+        }
         if event.modifierFlags.contains(.command) {
             let point   = convert(event.locationInWindow, from: nil)
             let charIdx = characterIndex(for: point)

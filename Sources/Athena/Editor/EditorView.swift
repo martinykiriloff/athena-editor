@@ -17,6 +17,18 @@ struct EditorView: NSViewRepresentable {
     /// False in large-file mode (`LargeFilePolicy`): syntax highlighting is
     /// skipped so typing and scrolling stay responsive on huge files.
     var highlightingEnabled: Bool = true
+    /// Indent guides, bracket-pair colours and sticky scroll (Settings →
+    /// Editor). All are suppressed in large-file mode regardless.
+    var indentGuides: Bool = true
+    var bracketPairColorization: Bool = true
+    var stickyScroll: Bool = true
+    /// 0-based header lines of the regions to re-fold when this document is
+    /// loaded, and the callback reporting later changes.
+    var foldedLines: [Int] = []
+    var onFoldedLinesChange: ([Int]) -> Void = { _ in }
+    /// `textDocument/foldingRange` for this file; nil falls back to the
+    /// editor's own brace/indentation ranges.
+    var onRequestFoldingRanges: () async -> [FoldRange]? = { nil }
     var fontSize:       CGFloat = 14
     var fontFamily:     String  = "JetBrains Mono"
     var fontLigatures:  Bool    = true
@@ -211,11 +223,21 @@ struct EditorView: NSViewRepresentable {
             coordinator?.parent.onCompareConflict(region)
         }
         gutter.installObservers(textView: textView)
-
+        gutter.onToggleFold = { [weak coordinator] line in coordinator?.decorations.toggleFold(atGutterLine: line) }
 
         configureTextView(textView, coordinator: context.coordinator)
 
         textView.string = content
+        let deco = context.coordinator.decorations
+        deco.textView = textView
+        deco.scrollView = scrollView
+        deco.gutter = gutter
+        deco.requestServerFoldRanges = { [weak coordinator] in await coordinator?.parent.onRequestFoldingRanges() }
+        deco.onFoldedLinesChange = { [weak coordinator] lines in coordinator?.parent.onFoldedLinesChange(lines) }
+        textView.onFoldChipClick = { [weak deco] range in deco?.unfoldChip(range) }
+        deco.configure(enabled: highlightingEnabled, indentGuides: indentGuides, bracketColors: bracketPairColorization,
+                       stickyScroll: stickyScroll, language: language, tabSize: tabSize, theme: theme)
+        deco.documentReplaced(foldedLines: foldedLines)
         context.coordinator.refreshDetectedIndentation(from: content)
         context.coordinator.applyHighlighting(to: textView)
         context.coordinator.currentDiagnostics = diagnostics
@@ -394,8 +416,13 @@ struct EditorView: NSViewRepresentable {
             }
         }
 
+        coord.decorations.configure(enabled: highlightingEnabled, indentGuides: indentGuides,
+                                    bracketColors: bracketPairColorization, stickyScroll: stickyScroll,
+                                    language: language, tabSize: tabSize, theme: theme)
+
         if textView.string != content {
             textView.string = content
+            coord.decorations.documentReplaced(foldedLines: foldedLines)
             // A different document (tab switch, reload, revert) has its own
             // indentation; re-read it here rather than per keystroke.
             coord.refreshDetectedIndentation(from: content)
@@ -597,6 +624,9 @@ extension EditorView {
 
     @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
+
+        /// Folding, bracket colours, indent guides and sticky scroll.
+        let decorations = EditorDecorationController()
 
         var parent: EditorView
         var highlighter: SyntaxHighlighter
@@ -1052,7 +1082,7 @@ extension EditorView {
             case .findAndReplace: guard parent.isFocusedGroup else { return }; findReplaceController?.present(withReplace: true)
             case .fold, .unfold, .toggleFold, .foldAll, .unfoldAll, .foldLevel, .goToMatchingBracket:
                 guard tv.window?.firstResponder === tv else { return }
-                break // TEMP
+                decorations.perform(command)
             case .goToLine, .toggleComment, .indent, .outdent, .selectNextOccurrence,
                  .findReferences, .renameSymbol, .quickFix,
                  .moveLineUp, .moveLineDown, .copyLineUp, .copyLineDown, .deleteLine:
@@ -1743,6 +1773,7 @@ extension EditorView {
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
             parent.onContentChange(textView.string)
+            decorations.textChanged()
             applyHighlighting(to: textView, edit: consumePendingHighlightEdit(for: textView))
 
             // Dismiss ghost text and hover tooltip on every keystroke; reschedule both triggers.
@@ -1787,6 +1818,7 @@ extension EditorView {
                 theme: parent.theme
             )
             updateSignatureHelp(in: textView, allowShow: false)
+            decorations.selectionChanged()
             updateBracketMatchHighlight(in: textView)
             updateDiagnosticHighlights(in: textView)
             updateConflictHighlights(in: textView)
