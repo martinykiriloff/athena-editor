@@ -199,7 +199,9 @@ final class SyntaxHighlighter {
             // `foo<T>(x)`) stay untouched: the `<` must not follow an
             // identifier or closing bracket, and a one-letter uppercase name
             // (`<T>`) is treated as a type parameter, not a tag.
-            add(#"(?<![\w$)\]])</?((?:[A-Za-z][\w.:-]+|[a-z])(?=[\s/>]))"#, color: kw, group: 1)
+            add(#"(?<![\w$)\]])<((?:[A-Za-z][\w.:-]+|[a-z])(?=[\s/>]))"#, color: kw, group: 1)
+            // `</` can't start anything else, so closing tags need no lookbehind.
+            add(#"</((?:[A-Za-z][\w.:-]+|[a-z])(?=>))"#, color: kw, group: 1)
             add(#"(?<![\w$)\]])</?>"#, color: kw)
             add("`(?:[^`\\\\]|\\\\.)*`", color: str)
             add("\"(?:[^\"\\\\]|\\\\.)*\"", color: str)

@@ -186,6 +186,8 @@ final class AppState {
     let drizzleService: DrizzleCompletionService = DrizzleCompletionService()
     var claudeAPIKey: String = ""
     var ghostTextProvider: GhostTextProvider = .none
+    /// Per-language language-server launch overrides (Settings, Language Servers).
+    var languageServerOverrides: [Language: LanguageServerOverride] = [:]
     // 127.0.0.1, not "localhost": Ollama binds IPv4 only, but "localhost"
     // resolves to the IPv6 loopback (::1) first on many Macs — URLSession
     // hard-fails on that refused IPv6 attempt instead of falling back to
@@ -1163,6 +1165,7 @@ final class AppState {
         async let gtd  = settingsService.value(for: "ghostTextDebounceMs",    default: 700)
         async let gtc  = settingsService.value(for: "includeGhostTextContext", default: true)
         ghostTextProvider = GhostTextProvider(rawValue: await gtp) ?? .none
+        await loadLanguageServerOverrides()
         // An empty string is a valid `Codable` decode, not a missing key, so
         // a field a user cleared in Settings (the placeholder text is only a
         // visual hint — SwiftUI doesn't fall back to it) persists as `""`
