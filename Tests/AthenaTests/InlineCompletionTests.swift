@@ -195,3 +195,155 @@ struct InlineSuggestionDriverHelperTests {
         #expect(InlineSuggestionDriver.restOfLine(in: ns, from: 8) == "")
     }
 }
+
+// MARK: - Driver end to end (real window, real text view, run loop)
+
+@MainActor
+@Suite("InlineSuggestionDriver runtime", .serialized)
+struct InlineSuggestionDriverRuntimeTests {
+
+    /// A window-hosted text view wired like EditorView wires it: the
+    /// driver hears every change and selection change, and has an undo
+    /// manager (the window's).
+    @MainActor
+    final class Harness: NSObject, NSTextViewDelegate {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        let textView = AthenaTextView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+        let driver = InlineSuggestionDriver()
+        var requests: [InlineCompletionQuery] = []
+        var answer = "return a + b\n}"
+
+        override init() {
+            super.init()
+            window.isReleasedWhenClosed = false
+            textView.allowsUndo = true
+            textView.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
+            window.contentView = textView
+            textView.delegate = self
+            let label = NSTextField(labelWithString: "")
+            textView.addSubview(label)
+            driver.ghost.install(label: label)
+            driver.textView = textView
+            driver.debounceMs = 10
+            driver.requestStream = { [weak self] query in
+                self?.requests.append(query)
+                let answer = self?.answer
+                return AsyncStream { continuation in
+                    continuation.yield(.finished(answer))
+                    continuation.finish()
+                }
+            }
+        }
+
+        func textView(_ textView: NSTextView, shouldChangeTextIn range: NSRange, replacementString: String?) -> Bool {
+            driver.willChangeText(range: range, replacement: replacementString)
+            return true
+        }
+        func textDidChange(_ notification: Notification) { driver.textDidChange() }
+        func textViewDidChangeSelection(_ notification: Notification) { driver.selectionDidChange() }
+
+        /// Types like a user: through insertText, so every delegate fires.
+        func type(_ s: String) {
+            textView.insertText(s, replacementRange: textView.selectedRange())
+        }
+
+        func key(_ keyCode: UInt16, _ chars: String, modifiers: NSEvent.ModifierFlags = []) -> NSEvent {
+            NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0,
+                             windowNumber: window.windowNumber, context: nil, characters: chars,
+                             charactersIgnoringModifiers: chars, isARepeat: false, keyCode: keyCode)!
+        }
+    }
+
+    /// Lets debounce tasks and main-queue hops run.
+    private func settle(_ ms: Int = 120) async {
+        let clock = ContinuousClock()
+        try? await clock.sleep(until: clock.now.advanced(by: .milliseconds(ms)))
+    }
+
+    /// Waits (up to 3 s — the first window in a process is slow to come
+    /// up) until `condition` holds.
+    private func waitFor(_ condition: () -> Bool) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(3))
+        while !condition(), clock.now < deadline {
+            try? await clock.sleep(until: clock.now.advanced(by: .milliseconds(20)))
+        }
+    }
+
+    @Test func suggestShowAcceptUndo() async {
+        let h = Harness()
+        h.type("function add(a, b) {\n  ")
+        await waitFor { h.driver.ghost.hasSuggestion }
+        #expect(h.requests.count == 1)
+        #expect(h.driver.ghost.suggestion == "return a + b\n}")
+
+        // Tab accepts the whole suggestion as one undoable step.
+        #expect(h.driver.handleKey(h.key(48, "\t")))
+        #expect(h.textView.string == "function add(a, b) {\n  return a + b\n}")
+        #expect(h.driver.ghost.hasSuggestion == false)
+        h.textView.undoManager?.undo()
+        #expect(h.textView.string == "function add(a, b) {\n  ")
+    }
+
+    @Test func typingThroughKeepsTheRest() async {
+        let h = Harness()
+        h.type("function add(a, b) {\n  ")
+        await waitFor { h.driver.ghost.hasSuggestion }
+        h.type("ret")
+        await settle()
+        #expect(h.driver.ghost.suggestion == "urn a + b\n}")
+        // No new request while typing what the suggestion says.
+        #expect(h.requests.count == 1)
+    }
+
+    @Test func movingTheCaretDismisses() async {
+        let h = Harness()
+        h.type("function add(a, b) {\n  ")
+        await waitFor { h.driver.ghost.hasSuggestion }
+        #expect(h.driver.ghost.hasSuggestion)
+        h.textView.setSelectedRange(NSRange(location: 3, length: 0))
+        await settle(30)
+        #expect(h.driver.ghost.hasSuggestion == false)
+    }
+
+    @Test func escapeDismissesAndIsRemembered() async {
+        let h = Harness()
+        h.type("function add(a, b) {\n  ")
+        await waitFor { h.driver.ghost.hasSuggestion }
+        #expect(h.driver.handleKey(h.key(53, "\u{1b}")))
+        #expect(h.driver.ghost.hasSuggestion == false)
+        // Leave and come back to the very same spot: no suggestion again.
+        h.type("x")
+        h.textView.doCommand(by: #selector(NSText.deleteBackward(_:)))
+        await settle()
+        #expect(h.driver.ghost.hasSuggestion == false)
+    }
+
+    @Test func wordAcceptAdvances() async {
+        let h = Harness()
+        h.answer = "return a + b"
+        h.type("function add(a, b) {\n  ")
+        await waitFor { h.driver.ghost.hasSuggestion }
+        #expect(h.driver.handleKey(h.key(124, "", modifiers: .command)))
+        #expect(h.textView.string.hasSuffix("  return"))
+        #expect(h.driver.ghost.suggestion == " a + b")
+    }
+
+    @Test func staleReplyIsDropped() async {
+        let h = Harness()
+        // The reply arrives after the caret moved: it must not be shown.
+        h.driver.requestStream = { [weak tv = h.textView] _ in
+            AsyncStream { continuation in
+                Task { @MainActor in
+                    tv?.setSelectedRange(NSRange(location: 0, length: 0))
+                    continuation.yield(.finished("return a + b"))
+                    continuation.finish()
+                }
+            }
+        }
+        h.type("function add(a, b) {\n  ")
+        await settle()
+        #expect(h.driver.ghost.hasSuggestion == false)
+    }
+}
