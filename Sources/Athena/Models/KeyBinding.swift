@@ -61,6 +61,11 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
     case debugStepOut           = "workbench.action.debug.stepOut"
     // SFCC
     case sfccUploadAllCartridges = "athena.sfcc.uploadAllCartridges"
+    // Workspace / safety
+    case trustWorkspace     = "workbench.trust.manage"
+    case exportSettingsProfile = "athena.profile.export"
+    case importSettingsProfile = "athena.profile.import"
+    case showLogs           = "athena.diagnostics.showLogs"
     // Zoom
     case zoomIn             = "workbench.action.zoomIn"
     case zoomOut            = "workbench.action.zoomOut"
@@ -117,6 +122,10 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
         case .copyLineUp:        return "Copy Line Up"
         case .copyLineDown:      return "Copy Line Down"
         case .deleteLine:        return "Delete Line"
+        case .trustWorkspace:    return "Workspace: Trust This Workspace"
+        case .exportSettingsProfile: return "Settings Profile: Export…"
+        case .importSettingsProfile: return "Settings Profile: Import…"
+        case .showLogs:          return "Show Logs"
         case .zoomIn:            return "Zoom In"
         case .zoomOut:           return "Zoom Out"
         case .resetZoom:         return "Reset Zoom"
@@ -142,6 +151,8 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
             return "Debug"
         case .sfccUploadAllCartridges:
             return "SFCC"
+        case .trustWorkspace, .exportSettingsProfile, .importSettingsProfile, .showLogs:
+            return "Workspace"
         case .findInFile, .findAndReplace, .toggleComment, .indentLine, .outdentLine,
              .selectNextOccurrence, .findReferences, .renameSymbol, .quickFix,
              .moveLineUp, .moveLineDown, .copyLineUp, .copyLineDown, .deleteLine:
@@ -335,6 +346,10 @@ struct KeyBinding: Identifiable, Codable, Sendable {
         // one was to know the gutter was clickable.
         KeyBinding(action: .toggleBreakpoint,      combo: KeyCombo(key: "f9")),
         KeyBinding(action: .removeAllBreakpoints,  combo: nil),
+        KeyBinding(action: .trustWorkspace,        combo: nil),
+        KeyBinding(action: .exportSettingsProfile, combo: nil),
+        KeyBinding(action: .importSettingsProfile, combo: nil),
+        KeyBinding(action: .showLogs,              combo: nil),
         KeyBinding(action: .startOrContinueDebug,  combo: KeyCombo(key: "f5")),
         KeyBinding(action: .stopDebug,             combo: KeyCombo(key: "f5", shift: true)),
         KeyBinding(action: .debugStepOver,         combo: KeyCombo(key: "f10")),

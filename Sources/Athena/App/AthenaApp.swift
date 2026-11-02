@@ -22,6 +22,7 @@ struct AthenaApp: App {
         // ignores SIGPIPE globally for exactly this reason; the write call
         // still surfaces a normal EPIPE error instead of killing the app.
         signal(SIGPIPE, SIG_IGN)
+        CrashLog.install()
     }
 
     var body: some Scene {

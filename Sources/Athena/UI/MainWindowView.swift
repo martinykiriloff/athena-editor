@@ -148,6 +148,7 @@ struct MainWindowView: View {
             .background(Color(nsColor: .windowBackgroundColor))
             .overlay { if appState.showQuickOpen { QuickOpenView() } }
             .overlay { if appState.taskCenter.showPicker { TaskPickerView() } }
+            .overlay { if appState.trust.promptPresented { WorkspaceTrustPromptView() } }
             .overlay { if appState.showWorkspaceSymbols { WorkspaceSymbolView() } }
             .overlay { if appState.showDiffViewer { DiffViewerView() } }
             .overlay { if appState.localHistory.isPresented { LocalHistoryView() } }
@@ -169,6 +170,8 @@ struct MainWindowView: View {
             GeometryReader { geo in
                 panelRow(width: geo.size.width)
             }
+
+            if appState.isRestrictedMode && !appState.trust.promptPresented { RestrictedModeBanner() }
 
             ForEach(appState.toolNotices) { notice in
                 ToolNoticeBanner(notice: notice)

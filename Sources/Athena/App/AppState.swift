@@ -220,6 +220,7 @@ final class AppState {
     var runningScriptKeys: Set<String> = []
     @ObservationIgnored private var runningScriptProcesses: [String: Process] = [:]
     let npmScriptService: NPMScriptService = NPMScriptService()
+    let trust: TrustCenter          // Workspace Trust — see AppState+Trust.swift
     let taskCenter = TaskCenter()   // .vscode/tasks.json — see AppState+Tasks.swift
 
     // Selected package + script for the Scripts bottom panel.
@@ -660,6 +661,7 @@ final class AppState {
         self.claudeSessionStore = claudeSessionStore
         self.searchService = searchService
         self.settingsService = settingsService
+        self.trust = TrustCenter(settings: settingsService)
         self.keychainService = keychainService
         self.lspManager = lspManager
         self.keyBindingService = keyBindingService
@@ -867,6 +869,7 @@ final class AppState {
         // server for the language already exists — would find the stale server
         // still registered and skip starting a correctly-rooted one.
         await lspManager.stopAllServers()
+        await lspManager.setWorkspaceTrusted(false)
         diagnostics = [:]
 
         // Source Control state is per-repository; a File History filter,
@@ -881,6 +884,7 @@ final class AppState {
         commitMessage = ""
 
         workspace = WorkspaceModel(rootURL: url)
+        await evaluateTrust(for: url)
         statusMessage = "Opening workspace \(url.lastPathComponent)…"
 
         do {
@@ -1454,7 +1458,8 @@ final class AppState {
 
         guard
             AppState.prettierLanguages.contains(tab.language),
-            let ws = workspace
+            let ws = workspace,
+            requireTrust(for: .workspaceFormatter)
         else { return nil }
 
         return try? await prettierService.format(
@@ -1653,6 +1658,7 @@ final class AppState {
     }
 
     func runNPMScript(_ script: String, in package: NPMPackageInfo) {
+        guard requireTrust(for: .npmScript) else { return }
         let dir = package.path.deletingLastPathComponent()
         let key = package.id + ":" + script
         let pm  = package.packageManager.rawValue
@@ -1756,6 +1762,7 @@ final class AppState {
     }
 
     func startDebugging() async {
+        guard requireTrust(for: .debug) else { return }
         guard debugState == .idle || debugState == .stopped,
               let config = launchConfigs.first(where: { $0.id == selectedLaunchConfigId })
                ?? launchConfigs.first
@@ -2127,7 +2134,7 @@ final class AppState {
     /// remote copy is replaced, not merged: files deleted locally disappear
     /// from the sandbox too, which is the point of a full re-upload.
     func uploadAllCartridges() async {
-        guard !isUploadingCartridges else { return }
+        guard !isUploadingCartridges, requireTrust(for: .sfccUpload) else { return }
         guard let conn = sfccConnections.first(where: { $0.isActive }) else {
             statusMessage = "No active SFCC sandbox — activate one first."
             return
@@ -2230,6 +2237,7 @@ final class AppState {
     /// upload log. Silently no-ops for files outside the cartridges root —
     /// those aren't deployable.
     private func sfccUpload(fileURL: URL) async {
+        guard isWorkspaceTrusted else { _ = requireTrust(for: .sfccUpload); return }
         guard let (conn, ws, rel) = sfccUploadContext(for: fileURL) else { return }
         do {
             statusMessage = try await sfccService.upload(
@@ -2244,6 +2252,7 @@ final class AppState {
 
     /// Mirrors a local delete to the sandbox, recording the outcome.
     private func sfccDeleteRemote(fileURL: URL) async {
+        guard isWorkspaceTrusted else { _ = requireTrust(for: .sfccUpload); return }
         guard let (conn, ws, rel) = sfccUploadContext(for: fileURL) else { return }
         do {
             statusMessage = try await sfccService.deleteRemote(
@@ -3433,6 +3442,14 @@ final class AppState {
             presentQuickOpen(prefill: ">")
         case .runTask:
             presentTaskPicker()
+        case .trustWorkspace:
+            presentTrustPrompt()
+        case .exportSettingsProfile:
+            exportSettingsProfile()
+        case .importSettingsProfile:
+            importSettingsProfile()
+        case .showLogs:
+            CrashLog.showLogsInFinder()
         case .goToSymbol:
             presentQuickOpen(prefill: "@")
         case .goToWorkspaceSymbol:

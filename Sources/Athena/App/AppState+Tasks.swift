@@ -49,7 +49,7 @@ extension AppState {
 
     /// Runs `label` and its dependencies in order, streaming to the Output panel.
     func runWorkspaceTask(label: String) {
-        guard let root = workspace?.rootURL else { return }
+        guard let root = workspace?.rootURL, requireTrust(for: .task) else { return }
         guard taskCenter.runningLabel == nil else {
             statusMessage = "A task is already running: \(taskCenter.runningLabel ?? "")"
             return
