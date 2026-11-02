@@ -39,6 +39,15 @@ actor SFCCDebugSession {
     private var isStepping = false
     private var consecutivePollFailures = 0
     private var breakpointsByFile: [String: [Int]] = [:]
+    /// SDAPI breakpoints are line-only, so conditions, hit counts and
+    /// logpoints are applied client-side when a thread halts (see `shouldHalt`).
+    private var breakpointOptions: [String: [Int: BreakpointOptions]] = [:]
+    private var hitCounts: [String: Int] = [:]
+    /// A step lands on arbitrary lines; those halts must not be filtered.
+    private var skipPolicyOnce = false
+    /// Held while a halt's condition is being evaluated, so a concurrent poll
+    /// can't decide about the same halt twice across the awaits.
+    private var isEvaluatingPolicy = false
 
     /// The halted thread the UI is currently looking at. SDAPI can halt
     /// several request threads at once; they're surfaced one at a time.
@@ -70,8 +79,9 @@ actor SFCCDebugSession {
     /// Registers the client, clears breakpoints a crashed Athena may have
     /// left under the same client id, pushes ours, and starts polling.
     /// Throws `CancellationError` if `stop()` was called meanwhile.
-    func start(breakpointsByFile: [String: [Int]]) async throws {
+    func start(breakpointsByFile: [String: [Int]], options: [String: [Int: BreakpointOptions]] = [:]) async throws {
         self.breakpointsByFile = breakpointsByFile
+        self.breakpointOptions = options
         try await client.createClient()
         try await unwindIfStopped()
         try? await client.removeAllBreakpoints()
@@ -120,8 +130,9 @@ actor SFCCDebugSession {
 
     /// Replaces the sandbox's breakpoint set with `byFile` — SDAPI only
     /// appends, so the old set is deleted first.
-    func updateBreakpoints(byFile: [String: [Int]]) async throws {
+    func updateBreakpoints(byFile: [String: [Int]], options: [String: [Int: BreakpointOptions]] = [:]) async throws {
         breakpointsByFile = byFile
+        breakpointOptions = options
         guard isActive else { return }
         try await client.removeAllBreakpoints()
         try await pushBreakpoints()
@@ -132,6 +143,7 @@ actor SFCCDebugSession {
     func resume() async throws {
         guard let thread = currentThreadId else { throw SDAPIError.notPaused }
         currentThreadId = nil
+        skipPolicyOnce = false
         onStateChange(.running)
         try await client.resume(thread: thread)
         scheduleBurst()
@@ -142,6 +154,7 @@ actor SFCCDebugSession {
         // Polling pauses for the request so a poll can't re-report the old
         // line while the sandbox is still moving the thread.
         isStepping = true
+        skipPolicyOnce = true
         lastReportedLocation = nil
         onStateChange(.running)
         defer { isStepping = false }
@@ -214,7 +227,7 @@ actor SFCCDebugSession {
     /// Returns whether a thread is halted afterwards, for the post-step burst.
     @discardableResult
     private func pollThreads() async -> Bool {
-        guard isActive, !isStepping else { return currentThreadId != nil }
+        guard isActive, !isStepping, !isEvaluatingPolicy else { return currentThreadId != nil }
         let threads: [SFCCDebugThread]
         do {
             threads = try await client.threads()
@@ -223,12 +236,16 @@ actor SFCCDebugSession {
             await handlePollFailure(error)
             return false
         }
-        guard isActive, !isStepping else { return currentThreadId != nil }
+        guard isActive, !isStepping, !isEvaluatingPolicy else { return currentThreadId != nil }
 
         if let current = currentThreadId,
            let thread = threads.first(where: { $0.id == current }) {
             if thread.status == .halted {
-                report(thread)
+                if await shouldHalt(thread) {
+                    report(thread)
+                } else {
+                    await autoResume(thread)
+                }
             } else {
                 currentThreadId = nil
                 onStateChange(.running)
@@ -239,9 +256,59 @@ actor SFCCDebugSession {
         currentThreadId = nil
         if let halted = threads.filter({ $0.status == .halted }).min(by: { $0.id < $1.id }) {
             currentThreadId = halted.id
-            report(halted)
+            if await shouldHalt(halted) {
+                report(halted)
+            } else {
+                await autoResume(halted)
+            }
         }
         return currentThreadId != nil
+    }
+
+    // MARK: - Client-side breakpoint policy
+
+    /// Decides whether a newly halted thread should stop the user: evaluates
+    /// the breakpoint's condition, counts hits, and prints logpoints (which
+    /// never stop). A failed evaluation halts, so the user sees the problem.
+    private func shouldHalt(_ thread: SFCCDebugThread) async -> Bool {
+        guard let top = thread.callStack.first,
+              let path = cartridges.localURL(for: top.location.scriptPath)?.path else { return true }
+        let line = top.location.lineNumber
+        if let last = lastReportedLocation, last.thread == thread.id, last.line == line, last.path == path { return true }
+        if skipPolicyOnce { skipPolicyOnce = false; return true }
+        guard let options = breakpointOptions[path]?[line], !options.isPlain else { return true }
+
+        isEvaluatingPolicy = true
+        defer { isEvaluatingPolicy = false }
+
+        if !BreakpointOptions.blank(options.condition) {
+            guard let value = try? await client.evaluate(thread: thread.id, frame: 0, expression: options.condition!) else { return true }
+            if !BreakpointRequestBuilder.isTruthy(value) { return false }
+        }
+        if let hit = HitCondition.parse(options.hitCondition) {
+            let key = "\(path):\(line)"
+            hitCounts[key, default: 0] += 1
+            if !hit.matches(hitCount: hitCounts[key] ?? 0) { return false }
+        }
+        if let message = options.logMessage, !BreakpointOptions.blank(message) {
+            var rendered = ""
+            for segment in LogMessageTemplate.parse(message) {
+                switch segment {
+                case .text(let t): rendered += t
+                case .expression(let e):
+                    rendered += (try? await client.evaluate(thread: thread.id, frame: 0, expression: e)) ?? "<error>"
+                }
+            }
+            onOutput("[logpoint] \(rendered)\n")
+            return false
+        }
+        return true
+    }
+
+    private func autoResume(_ thread: SFCCDebugThread) async {
+        currentThreadId = nil
+        try? await client.resume(thread: thread.id)
+        scheduleBurst()
     }
 
     /// After resume/step the sandbox halts again within milliseconds, not

@@ -121,6 +121,16 @@ private struct DBQueryConsoleView: View {
                     if appState.dbQueryIsRunning {
                         ProgressView().controlSize(.small)
                     }
+                    Menu("History") {
+                        if appState.requestCenter.sqlHistory.isEmpty { Text("No queries yet") }
+                        ForEach(appState.requestCenter.sqlHistory) { entry in
+                            Button(String(entry.sql.replacingOccurrences(of: "\n", with: " ").prefix(80))) {
+                                queryText = entry.sql
+                            }
+                        }
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
                     Spacer()
                     Text("One statement per run")
                         .font(.system(size: appState.sf(11)))
@@ -166,7 +176,7 @@ private struct DBQueryConsoleView: View {
 
 // MARK: - DBResultGridView (read-only)
 
-private struct DBResultGridView: View {
+struct DBResultGridView: View {
     @Environment(AppState.self) private var appState
     let columns: [DBColumn]
     let rows: [DBRow]

@@ -267,7 +267,7 @@ struct DebugSidebarView: View {
                 Spacer()
                 if !appState.debugBreakpoints.isEmpty {
                     Button {
-                        appState.debugBreakpoints.removeAll()
+                        appState.removeAllBreakpoints()
                     } label: {
                         Image(systemName: "trash")
                             .font(.system(size: appState.sf(11)))
@@ -278,6 +278,19 @@ struct DebugSidebarView: View {
                     .padding(.trailing, appState.sf(8))
                 }
             }
+
+            VStack(alignment: .leading, spacing: appState.sf(2)) {
+                Toggle("All exceptions", isOn: Binding(
+                    get: { appState.breakpointCenter.exceptions.breakOnAll },
+                    set: { appState.setExceptionBreakpoints(all: $0) }))
+                Toggle("Uncaught exceptions", isOn: Binding(
+                    get: { appState.breakpointCenter.exceptions.breakOnUncaught },
+                    set: { appState.setExceptionBreakpoints(uncaught: $0) }))
+            }
+            .toggleStyle(.checkbox)
+            .font(.system(size: appState.sf(11)))
+            .padding(.horizontal, appState.sf(12))
+            .padding(.vertical, appState.sf(2))
 
             let allBreakpoints = appState.debugBreakpoints
                 .flatMap { file, lines in lines.sorted().map { (file, $0) } }
@@ -300,15 +313,16 @@ struct DebugSidebarView: View {
 
     private func breakpointRow(filePath: String, line: Int) -> some View {
         HStack(spacing: appState.sf(8)) {
+            let options = appState.breakpointCenter.options[filePath]?[line]
             Circle()
-                .fill(Color.red)
+                .fill(options?.isEnabled == false ? Color.gray : (options?.logMessage != nil ? Color.orange : Color.red))
                 .frame(width: appState.sf(8), height: appState.sf(8))
             VStack(alignment: .leading, spacing: appState.sf(1)) {
                 Text(URL(fileURLWithPath: filePath).lastPathComponent)
                     .font(.system(size: appState.sf(12)))
                     .foregroundColor(.primary)
                     .lineLimit(1)
-                Text("Line \(line)")
+                Text("Line \(line)" + Self.optionsSummary(options))
                     .font(.system(size: appState.sf(10)))
                     .foregroundColor(.secondary)
             }
@@ -324,6 +338,16 @@ struct DebugSidebarView: View {
         }
         .padding(.horizontal, appState.sf(12))
         .padding(.vertical, appState.sf(3))
+    }
+
+    private static func optionsSummary(_ o: BreakpointOptions?) -> String {
+        guard let o else { return "" }
+        var parts: [String] = []
+        if let c = o.condition, !c.isEmpty { parts.append("if \(c)") }
+        if let h = o.hitCondition, !h.isEmpty { parts.append("hits \(h)") }
+        if let l = o.logMessage, !l.isEmpty { parts.append("log \"\(l)\"") }
+        if !o.isEnabled { parts.append("disabled") }
+        return parts.isEmpty ? "" : " · " + parts.joined(separator: " · ")
     }
 
     // MARK: Helpers

@@ -445,7 +445,7 @@ struct DBQueryResult: Sendable {
 }
 
 enum BottomPanel: String, Sendable, CaseIterable {
-    case terminal, scripts, output, problems, sfcclogs, references, debugConsole, hierarchy
+    case terminal, scripts, output, problems, sfcclogs, references, debugConsole, hierarchy, httpResponse, queryResults
 }
 
 // MARK: - Language
@@ -2328,4 +2328,107 @@ struct AuditReport: Sendable, Equatable {
     var vulnerabilities: [AuditVulnerability]
     /// severity -> count, from the report's own metadata when present.
     var counts: [String: Int]
+
+// MARK: - Debugger extras (breakpoint options, exception breakpoints)
+
+/// What a user attached to one breakpoint beyond "stop here". `condition` is
+/// an expression in the debuggee's language; `hitCondition` is `N`, `==N`,
+/// `>N`, `>=N`, `<N`, `<=N` or `%N`; `logMessage` turns the breakpoint into a
+/// logpoint (`{expr}` interpolated, no stop).
+struct BreakpointOptions: Sendable, Codable, Equatable {
+    var condition: String?
+    var hitCondition: String?
+    var logMessage: String?
+    var isEnabled: Bool = true
+
+    init(condition: String? = nil, hitCondition: String? = nil,
+         logMessage: String? = nil, isEnabled: Bool = true) {
+        self.condition = condition
+        self.hitCondition = hitCondition
+        self.logMessage = logMessage
+        self.isEnabled = isEnabled
+    }
+
+    /// True when this is an ordinary, enabled stop-here breakpoint.
+    var isPlain: Bool {
+        isEnabled && Self.blank(condition) && Self.blank(hitCondition) && Self.blank(logMessage)
+    }
+
+    var glyphStyle: BreakpointGlyphStyle {
+        if !isEnabled { return .disabled }
+        if !Self.blank(logMessage) { return .logpoint }
+        if !Self.blank(condition) || !Self.blank(hitCondition) { return .conditional }
+        return .standard
+    }
+
+    static func blank(_ s: String?) -> Bool {
+        (s ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
+enum BreakpointGlyphStyle: Sendable, Equatable {
+    case standard, conditional, logpoint, disabled
+}
+
+/// Which exceptions pause the debuggee. `all` implies uncaught.
+struct ExceptionBreakpointSettings: Sendable, Codable, Equatable {
+    var breakOnAll: Bool = false
+    var breakOnUncaught: Bool = false
+}
+
+/// One breakpoint as written to the per-workspace breakpoints file.
+struct PersistedBreakpoint: Sendable, Codable, Equatable {
+    var filePath: String
+    var line: Int
+    var options: BreakpointOptions
+}
+
+struct PersistedDebugConfiguration: Sendable, Codable, Equatable {
+    var breakpoints: [PersistedBreakpoint] = []
+    var exceptions: ExceptionBreakpointSettings = ExceptionBreakpointSettings()
+}
+
+// MARK: - HTTP client
+
+struct HTTPRequestSpec: Sendable, Equatable, Identifiable {
+    var id: Int { startLine }
+    /// Optional `### name` / `# @name x` label.
+    var name: String?
+    var method: String
+    var url: String
+    var headers: [HTTPHeader]
+    var body: String?
+    /// 1-based line of the `METHOD url` line (where the Send link is drawn).
+    var startLine: Int
+    /// 1-based last line belonging to this request.
+    var endLine: Int
+}
+
+struct HTTPHeader: Sendable, Equatable {
+    var name: String
+    var value: String
+}
+
+struct HTTPResponseResult: Sendable, Equatable {
+    var requestMethod: String
+    var requestURL: String
+    var statusCode: Int
+    var statusText: String
+    var headers: [HTTPHeader]
+    var bodyText: String
+    var prettyBody: String
+    var isJSON: Bool
+    var byteCount: Int
+    var durationMs: Double
+    var contentType: String?
+}
+
+// MARK: - SQL console
+
+struct SQLHistoryEntry: Sendable, Codable, Equatable, Identifiable {
+    var id: UUID = UUID()
+    var sql: String
+    var connectionName: String
+    var date: Date
+}
 }

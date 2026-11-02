@@ -417,6 +417,10 @@ struct AthenaCommands: Commands {
             Button("Remove All Breakpoints") { performAction(.removeAllBreakpoints) }
         }
 
+        CommandMenu("Request") {
+            Button("Send HTTP Request / Run SQL Query") { performAction(.runRequestOrQuery) }
+        }
+
         CommandMenu("SFCC") {
             Button("Upload All Cartridges") {
                 performAction(.sfccUploadAllCartridges)

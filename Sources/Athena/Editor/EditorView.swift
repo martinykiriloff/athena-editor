@@ -148,6 +148,15 @@ struct EditorView: NSViewRepresentable {
     /// Test/suite declaration lines -> state, and the gutter run-icon click.
     var testMarks: [Int: TestStatus] = [:]
     var onRunTest: (Int) -> Void = { _ in }
+    /// Per-line glyph style (conditional / logpoint / disabled) for the gutter.
+    var breakpointStyles: [Int: BreakpointGlyphStyle] = [:]
+    /// Gutter right-click menu actions on a breakpoint line.
+    var onBreakpointEdit: (Int, BreakpointEditKind) -> Void = { _, _ in }
+    /// Virtual end-of-line text (inline debug values, "Send Request" link),
+    /// drawn by `AthenaLayoutManager` without touching the text storage.
+    var lineAnnotations: [Int: VirtualAnnotation] = [:]
+    /// Fired with the 1-based line when an action annotation is clicked.
+    var onAnnotationClick: (Int) -> Void = { _ in }
     /// Opens the diff viewer comparing one conflict region's "ours" vs
     /// "theirs" content — the gutter menu's "Compare" action (plan.md item
     /// 23, "D5").
@@ -229,6 +238,14 @@ struct EditorView: NSViewRepresentable {
         }
         gutter.testMarks = testMarks
         gutter.onRunTest = { [weak coordinator] line in coordinator?.parent.onRunTest(line) }
+        gutter.breakpointStyles = breakpointStyles
+        gutter.onBreakpointEdit = { [weak coordinator] line, kind in
+            coordinator?.parent.onBreakpointEdit(line, kind)
+        }
+        (textView.layoutManager as? AthenaLayoutManager)?.setVirtualAnnotations(lineAnnotations)
+        textView.onAnnotationClick = { [weak coordinator] line in
+            coordinator?.parent.onAnnotationClick(line)
+        }
         gutter.onConflictResolve = { [weak coordinator] region, choice in
             coordinator?.resolveConflict(region, choice: choice)
         }
@@ -489,12 +506,15 @@ struct EditorView: NSViewRepresentable {
                 gutter.testMarks = testMarks
                 gutter.needsDisplay = true
             }
-            if gutter.breakpoints != breakpoints || gutter.debugLine != debugLine {
+            if gutter.breakpoints != breakpoints || gutter.debugLine != debugLine
+                || gutter.breakpointStyles != breakpointStyles {
                 gutter.breakpoints = breakpoints
                 gutter.debugLine   = debugLine
+                gutter.breakpointStyles = breakpointStyles
                 gutter.needsDisplay = true
             }
         }
+        (textView.layoutManager as? AthenaLayoutManager)?.setVirtualAnnotations(lineAnnotations)
 
         // Fresh diagnostics from AppState (a new LSP `publishDiagnostics`
         // batch) — recompute squiggle underlines and the gutter's

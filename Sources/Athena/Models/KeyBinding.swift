@@ -106,6 +106,8 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
     case debugStepOver          = "workbench.action.debug.stepOver"
     case debugStepInto          = "workbench.action.debug.stepInto"
     case debugStepOut           = "workbench.action.debug.stepOut"
+    // Requests
+    case runRequestOrQuery   = "athena.editor.runRequestOrQuery"
     // SFCC
     case sfccUploadAllCartridges = "athena.sfcc.uploadAllCartridges"
     // Workspace / safety
@@ -143,7 +145,8 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
         case .debugStepInto:         return "Step Into"
         case .debugStepOut:          return "Step Out"
         case .sfccUploadAllCartridges: return "Upload All Cartridges"
-        case .quickOpen:         return "Quick Open"
+        case .runRequestOrQuery: return "Send HTTP Request / Run SQL Query"
+        case .quickOpen:        return "Quick Open"
         case .commandPalette:    return "Command Palette"
         case .nextTab:           return "Next Editor"
         case .previousTab:       return "Previous Editor"
@@ -261,6 +264,8 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
             return "SFCC"
         case .trustWorkspace, .exportSettingsProfile, .importSettingsProfile, .showLogs:
             return "Workspace"
+        case .runRequestOrQuery:
+            return "Editor"
         case .findInFile, .findAndReplace, .toggleComment, .indentLine, .outdentLine,
              .selectNextOccurrence, .findReferences, .renameSymbol, .quickFix,
              .organizeImports, .showCallHierarchy, .showTypeHierarchy,
@@ -529,6 +534,9 @@ struct KeyBinding: Identifiable, Codable, Sendable {
         KeyBinding(action: .debugStepOver,         combo: KeyCombo(key: "f10")),
         KeyBinding(action: .debugStepInto,         combo: KeyCombo(key: "f11")),
         KeyBinding(action: .debugStepOut,          combo: KeyCombo(key: "f11", shift: true)),
+        // ⌘↩ runs the request / query at the caret in a .http / .rest / .sql
+        // file. AppState only consumes the key there (see canRunRequestOrQuery).
+        KeyBinding(action: .runRequestOrQuery,     combo: KeyCombo(key: "enter", command: true)),
         // SFCC — no default shortcut: it replaces every cartridge on the
         // sandbox, so it is reached deliberately from the palette or the
         // menu rather than by a key that could be hit by accident.

@@ -2,6 +2,12 @@
 
 import AppKit
 
+/// Virtual text appended after a line. `isAction` ones are clickable links.
+struct VirtualAnnotation: Equatable, Sendable {
+    var text: String
+    var isAction: Bool = false
+}
+
 final class AthenaLayoutManager: NSLayoutManager {
 
     var dotColor: NSColor = NSColor.gray
@@ -24,6 +30,72 @@ final class AthenaLayoutManager: NSLayoutManager {
             invalidateDisplay(forCharacterRange: r)
         }
     }
+
+    // MARK: - Line annotations (virtual text)
+
+    /// 1-based line → text drawn after the line's last glyph. Never enters
+    /// the text storage, so edits, undo and highlighting never see it.
+    private(set) var virtualAnnotations: [Int: VirtualAnnotation] = [:]
+    /// Rects (text-view coordinates) of action annotations from the last draw.
+    private(set) var actionRects: [Int: NSRect] = [:]
+
+    func setVirtualAnnotations(_ new: [Int: VirtualAnnotation]) {
+        guard new != virtualAnnotations else { return }
+        virtualAnnotations = new
+        actionRects = [:]
+        for tc in textContainers { for tv in [tc.textView].compactMap({ $0 }) { tv.needsDisplay = true } }
+    }
+
+    /// The 1-based line whose clickable annotation contains `point`, if any.
+    func actionAnnotationLine(at point: NSPoint) -> Int? {
+        actionRects.first { $0.value.contains(point) }?.key
+    }
+
+    private func drawVirtualAnnotations(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
+        guard !virtualAnnotations.isEmpty, let textStorage else { return }
+        let ns = textStorage.string as NSString
+        let baseFont = (textStorage.length > 0 ? textStorage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont : nil)
+            ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let font = NSFontManager.shared.convert(NSFont.monospacedSystemFont(ofSize: max(9, baseFont.pointSize - 2), weight: .regular),
+                                                toHaveTrait: .italicFontMask)
+        let wanted = Set(virtualAnnotations.keys)
+        var line = 1
+        var idx = 0
+        while idx <= ns.length, line <= (wanted.max() ?? 0) {
+            let range = ns.lineRange(for: NSRange(location: min(idx, ns.length), length: 0))
+            if let annotation = virtualAnnotations[line], range.length > 0 {
+                let glyphRange = self.glyphRange(forCharacterRange: NSRange(location: range.location, length: range.length),
+                                                 actualCharacterRange: nil)
+                if NSIntersectionRange(glyphRange, glyphsToShow).length > 0 || glyphRange.location == glyphsToShow.location {
+                    let lastGlyph = max(glyphRange.location, NSMaxRange(glyphRange) - 1)
+                    var used = lineFragmentUsedRect(forGlyphAt: lastGlyph, effectiveRange: nil)
+                    // Exclude the trailing newline glyph's width.
+                    if range.length > 0, ns.character(at: NSMaxRange(range) - 1) == 0x0A, lastGlyph > glyphRange.location {
+                        let loc = location(forGlyphAt: lastGlyph)
+                        used.size.width = min(used.size.width, loc.x)
+                    }
+                    let attrs: [NSAttributedString.Key: Any] = [
+                        .font: font,
+                        .foregroundColor: annotation.isAction ? NSColor.systemBlue : NSColor.secondaryLabelColor.withAlphaComponent(0.8),
+                    ]
+                    let text = annotation.text as NSString
+                    let size = text.size(withAttributes: attrs)
+                    let x = origin.x + used.maxX + 24
+                    let y = origin.y + used.minY + (used.height - size.height) / 2
+                    text.draw(at: NSPoint(x: x, y: y), withAttributes: attrs)
+                    if annotation.isAction {
+                        actionRects[line] = NSRect(x: x, y: y, width: size.width, height: size.height)
+                    }
+                }
+            } else if let annotation = virtualAnnotations[line], annotation.isAction, range.length == 0 {
+                // empty last line: nothing to anchor to
+            }
+            idx = NSMaxRange(range)
+            if range.length == 0 { break }
+            line += 1
+        }
+    }
+
 
     // MARK: - Folding
 
@@ -341,6 +413,7 @@ final class AthenaLayoutManager: NSLayoutManager {
         super.drawGlyphs(forGlyphRange: glyphsToShow, at: origin)
         drawFoldChips(forGlyphRange: glyphsToShow, at: origin)
         drawLineAnnotations(forGlyphRange: glyphsToShow, at: origin)
+        drawVirtualAnnotations(forGlyphRange: glyphsToShow, at: origin)
 
         guard showWhitespace, let textStorage else { return }
         let nsString = textStorage.string as NSString

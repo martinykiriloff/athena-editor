@@ -136,6 +136,8 @@ struct BottomPanelView: View {
         case .references: return "References"
         case .debugConsole: return "Debug Console"
         case .hierarchy: return "Hierarchy"
+        case .httpResponse: return "HTTP Response"
+        case .queryResults: return "Query Results"
         }
     }
 
@@ -152,6 +154,8 @@ struct BottomPanelView: View {
         case .references: ReferencesPanelView()
         case .debugConsole: DebugConsoleView()
         case .hierarchy: HierarchyPanelView()
+        case .httpResponse: HTTPResponseView()
+        case .queryResults: QueryResultsPanelView()
         }
     }
 }

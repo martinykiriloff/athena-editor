@@ -217,6 +217,16 @@ struct CodeEditorView: View {
     /// Large-file mode: highlighting, minimap, blame and LSP sync are off.
     private var isLargeFile: Bool { appState.isLargeFile(tab) }
 
+    /// Virtual end-of-line text: the stopped line's variable values while
+    /// debugging, and "Send Request" links in .http / .rest files.
+    private var lineAnnotations: [Int: VirtualAnnotation] {
+        var out = appState.httpAnnotations(for: tab)
+        if let path = tab.fileURL?.path, appState.debugCurrentFile?.path == path {
+            for (line, text) in appState.breakpointCenter.inlineValues { out[line] = VirtualAnnotation(text: text) }
+        }
+        return out
+    }
+
     private var fileBreakpoints: Set<Int> {
         guard let path = tab.fileURL?.path else { return [] }
         return appState.debugBreakpoints[path] ?? []
@@ -430,6 +440,15 @@ struct CodeEditorView: View {
                 },
                 testMarks: isLargeFile ? [:] : appState.testGutterMarks(for: tab),
                 onRunTest: { line in appState.runTest(at: line, in: tab) },
+                breakpointStyles: tab.fileURL.map { appState.breakpointStyles(for: $0.path) } ?? [:],
+                onBreakpointEdit: { line, kind in
+                    guard let path = tab.fileURL?.path else { return }
+                    appState.editBreakpoint(filePath: path, line: line, kind: kind)
+                },
+                lineAnnotations: lineAnnotations,
+                onAnnotationClick: { line in
+                    Task { await appState.sendHTTPRequest(inText: tab.content, atLine: line) }
+                },
                 onCompareConflict: { region in
                     guard let url = tab.fileURL else { return }
                     appState.openDiffViewer(forConflict: region, in: url)
@@ -458,13 +477,20 @@ struct CodeEditorView: View {
                     } else {
                         drizzleItems = []
                     }
-                    // Merge: Drizzle first, then LSP; deduplicate by label
+                    // Merge: SQL schema, alias, Tailwind, Drizzle, then LSP; deduplicate by label
+                    // SQL files: schema-aware table / column completions from the open DB connection.
+                    let sqlItems: [CompletionItem]
+                    if tab.fileURL?.pathExtension.lowercased() == "sql" {
+                        sqlItems = await appState.sqlCompletions(text: tab.content, line: line, col: col)
+                    } else {
+                        sqlItems = []
+                    }
                     let tailwindItems = appState.tailwindCompletions(content: tab.content, line: line, col: col)
                     let aliasItems = tab.fileURL.map {
                         appState.importAliasCompletions(content: tab.content, line: line, col: col, fileURL: $0)
                     } ?? []
                     var seen = Set<String>()
-                    return (aliasItems + tailwindItems + drizzleItems + lspItems).filter { seen.insert($0.label).inserted }
+                    return (sqlItems + aliasItems + tailwindItems + drizzleItems + lspItems).filter { seen.insert($0.label).inserted }
                 },
                 onResolveCompletionDoc: { itemID in
                     guard let fileURL = tab.fileURL else { return nil }

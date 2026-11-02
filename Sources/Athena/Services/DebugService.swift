@@ -70,6 +70,17 @@ actor DebugService {
     /// differently, which read as "paused with an empty call stack".
     private var lastStoppedThreadId: Int?
 
+    // Breakpoint options (condition / hit count / logpoint / enabled) and the
+    // exception-pause settings, pushed in by AppState before launch and on
+    // every edit. See BreakpointRequestBuilder for the request shapes.
+    private var breakpointOptions: [String: [Int: BreakpointOptions]] = [:]
+    private var exceptionSettings = ExceptionBreakpointSettings()
+    /// `exceptionBreakpointFilters` ids the DAP adapter advertised.
+    private var dapExceptionFilterIds: [String] = []
+    /// CDP breakpoint ids per source file, so an edit can remove and re-place them.
+    private var cdpBreakpointIds: [String: [String]] = [:]
+    private var cdpIsBrowser = false
+
     // SFCC session (Script Debugger API, ADR 0002)
     private var sfccSession:  SFCCDebugSession? = nil
     private var isSFCC:       Bool { sfccSession != nil }
@@ -84,6 +95,36 @@ actor DebugService {
         cbStateChange = { s in Task { @MainActor in onStateChange(s) } }
         cbOutput      = { t in Task { @MainActor in onOutput(t) } }
         cbStopped     = { d in Task { @MainActor in onStopped(d) } }
+    }
+
+    // MARK: - Breakpoint configuration
+
+    func configureBreakpoints(options: [String: [Int: BreakpointOptions]], exceptions: ExceptionBreakpointSettings) {
+        breakpointOptions = options
+        exceptionSettings = exceptions
+    }
+
+    /// Applies new exception-pause settings to a live session. SFCC's Script
+    /// Debugger API has no exception breakpoints; that is reported.
+    func updateExceptionBreakpoints(_ settings: ExceptionBreakpointSettings) async throws {
+        exceptionSettings = settings
+        if isSFCC {
+            if settings.breakOnAll || settings.breakOnUncaught {
+                cbOutput?("[SFCC] Exception breakpoints aren't supported by the Script Debugger API\n")
+            }
+            return
+        }
+        if isCDP {
+            _ = try await cdpClient?.send("Debugger.setPauseOnExceptions",
+                paramsJSON: cdpJSON(["state": BreakpointRequestBuilder.cdpPauseOnExceptionsState(settings)]))
+        } else if dapInitialized {
+            try await sendDAPExceptionBreakpoints()
+        }
+    }
+
+    private func sendDAPExceptionBreakpoints() async throws {
+        let filters = BreakpointRequestBuilder.dapExceptionFilters(exceptionSettings, available: dapExceptionFilterIds)
+        _ = try await dapClient.request("setExceptionBreakpoints", args: ["filters": filters])
     }
 
     // MARK: - Launch
@@ -139,7 +180,7 @@ actor DebugService {
         )
         sfccSession = session
         do {
-            try await session.start(breakpointsByFile: breakpoints)
+            try await session.start(breakpointsByFile: breakpoints, options: breakpointOptions)
         } catch is CancellationError {
             // Stop was pressed while the sandbox handshake was in flight;
             // the session already cleaned up after itself.
@@ -157,14 +198,27 @@ actor DebugService {
     /// takes effect on the next launch.
     func updateBreakpoints(changedFile: String, lines: [Int], allByFile: [String: [Int]]) async throws {
         if let sfcc = sfccSession {
-            try await sfcc.updateBreakpoints(byFile: allByFile)
+            try await sfcc.updateBreakpoints(byFile: allByFile, options: breakpointOptions)
             return
         }
-        if isCDP { return }
-        _ = try await dapClient.request("setBreakpoints", args: [
-            "source": ["path": changedFile],
-            "breakpoints": lines.map { ["line": $0] }
-        ])
+        if isCDP {
+            guard let cdp = cdpClient else { return }
+            for id in cdpBreakpointIds[changedFile] ?? [] {
+                _ = try? await cdp.send("Debugger.removeBreakpoint", paramsJSON: cdpJSON(["breakpointId": id]))
+            }
+            cdpBreakpointIds[changedFile] = []
+            pendingSourceMappedBreakpoints[changedFile] = lines
+            await registerCDPBreakpoints(cdp, filePath: changedFile, lines: lines,
+                                         isChrome: cdpIsBrowser, workspaceURL: currentWorkspaceURL)
+            // Scripts already parsed won't announce themselves again, so
+            // re-place the source-mapped copies directly.
+            for (scriptId, map) in scriptMaps {
+                await placeSourceMapped(cdp, map: map, scriptId: scriptId, filePath: changedFile, lines: lines, force: true)
+            }
+            return
+        }
+        _ = try await dapClient.request("setBreakpoints", args: BreakpointRequestBuilder.dapSetBreakpointsArgs(
+            path: changedFile, lines: lines, options: breakpointOptions[changedFile] ?? [:]))
     }
 
     /// Launch config first (Prophet's launch.json keys), then dw.json, then
@@ -217,7 +271,8 @@ actor DebugService {
             "supportsVariableType":   true,
             "supportsRunInTerminalRequest": false
         ])
-        _ = capabilities
+        dapExceptionFilterIds = (capabilities.json["exceptionBreakpointFilters"] as? [[String: Any]] ?? [])
+            .compactMap { $0["filter"] as? String }
 
         let program = resolveVariable(config.program, workspaceURL: workspaceURL)
         var launchArgs: [String: Any] = [
@@ -242,12 +297,11 @@ actor DebugService {
         await awaitDAPInitialized()
 
         for (filePath, lines) in breakpoints.sorted(by: { $0.key < $1.key }) {
-            let bps = lines.sorted().map { ["line": $0] }
-            _ = try? await dapClient.request("setBreakpoints", args: [
-                "source": ["path": filePath, "name": (filePath as NSString).lastPathComponent],
-                "breakpoints": bps,
-                "sourceModified": false,
-            ])
+            _ = try? await dapClient.request("setBreakpoints", args: BreakpointRequestBuilder.dapSetBreakpointsArgs(
+                path: filePath, lines: lines, options: breakpointOptions[filePath] ?? [:]))
+        }
+        if exceptionSettings.breakOnAll || exceptionSettings.breakOnUncaught {
+            try? await sendDAPExceptionBreakpoints()
         }
 
         _ = try? await dapClient.request("configurationDone")
@@ -381,39 +435,15 @@ actor DebugService {
 
         // 5. Set breakpoints.
         let isChrome = isBrowserType(config.type)
+        cdpIsBrowser = isChrome
+        cdpBreakpointIds = [:]
         for (filePath, lines) in breakpoints {
-            // Node reports every script by its real path, so a breakpoint
-            // registered against a path that passes through a symlink binds
-            // to nothing and is silently ignored (`locations: []`). That is
-            // /tmp vs /private/tmp on macOS, and any symlinked checkout.
-            // Both spellings are registered when they differ, so the
-            // breakpoint lands whichever way the runtime names the file.
-            let resolvedPath = Self.realPath(of: filePath)
-            let pathsToBind = resolvedPath == filePath ? [filePath] : [resolvedPath, filePath]
-            for line in lines {
-                if isChrome {
-                    let filename = (URL(fileURLWithPath: filePath).lastPathComponent)
-                        .replacingOccurrences(of: ".", with: "\\.")
-                    // cdpJSON keeps [String: Any] inside the DebugService actor — only Data crosses.
-                    _ = try? await cdp.send("Debugger.setBreakpointByUrl",
-                        paramsJSON: cdpJSON(["urlRegex": ".*\(filename).*", "lineNumber": line - 1]))
-                } else {
-                    for path in pathsToBind {
-                        _ = try? await cdp.send("Debugger.setBreakpointByUrl",
-                            paramsJSON: cdpJSON(["url": "file://\(path)", "lineNumber": line - 1]))
-                    }
-                    // A bundler names its modules after the original file
-                    // without using a file:// URL —
-                    // `webpack-internal:///(rsc)/./src/hooks/use-client.ts`
-                    // is the same file the user is editing. Matching the
-                    // path's tail binds those too, which is what makes a
-                    // breakpoint work in a dev server at all.
-                    if let pattern = Self.urlRegex(for: filePath, workspaceURL: workspaceURL) {
-                        _ = try? await cdp.send("Debugger.setBreakpointByUrl",
-                            paramsJSON: cdpJSON(["urlRegex": pattern, "lineNumber": line - 1]))
-                    }
-                }
-            }
+            await registerCDPBreakpoints(cdp, filePath: filePath, lines: lines,
+                                         isChrome: isChrome, workspaceURL: workspaceURL)
+        }
+        if exceptionSettings.breakOnAll || exceptionSettings.breakOnUncaught {
+            _ = try? await cdp.send("Debugger.setPauseOnExceptions",
+                paramsJSON: cdpJSON(["state": BreakpointRequestBuilder.cdpPauseOnExceptionsState(exceptionSettings)]))
         }
 
         // 6. Node pauses immediately with --inspect-brk; release it into user
@@ -451,6 +481,74 @@ actor DebugService {
         }
 
         cbStateChange?(.running)
+    }
+
+    /// Places one file's breakpoints, recording the ids V8 returns so a later
+    /// edit can remove them. Condition / hit count / logpoint ride along as a
+    /// generated CDP `condition` (see `BreakpointRequestBuilder.cdpCondition`).
+    private func registerCDPBreakpoints(_ cdp: CDPClient, filePath: String, lines: [Int],
+                                        isChrome: Bool, workspaceURL: URL?) async {
+        // Node reports every script by its real path, so a breakpoint
+        // registered against a path that passes through a symlink binds
+        // to nothing (/tmp vs /private/tmp on macOS, symlinked checkouts).
+        // Both spellings are registered when they differ.
+        let resolvedPath = Self.realPath(of: filePath)
+        let pathsToBind = resolvedPath == filePath ? [filePath] : [resolvedPath, filePath]
+        func record(_ resp: CDPClient.Response?) {
+            if let id = resp?.json["breakpointId"] as? String { cdpBreakpointIds[filePath, default: []].append(id) }
+        }
+        for line in lines {
+            let options = breakpointOptions[filePath]?[line]
+            // One V8 breakpoint per spelling of the path: each evaluates its
+            // own condition on every hit, so each needs its own hit counter
+            // or the shared one advances several times per pass.
+            var variant = 0
+            func merged(_ extra: [String: Any]) -> Data {
+                variant += 1
+                var params: [String: Any] = ["lineNumber": line - 1]
+                if let cond = BreakpointRequestBuilder.cdpCondition(options: options, key: "\(filePath):\(line)#\(variant)") {
+                    params["condition"] = cond
+                }
+                return cdpJSON(params.merging(extra) { _, new in new })
+            }
+            if isChrome {
+                let filename = (URL(fileURLWithPath: filePath).lastPathComponent)
+                    .replacingOccurrences(of: ".", with: "\\.")
+                // cdpJSON keeps [String: Any] inside the DebugService actor — only Data crosses.
+                record(try? await cdp.send("Debugger.setBreakpointByUrl", paramsJSON: merged(["urlRegex": ".*\(filename).*"])))
+            } else {
+                for path in pathsToBind {
+                    record(try? await cdp.send("Debugger.setBreakpointByUrl", paramsJSON: merged(["url": "file://\(path)"])))
+                }
+                // A bundler names its modules after the original file without
+                // a file:// URL (`webpack-internal:///(rsc)/./src/...`);
+                // matching the path's tail binds those too.
+                if let pattern = Self.urlRegex(for: filePath, workspaceURL: workspaceURL) {
+                    record(try? await cdp.send("Debugger.setBreakpointByUrl", paramsJSON: merged(["urlRegex": pattern])))
+                }
+            }
+        }
+    }
+
+    /// Places source-mapped breakpoints for one file inside one generated script.
+    private func placeSourceMapped(_ cdp: CDPClient, map: SourceMap, scriptId: String,
+                                   filePath: String, lines: [Int], force: Bool = false) async {
+        guard map.sourceIndex(matching: filePath) != nil else { return }
+        for line in lines.sorted() {
+            guard let generatedLine = map.generatedLine(forSourceMatching: filePath, originalLine: line) else { continue }
+            let key = "\(scriptId):\(generatedLine)"
+            if force { boundSourceMappedLines.insert(key) }
+            else { guard boundSourceMappedLines.insert(key).inserted else { continue } }
+            var bpParams: [String: Any] = ["location": ["scriptId": scriptId, "lineNumber": generatedLine - 1]]
+            if let cond = BreakpointRequestBuilder.cdpCondition(options: breakpointOptions[filePath]?[line],
+                                                                key: "\(filePath):\(line)") {
+                bpParams["condition"] = cond
+            }
+            let resp = try? await cdp.send("Debugger.setBreakpoint", paramsJSON: cdpJSON(bpParams))
+            if let id = resp?.json["breakpointId"] as? String { cdpBreakpointIds[filePath, default: []].append(id) }
+            anyBreakpointBound = true
+            cbOutput?("[Athena] Breakpoint bound: \((filePath as NSString).lastPathComponent):\(line) → generated line \(generatedLine)\n")
+        }
     }
 
     /// Waits for the adapter's `initialized` event. Bounded: an adapter that
@@ -820,17 +918,7 @@ actor DebugService {
         scriptURLs[scriptId] = scriptURL
 
         for (filePath, lines) in pendingSourceMappedBreakpoints.sorted(by: { $0.key < $1.key }) {
-            guard map.sourceIndex(matching: filePath) != nil else { continue }
-            for line in lines.sorted() {
-                guard let generatedLine = map.generatedLine(forSourceMatching: filePath, originalLine: line) else { continue }
-                let key = "\(scriptId):\(generatedLine)"
-                guard boundSourceMappedLines.insert(key).inserted else { continue }
-                _ = try? await cdp.send("Debugger.setBreakpoint", paramsJSON: cdpJSON([
-                    "location": ["scriptId": scriptId, "lineNumber": generatedLine - 1],
-                ]))
-                anyBreakpointBound = true
-                cbOutput?("[Athena] Breakpoint bound: \((filePath as NSString).lastPathComponent):\(line) → generated line \(generatedLine)\n")
-            }
+            await placeSourceMapped(cdp, map: map, scriptId: scriptId, filePath: filePath, lines: lines)
         }
     }
 
