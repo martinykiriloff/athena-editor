@@ -17,10 +17,14 @@ BUILD_DIR   := .build
 # Intel CI runner from silently producing an x86_64 app.
 ARCH        := arm64
 TRIPLE      := $(ARCH)-apple-macosx
-RELEASE_DIR := $(BUILD_DIR)/$(TRIPLE)/release
-DEBUG_DIR   := $(BUILD_DIR)/$(TRIPLE)/debug
-RELEASE_BIN := $(RELEASE_DIR)/$(APP_NAME)
-DEBUG_BIN   := $(DEBUG_DIR)/$(APP_NAME)
+# Ask SwiftPM where it really writes products: newer toolchains emit to
+# .build/out/Products/<Config>, leaving .build/<triple>/<config> as a stale
+# copy from an older toolchain — copying from there bundles an old binary.
+# Recursive (=) so SWIFT_ENV, defined below, is expanded lazily.
+RELEASE_DIR  = $(shell $(SWIFT_ENV) swift build -c release --triple $(TRIPLE) --show-bin-path)
+DEBUG_DIR    = $(shell $(SWIFT_ENV) swift build --triple $(TRIPLE) --show-bin-path)
+RELEASE_BIN  = $(RELEASE_DIR)/$(APP_NAME)
+DEBUG_BIN    = $(DEBUG_DIR)/$(APP_NAME)
 APP_BUNDLE  := $(APP_NAME).app
 DMG_NAME    := $(APP_NAME)-$(VERSION).dmg
 

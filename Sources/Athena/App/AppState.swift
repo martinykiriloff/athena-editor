@@ -131,7 +131,7 @@ final class AppState {
     /// Merge/rebase state, tags, graph, PR status (see `AppState+GitAdvanced.swift`).
     var gitExtras = GitExtrasState()
     let githubService = GitHubService()
-    var currentTheme: EditorTheme = .athenaDracula {
+    var currentTheme: EditorTheme = .athenaMidnight {
         didSet { if currentTheme != oldValue { applyAppearance() } }
     }
     /// User-imported VS Code themes (plan.md item 27, "G4"), persisted via
@@ -1170,7 +1170,7 @@ final class AppState {
         async let lnk  = settingsService.value(for: "editorLinkedEditing",     default: false)
         async let fixa = settingsService.value(for: "editorFixAllOnSave",      default: false)
         async let uec  = settingsService.value(for: "editorUseEditorConfig",   default: true)
-        async let th   = settingsService.value(for: "theme",                   default: "athena-dark")
+        async let th   = settingsService.value(for: "theme",                   default: "athena-midnight")
         async let ct   = settingsService.value(for: "customThemes",            default: [EditorTheme]())
 
         editorFontSize          = await fs
@@ -1258,6 +1258,12 @@ final class AppState {
     /// (`controlBackgroundColor`, `.secondary`, …) follows automatically.
     /// Called on launch (before settings load, so the first frame is right
     /// for the default theme) and from `currentTheme`'s observer.
+    /// Fill of the floating rounded panels ("islands") and the bars inside them.
+    var panelBackground: Color { Color(nsColor: currentTheme.background) }
+
+    /// Darker frame the islands float on; also the activity rail and status bar.
+    var frameBackground: Color { Color(nsColor: currentTheme.frame) }
+
     func applyAppearance() {
         let name: NSAppearance.Name = currentTheme.isDark ? .darkAqua : .aqua
         if NSApplication.shared.appearance?.name != name {

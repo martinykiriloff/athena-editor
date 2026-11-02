@@ -87,6 +87,14 @@ struct EditorTheme: Sendable, Equatable, Hashable, Codable {
     /// gutter, matching VS Code's green-vs-blue gutter convention.
     var diffModified:      NSColor { rgb(diffModHex) }
 
+    /// Darker (or, for light themes, slightly deeper) shade of the background
+    /// that the island panels float on — also the activity rail and status bar.
+    var frame: NSColor {
+        let base = background.usingColorSpace(.sRGB) ?? background
+        let amount: CGFloat = isDark ? 0.40 : 0.07
+        return base.blended(withFraction: amount, of: .black) ?? base
+    }
+
     /// Whether the editor background is dark. Drives the window's system
     /// appearance (`AppState.applyAppearance`) so the chrome — sidebar,
     /// tabs, panels, popups — matches the editor instead of staying dark
@@ -159,6 +167,43 @@ extension EditorTheme {
         diffAdded: 0x4E8A5A, diffRemoved: 0xB4637A, diffModified: 0x2E6B80
     )
 
+    // Athena Midnight — modern deep-blue dark. Near-black ink background with
+    // soft pastel tokens (Tokyo Night family), so colour carries meaning
+    // without the harsh primaries of the classic palettes. Default theme.
+    static let athenaMidnight = EditorTheme(
+        id: "athena-midnight", name: "Athena Midnight",
+        bg: 0x11131A, fg: 0xC8CEDC, cursor: 0x7AA2FF, selection: 0x263150, line: 0x161923,
+        keyword: 0xBB9AF7, string: 0x9ECE6A, number: 0xFF9E64,
+        comment: 0x6B7494, type: 0x7DCFFF, function: 0x7AA2FF, annotation: 0xF7768E,
+        whitespace: 0x262B3D,
+        diagnosticError: 0xF7768E, diagnosticWarning: 0xE0AF68, diagnosticInfo: 0x7DCFFF,
+        diffAdded: 0x9ECE6A, diffRemoved: 0xF7768E, diffModified: 0x7AA2FF
+    )
+
+    // Athena Graphite — neutral charcoal dark with Catppuccin-Mocha-style
+    // pastels. Less blue than Midnight; easy on the eyes in a bright room.
+    static let athenaGraphite = EditorTheme(
+        id: "athena-graphite", name: "Athena Graphite",
+        bg: 0x1A1B1F, fg: 0xD4D7DD, cursor: 0x89B4FA, selection: 0x2F3340, line: 0x202227,
+        keyword: 0xCBA6F7, string: 0xA6E3A1, number: 0xFAB387,
+        comment: 0x7A7E92, type: 0xF9E2AF, function: 0x89B4FA, annotation: 0xF38BA8,
+        whitespace: 0x2F3340,
+        diagnosticError: 0xF38BA8, diagnosticWarning: 0xF9E2AF, diagnosticInfo: 0x89DCEB,
+        diffAdded: 0xA6E3A1, diffRemoved: 0xF38BA8, diffModified: 0x89B4FA
+    )
+
+    // Athena Daylight — clean modern light. Crisp near-white, ink foreground,
+    // saturated-but-controlled accents (all clear WCAG AA on the background).
+    static let athenaDaylight = EditorTheme(
+        id: "athena-daylight", name: "Athena Daylight",
+        bg: 0xFAFAFB, fg: 0x1F2430, cursor: 0x2D5BE3, selection: 0xD6E4FF, line: 0xF1F3F8,
+        keyword: 0x7C3AED, string: 0x0E7C5A, number: 0xC2410C,
+        comment: 0x6B7280, type: 0x0369A1, function: 0x2D5BE3, annotation: 0xBE185D,
+        whitespace: 0xE3E6EE,
+        diagnosticError: 0xDC2626, diagnosticWarning: 0xB45309, diagnosticInfo: 0x0369A1,
+        diffAdded: 0x15803D, diffRemoved: 0xDC2626, diffModified: 0x2D5BE3
+    )
+
     // High-contrast pair: pure black/white grounds, every token at WCAG AAA
     // (>= 7:1) against the background, and a selection that stays clearly
     // visible against the text.
@@ -182,8 +227,11 @@ extension EditorTheme {
         diffAdded: 0x006400, diffRemoved: 0xB00000, diffModified: 0x0000B8
     )
 
-    static let all: [EditorTheme] = [.athenaDark, .athenaDracula, .athenaLight,
-                                     .athenaHighContrastDark, .athenaHighContrastLight]
+    static let all: [EditorTheme] = [
+        .athenaMidnight, .athenaGraphite, .athenaDaylight,
+        .athenaDark, .athenaDracula, .athenaLight,
+        .athenaHighContrastDark, .athenaHighContrastLight,
+    ]
 
     /// Selection fill, pushed toward the foreground when the system's
     /// Increase Contrast setting is on.
@@ -197,12 +245,15 @@ extension EditorTheme {
     /// renamed successors so an existing `theme.json` keeps working.
     static func named(_ id: String) -> EditorTheme {
         switch id {
+        case "athena-midnight":                             return .athenaMidnight
+        case "athena-graphite":                             return .athenaGraphite
+        case "athena-daylight":                             return .athenaDaylight
         case "athena-dark", "one-dark":                     return .athenaDark
         case "athena-dracula", "darcula":                   return .athenaDracula
         case "athena-light", "soft-light", "github-light":  return .athenaLight
         case "athena-hc-dark":                              return .athenaHighContrastDark
         case "athena-hc-light":                             return .athenaHighContrastLight
-        default:                                            return .athenaDark
+        default:                                            return .athenaMidnight
         }
     }
 }

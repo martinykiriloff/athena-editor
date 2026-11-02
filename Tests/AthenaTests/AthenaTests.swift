@@ -1883,13 +1883,15 @@ struct EditorThemeAthenaLightTests {
     }
 
     @Test func builtInsCarryTheAthenaNamesAndLegacyIdsStillResolve() {
-        #expect(EditorTheme.all.map(\.name) == ["Athena Dark", "Athena Dracula", "Athena Light",
+        #expect(EditorTheme.all.map(\.name) == ["Athena Midnight", "Athena Graphite", "Athena Daylight", "Athena Dark", "Athena Dracula", "Athena Light",
                                            "Athena High Contrast Dark", "Athena High Contrast Light"])
+        #expect(EditorTheme.named("athena-midnight") == .athenaMidnight)
+        #expect(EditorTheme.athenaMidnight.isDark && EditorTheme.athenaGraphite.isDark && !EditorTheme.athenaDaylight.isDark)
         #expect(EditorTheme.named("darcula") == .athenaDracula)
         #expect(EditorTheme.named("one-dark") == .athenaDark)
         #expect(EditorTheme.named("soft-light") == .athenaLight)
         #expect(EditorTheme.named("github-light") == .athenaLight)
-        #expect(EditorTheme.named("nonsense") == .athenaDark)
+        #expect(EditorTheme.named("nonsense") == .athenaMidnight)
     }
 
     @Test func athenaLightUsesParchmentNotPureWhite() {

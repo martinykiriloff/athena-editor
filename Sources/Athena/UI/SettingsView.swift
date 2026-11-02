@@ -421,15 +421,7 @@ struct SettingsView: View {
     private func appearanceSections(state: Bindable<AppState>) -> some View {
         SettingsSection(SettingsIndex.theme) {
             SettingRow("Color Theme") {
-                Picker("Color Theme", selection: state.currentTheme) {
-                    ForEach(appState.allThemes, id: \.id) { t in
-                        Text(t.name).tag(t)
-                    }
-            }
-            .pickerStyle(.radioGroup)
-            .onChange(of: appState.currentTheme) { _, v in
-                appState.persistSetting(v.id, for: "theme")
-            }
+                ThemePickerView()
             }
 
             SettingRow("Import VS Code Theme") {

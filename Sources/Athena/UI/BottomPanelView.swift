@@ -51,7 +51,7 @@ struct BottomPanelView: View {
         }
         .padding(.horizontal, appState.sf(8))
         .frame(height: headerHeight)
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(appState.panelBackground)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Panel header")
     }

@@ -45,7 +45,7 @@ struct TabBarView: View {
             .accessibilityLabel("New Tab")
         }
         .frame(height: tabBarHeight)
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(appState.panelBackground)
     }
 
     private var tabBarHeight: CGFloat { appState.sf(36) }
@@ -153,7 +153,7 @@ private struct TabItemView: View {
         } else if isHovering {
             Color.primary.opacity(0.05)
         } else {
-            Color(nsColor: .controlBackgroundColor)
+            Color.clear
         }
     }
 

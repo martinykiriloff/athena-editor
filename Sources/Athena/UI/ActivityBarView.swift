@@ -63,7 +63,7 @@ struct ActivityBarView: View {
         }
         .padding(.vertical, appState.sf(4))
         .frame(width: appState.sf(48))
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(appState.frameBackground)
         .overlay(alignment: .trailing) {
             Divider()
         }

@@ -13,8 +13,13 @@ struct ResizeDivider: View {
 
     /// Thickness of the handle, in screen points (not zoomed).
     static let thickness: CGFloat = 4
+    /// Thickness of an island-gap handle: an invisible drag strip between two
+    /// floating panels, so the window frame shows through as the gutter.
+    static let gap: CGFloat = 8
 
     let axis: Axis
+    /// Island-gap style: `gap` thick and invisible until hovered.
+    var isGap: Bool = false
     /// The size being resized, read once when a drag begins.
     let size: () -> CGFloat
     /// Receives the size captured at drag start and the cumulative drag
@@ -31,8 +36,8 @@ struct ResizeDivider: View {
             switch axis {
             case .vertical:
                 Rectangle()
-                    .fill(isHovering ? Color.accentColor.opacity(0.6) : Color(nsColor: .separatorColor))
-                    .frame(width: Self.thickness)
+                    .fill(fill)
+                    .frame(width: isGap ? Self.gap : Self.thickness)
                     .onHover { hovering in
                         isHovering = hovering
                         if hovering {
@@ -44,8 +49,8 @@ struct ResizeDivider: View {
                     .gesture(dragGesture { $0.width })
             case .horizontal:
                 Rectangle()
-                    .fill(isHovering ? Color.accentColor.opacity(0.6) : Color(nsColor: .separatorColor))
-                    .frame(height: Self.thickness)
+                    .fill(fill)
+                    .frame(height: isGap ? Self.gap : Self.thickness)
                     .onHover { hovering in
                         isHovering = hovering
                         if hovering {
@@ -57,6 +62,11 @@ struct ResizeDivider: View {
                     .gesture(dragGesture { $0.height })
             }
         }
+    }
+
+    private var fill: Color {
+        if isHovering { return Color.accentColor.opacity(isGap ? 0.35 : 0.6) }
+        return isGap ? Color.clear : Color(nsColor: .separatorColor)
     }
 
     private func dragGesture(_ component: @escaping (CGSize) -> CGFloat) -> some Gesture {
@@ -87,7 +97,7 @@ private struct EditorSplitView: View {
         // The panel may take the whole column (unzoomed points); the stored
         // height is only capped at render time so it comes back when the
         // window grows again.
-        let maxPanel = max(0, (height - ResizeDivider.thickness) / appState.uiScale)
+        let maxPanel = max(0, (height - ResizeDivider.gap) / appState.uiScale)
         let panelHeight = min(appState.bottomPanelHeight, maxPanel)
         // Maximized, the panel takes the column and the editor is hidden —
         // but stays mounted so its scroll/undo state survives the restore.
@@ -111,6 +121,7 @@ private struct EditorSplitView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: maximized ? 0 : .infinity)
+            .island()
             .opacity(maximized ? 0 : 1)
             .allowsHitTesting(!maximized)
             .clipped()
@@ -120,7 +131,7 @@ private struct EditorSplitView: View {
                 // Drag deltas are in screen points; the stored height is in
                 // unzoomed points so it survives a zoom change unchanged.
                 if !maximized {
-                    ResizeDivider(axis: .horizontal, size: { panelHeight }) { base, t in
+                    ResizeDivider(axis: .horizontal, isGap: true, size: { panelHeight }) { base, t in
                         appState.bottomPanelHeight = (base - t / appState.uiScale).clamped(to: 0...maxPanel)
                     }
                 }
@@ -129,7 +140,7 @@ private struct EditorSplitView: View {
                 // terminals.
                 BottomPanelView()
                     .frame(height: maximized ? height : appState.sf(panelHeight))
-                    .clipped()
+                    .island()
             }
         }
     }
@@ -145,7 +156,7 @@ struct MainWindowView: View {
     var body: some View {
         layoutContent
             .frame(minWidth: 900, minHeight: 600)
-            .background(Color(nsColor: .windowBackgroundColor))
+            .background(appState.frameBackground)
             .overlay { if appState.showQuickOpen { QuickOpenView() } }
             .overlay { if appState.taskCenter.showPicker { TaskPickerView() } }
             .overlay { if appState.trust.promptPresented { WorkspaceTrustPromptView() } }
@@ -190,13 +201,15 @@ struct MainWindowView: View {
     /// come from the window's current width, not fixed numbers: each panel
     /// may grow until it meets the other one (squeezing the editor to
     /// nothing) and shrink to zero.
+    private static let islandInset: CGFloat = 6
+
     private func panelRow(width: CGFloat) -> some View {
         let showSidebar = appState.showSidebar && !appState.isZenMode
         let showClaude  = appState.showClaudePanel
         let activityBar = appState.isZenMode ? 0 : appState.sf(48)
-        let dividers    = ResizeDivider.thickness * CGFloat((showSidebar ? 1 : 0) + (showClaude ? 1 : 0))
+        let dividers    = ResizeDivider.gap * CGFloat((showSidebar ? 1 : 0) + (showClaude ? 1 : 0))
         // Width the two side panels share, in unzoomed points.
-        let free = max(0, (width - activityBar - dividers) / appState.uiScale)
+        let free = max(0, (width - activityBar - dividers - Self.islandInset) / appState.uiScale)
         // Stored widths are capped only at render time, so a panel regains
         // its size when the window grows again.
         let sidebarWidth = showSidebar ? min(appState.sidebarWidth, free) : 0
@@ -208,29 +221,34 @@ struct MainWindowView: View {
                     .frame(width: appState.sf(48))
             }
 
-            if showSidebar {
-                SidebarView()
-                    .frame(width: appState.sf(sidebarWidth))
-                    .clipped()
-                ResizeDivider(axis: .vertical, size: { sidebarWidth }) { base, t in
-                    appState.sidebarWidth = (base + t / appState.uiScale).clamped(to: 0...(free - claudeWidth))
-                }
-            }
-
-            EditorSplitView()
-                .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
-                .clipped()
-
-            if showClaude {
-                ResizeDivider(axis: .vertical, size: { claudeWidth }) { base, t in
-                    appState.claudePanelWidth = (base - t / appState.uiScale).clamped(to: 0...(free - sidebarWidth))
+            // The panels float as rounded islands on the window frame; the
+            // dividers between them are invisible gaps.
+            HStack(spacing: 0) {
+                if showSidebar {
+                    SidebarView()
+                        .frame(width: appState.sf(sidebarWidth))
+                        .island()
+                    ResizeDivider(axis: .vertical, isGap: true, size: { sidebarWidth }) { base, t in
+                        appState.sidebarWidth = (base + t / appState.uiScale).clamped(to: 0...(free - claudeWidth))
+                    }
                 }
 
-                ClaudePanel()
-                    .frame(width: appState.sf(claudeWidth))
-                    .background(Color(nsColor: .controlBackgroundColor))
-                    .clipped()
+                EditorSplitView()
+                    .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
+
+                if showClaude {
+                    ResizeDivider(axis: .vertical, isGap: true, size: { claudeWidth }) { base, t in
+                        appState.claudePanelWidth = (base - t / appState.uiScale).clamped(to: 0...(free - sidebarWidth))
+                    }
+
+                    ClaudePanel()
+                        .frame(width: appState.sf(claudeWidth))
+                        .island()
+                }
             }
+            .padding(.top, Self.islandInset)
+            .padding(.trailing, Self.islandInset)
+            .padding(.bottom, Self.islandInset)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

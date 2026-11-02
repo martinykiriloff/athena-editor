@@ -158,7 +158,7 @@ struct StatusBarView: View {
         .foregroundStyle(.secondary)
         .frame(maxWidth: .infinity)
         .frame(height: appState.sf(22))
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(appState.frameBackground)
         .overlay(alignment: .top) {
             Divider()
         }

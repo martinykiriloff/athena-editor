@@ -41,7 +41,7 @@ struct SidebarView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(appState.panelBackground)
         .overlay(alignment: .trailing) {
             Divider()
         }
