@@ -258,6 +258,14 @@ struct EditorView: NSViewRepresentable {
         let findController = FindReplaceController()
         findController.textView = textView
         findReplaceProxy?.wrappedValue = findController
+        // Writing @State while SwiftUI is still creating this view can be
+        // dropped, leaving the bar overlay with no controller to observe
+        // (⌘F then "does nothing"). Re-publish once the update has finished.
+        if let proxy = findReplaceProxy {
+            Task { @MainActor in
+                if proxy.wrappedValue !== findController { proxy.wrappedValue = findController }
+            }
+        }
         context.coordinator.findReplaceController = findController
 
         // Let the keybinding system reach this editor (find, comment, indent…).
