@@ -28,7 +28,7 @@ actor GitService {
     /// buffer (`git show` of a large commit). On failure the message is
     /// stderr, or stdout when stderr is empty — a conflicting merge/pull
     /// reports "CONFLICT …" on stdout with nothing on stderr.
-    private func run(args: [String], at url: URL, allowedExitCodes: Set<Int32> = [0]) async throws -> String {
+    func run(args: [String], at url: URL, extraEnvironment: [String: String] = [:], allowedExitCodes: Set<Int32> = [0]) async throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         process.arguments = args
@@ -37,6 +37,7 @@ actor GitService {
         // must fail with git's message, not hang forever on a prompt.
         var environment = ProcessInfo.processInfo.environment
         environment["GIT_TERMINAL_PROMPT"] = "0"
+        for (key, value) in extraEnvironment { environment[key] = value }
         process.environment = environment
 
         let stdoutPipe = Pipe()
@@ -274,38 +275,13 @@ actor GitService {
     // MARK: - Log
 
     /// Recent commits, optionally only those touching `path` (file history).
-    func log(at url: URL, limit: Int, path: String? = nil) async throws -> [GitCommit] {
-        // Unit-separator delimited (like `stashList`) so a subject containing
-        // "|" can't shift the author/date columns.
-        let format = "--format=%H%x1f%h%x1f%s%x1f%an%x1f%at"
-        var args = ["log", format, "-" + String(limit)]
+    func log(at url: URL, limit: Int, path: String? = nil, allBranches: Bool = false) async throws -> [GitCommit] {
+        // Unit-separator delimited (see `GitParsing.logFormat`) so a subject
+        // containing "|" can't shift the author/date columns.
+        var args = ["log", GitParsing.logFormat, "-" + String(limit)]
+        if allBranches { args += ["--all", "--topo-order"] }
         if let path, !path.isEmpty { args += ["--follow", "--", path] }
-        let output = try await run(args: args, at: url)
-
-        var commits: [GitCommit] = []
-        for line in output.components(separatedBy: "\n") {
-            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { continue }
-
-            let parts = trimmed.components(separatedBy: "\u{1f}")
-            guard parts.count >= 5 else { continue }
-
-            let hash = parts[0]
-            let shortHash = parts[1]
-            let message = parts[2]
-            let author = parts[3]
-            let atStr = parts[4]
-            let date = Date(timeIntervalSince1970: Double(atStr) ?? 0)
-
-            commits.append(GitCommit(
-                hash: hash,
-                shortHash: shortHash,
-                message: message,
-                author: author,
-                date: date
-            ))
-        }
-        return commits
+        return GitParsing.parseLog(try await run(args: args, at: url))
     }
 
     // MARK: - Diff

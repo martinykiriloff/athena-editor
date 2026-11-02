@@ -963,6 +963,11 @@ struct GitCommit: Identifiable, Sendable {
     var message: String
     var author: String
     var date: Date
+    /// Full parent hashes (empty when the log format didn't request them) —
+    /// feeds `GitGraphLayout`.
+    var parents: [String] = []
+    /// Decorations (`HEAD -> main`, `origin/main`, `tag: v1`), if requested.
+    var refs: [String] = []
 }
 
 /// One `git stash list` entry, parsed by `GitService.parseStashList(_:)`.
@@ -1717,4 +1722,91 @@ struct TaskVariableContext: Sendable, Equatable {
     var activeFile: String?
     var environment: [String: String] = [:]
     var home: String = NSHomeDirectory()
+}
+
+// MARK: - Git depth (PRD item 11)
+
+/// A local tag from `git tag -l --format=…`, parsed by `GitParsing.parseTags`.
+struct GitTag: Identifiable, Sendable, Equatable {
+    var name: String
+    var shortHash: String
+    var isAnnotated: Bool
+    var subject: String
+    var id: String { name }
+}
+
+/// A multi-step git operation that is paused mid-way (conflicts, or waiting
+/// for `--continue`), detected from marker files in the git dir.
+enum GitOperation: String, Sendable, Equatable {
+    case merge, rebase, cherryPick
+
+    var title: String {
+        switch self {
+        case .merge:      return "Merge"
+        case .rebase:     return "Rebase"
+        case .cherryPick: return "Cherry-pick"
+        }
+    }
+}
+
+/// One row of the commit graph: which lane the commit sits in and which
+/// lanes enter/leave it. Produced by `GitGraphLayout.layout(_:)`.
+struct GitGraphRow: Sendable, Equatable {
+    var hash: String
+    /// Lane (column) of the commit's node.
+    var lane: Int
+    /// Lanes whose line arrives at this commit from above (includes `lane`
+    /// when the commit was already expected there).
+    var incomingLanes: [Int]
+    /// Lanes where a line leaves toward the parents below (the first parent
+    /// normally continues in `lane` itself).
+    var outgoingLanes: [Int]
+    /// Lanes that run straight through this row without touching the node.
+    var passThroughLanes: [Int]
+    /// Total lanes occupied at this row (for sizing the graph column).
+    var laneCount: Int
+}
+
+/// The open pull request for the current branch (`gh pr status --json`).
+struct GitPullRequestInfo: Sendable, Equatable {
+    var number: Int
+    var title: String
+    var state: String
+    var url: String
+    var headBranch: String
+    var isDraft: Bool
+    var reviewDecision: String
+}
+
+/// One CI check (`gh pr checks --json`). `bucket` is gh's own grouping:
+/// pass, fail, pending, skipping, cancel.
+struct GitCICheck: Identifiable, Sendable, Equatable {
+    var name: String
+    var workflow: String
+    var bucket: String
+    var link: String
+    var id: String { workflow + "/" + name }
+}
+
+/// Source Control extras that don't belong in the core `AppState` fields:
+/// paused operation, tags, merge editor / tags / PR presentation, graph and
+/// line-history modes. One struct so `AppState.swift` takes a single property.
+struct GitExtrasState: Sendable {
+    var operation: GitOperation?
+    var tags: [GitTag] = []
+    var showTags = false
+    /// Pre-fills the tag sheet's target (a commit hash from a history row).
+    var tagTarget: String?
+    /// Repo-relative path open in the merge editor, if any.
+    var mergeEditorPath: String?
+    var showGraph = false
+    var graphRows: [GitGraphRow] = []
+    var lineHistoryLabel: String?
+    /// Absolute path of the `gh` CLI, nil when it isn't installed.
+    var ghPath: String?
+    var showPullRequests = false
+    var pullRequest: GitPullRequestInfo?
+    var checks: [GitCICheck] = []
+    var pullRequestMessage: String?
+    var isLoadingPullRequest = false
 }
