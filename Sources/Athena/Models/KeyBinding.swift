@@ -76,6 +76,22 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
     case foldLevel6          = "editor.foldLevel6"
     case foldLevel7          = "editor.foldLevel7"
     case goToMatchingBracket = "editor.action.jumpToBracket"
+    case sortLinesAscending  = "editor.action.sortLinesAscending"
+    case sortLinesDescending = "editor.action.sortLinesDescending"
+    case reverseLines        = "athena.editor.reverseLines"
+    case removeDuplicateLines = "editor.action.removeDuplicateLines"
+    case trimTrailingWhitespace = "editor.action.trimTrailingWhitespace"
+    case joinLines           = "editor.action.joinLines"
+    case transformToUppercase = "editor.action.transformToUppercase"
+    case transformToLowercase = "editor.action.transformToLowercase"
+    case transformToTitlecase = "editor.action.transformToTitlecase"
+    case insertCursorAbove   = "editor.action.insertCursorAbove"
+    case insertCursorBelow   = "editor.action.insertCursorBelow"
+    case columnSelectUp      = "cursorColumnSelectUp"
+    case columnSelectDown    = "cursorColumnSelectDown"
+    case columnSelectLeft    = "cursorColumnSelectLeft"
+    case columnSelectRight   = "cursorColumnSelectRight"
+    case expandEmmet         = "editor.emmet.action.expandAbbreviation"
     // Debug
     case toggleBreakpoint       = "editor.debug.action.toggleBreakpoint"
     case removeAllBreakpoints   = "workbench.debug.viewlet.action.removeAllBreakpoints"
@@ -171,6 +187,22 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
         case .exportSettingsProfile: return "Settings Profile: Export…"
         case .importSettingsProfile: return "Settings Profile: Import…"
         case .showLogs:          return "Show Logs"
+        case .sortLinesAscending:  return "Sort Lines Ascending"
+        case .sortLinesDescending: return "Sort Lines Descending"
+        case .reverseLines:        return "Reverse Lines"
+        case .removeDuplicateLines: return "Delete Duplicate Lines"
+        case .trimTrailingWhitespace: return "Trim Trailing Whitespace"
+        case .joinLines:           return "Join Lines"
+        case .transformToUppercase: return "Transform to Uppercase"
+        case .transformToLowercase: return "Transform to Lowercase"
+        case .transformToTitlecase: return "Transform to Title Case"
+        case .insertCursorAbove:   return "Add Cursor Above"
+        case .insertCursorBelow:   return "Add Cursor Below"
+        case .columnSelectUp:      return "Column Selection Up"
+        case .columnSelectDown:    return "Column Selection Down"
+        case .columnSelectLeft:    return "Column Selection Left"
+        case .columnSelectRight:   return "Column Selection Right"
+        case .expandEmmet:         return "Emmet: Expand Abbreviation"
         case .zoomIn:            return "Zoom In"
         case .zoomOut:           return "Zoom Out"
         case .resetZoom:         return "Reset Zoom"
@@ -219,7 +251,11 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
              .refactorThis, .refactorExtract, .refactorInline, .refactorMove, .refactorRewrite, .safeDelete,
              .moveLineUp, .moveLineDown, .copyLineUp, .copyLineDown, .deleteLine,
              .fold, .unfold, .toggleFold, .foldAll, .unfoldAll, .goToMatchingBracket,
-             .foldLevel1, .foldLevel2, .foldLevel3, .foldLevel4, .foldLevel5, .foldLevel6, .foldLevel7:
+             .foldLevel1, .foldLevel2, .foldLevel3, .foldLevel4, .foldLevel5, .foldLevel6, .foldLevel7,
+             .sortLinesAscending, .sortLinesDescending, .reverseLines, .removeDuplicateLines,
+             .trimTrailingWhitespace, .joinLines, .transformToUppercase, .transformToLowercase,
+             .transformToTitlecase, .insertCursorAbove, .insertCursorBelow,
+             .columnSelectUp, .columnSelectDown, .columnSelectLeft, .columnSelectRight, .expandEmmet:
             return "Editor"
         }
     }
@@ -437,6 +473,26 @@ struct KeyBinding: Identifiable, Codable, Sendable {
         KeyBinding(action: .foldLevel6,         combo: nil),
         KeyBinding(action: .foldLevel7,         combo: nil),
         KeyBinding(action: .goToMatchingBracket, combo: KeyCombo(key: "\\", command: true, shift: true)),
+        // Line transforms, multi-cursor and Emmet. Ids follow VS Code; VS Code
+        // has no default key for sort/case/dedupe/trim, so those are palette-only.
+        // Emmet expansion is bound to Tab inside the editor's key handler (not a
+        // KeyCombo, which would steal Tab everywhere).
+        KeyBinding(action: .sortLinesAscending,  combo: nil),
+        KeyBinding(action: .sortLinesDescending, combo: nil),
+        KeyBinding(action: .reverseLines,        combo: nil),
+        KeyBinding(action: .removeDuplicateLines, combo: nil),
+        KeyBinding(action: .trimTrailingWhitespace, combo: nil),
+        KeyBinding(action: .joinLines,           combo: KeyCombo(key: "j", control: true)),
+        KeyBinding(action: .transformToUppercase, combo: nil),
+        KeyBinding(action: .transformToLowercase, combo: nil),
+        KeyBinding(action: .transformToTitlecase, combo: nil),
+        KeyBinding(action: .insertCursorAbove,   combo: KeyCombo(key: "up",   command: true, option: true)),
+        KeyBinding(action: .insertCursorBelow,   combo: KeyCombo(key: "down", command: true, option: true)),
+        KeyBinding(action: .columnSelectUp,      combo: KeyCombo(key: "up",    command: true, shift: true, option: true)),
+        KeyBinding(action: .columnSelectDown,    combo: KeyCombo(key: "down",  command: true, shift: true, option: true)),
+        KeyBinding(action: .columnSelectLeft,    combo: KeyCombo(key: "left",  command: true, shift: true, option: true)),
+        KeyBinding(action: .columnSelectRight,   combo: KeyCombo(key: "right", command: true, shift: true, option: true)),
+        KeyBinding(action: .expandEmmet,         combo: nil),
         // Debug — VS Code's own function keys. Breakpoints had no binding,
         // no menu item and no palette entry at all, so the only way to set
         // one was to know the gutter was clickable.

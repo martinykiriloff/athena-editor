@@ -317,6 +317,12 @@ struct EditorView: NSViewRepresentable {
             coord.addCursor(at: charIdx, in: tv)
         }
 
+        // Option+Shift+drag: box (column) selection.
+        textView.onColumnDrag = { [weak coord, weak textView] (anchor: Int, head: Int) in
+            guard let coord, let tv = textView else { return }
+            coord.columnDrag(anchor: anchor, head: head, in: tv)
+        }
+
         // Switch to the pointing-hand cursor while Cmd-hovering a clickable target.
         textView.isClickableTarget = { [weak coord, weak textView] (charIdx: Int) in
             guard let coord, let tv = textView else { return false }
@@ -665,6 +671,8 @@ extension EditorView {
         var scrollProxy: EditorScrollProxy?
         var findReplaceController: FindReplaceController?
         weak var textView: NSTextView?
+        /// Tag link / column-selection state (see EditorCoordinator+Editing.swift).
+        let editingState = EditingState()
         nonisolated(unsafe) private var scrollObserver: NSObjectProtocol?
         nonisolated(unsafe) private var commandObserver: NSObjectProtocol?
         // no mouseMonitor needed — using NSClickGestureRecognizer instead
@@ -1120,8 +1128,20 @@ extension EditorView {
                 case .copyLineUp:    applyLineEdit(LineOperations.copyUp(text: tv.string, selection: tv.selectedRange()), in: tv)
                 case .copyLineDown:  applyLineEdit(LineOperations.copyDown(text: tv.string, selection: tv.selectedRange()), in: tv)
                 case .deleteLine:    applyLineEdit(LineOperations.deleteLines(text: tv.string, selection: tv.selectedRange()), in: tv)
-                case .find, .findAndReplace, .fold, .unfold, .toggleFold, .foldAll, .unfoldAll, .foldLevel, .goToMatchingBracket: break // handled above
+                default: break // handled above or below
                 }
+            case .transformLines(let transform):
+                guard tv.window?.firstResponder === tv else { return }
+                applyTransform(transform, in: tv)
+            case .insertCursorAbove, .insertCursorBelow:
+                guard tv.window?.firstResponder === tv else { return }
+                insertCursor(above: command == .insertCursorAbove, in: tv)
+            case .columnSelect(let direction):
+                guard tv.window?.firstResponder === tv else { return }
+                columnSelect(direction, in: tv)
+            case .expandEmmet:
+                guard tv.window?.firstResponder === tv else { return }
+                _ = expandEmmetAbbreviation(in: tv)
             }
         }
 
@@ -1634,6 +1654,8 @@ extension EditorView {
             // logic to just one range and silently drop the others.
             guard tv.selectedRanges.count <= 1 else { return false }
 
+            if ch == 0x3E, handleTagAutoClose(in: tv) { return true }
+
             let selection = tv.selectedRange()
 
             // Wrap a non-empty selection in the pair rather than replacing it.
@@ -1842,6 +1864,7 @@ extension EditorView {
                 guard !Task.isCancelled, let self else { return }
                 await self.triggerGhostText()
             }
+            applyLinkedTagRename(in: textView)
         }
 
         // Called by NSTextView when Cmd+Click lands on a .link attribute (editable TV).
@@ -1936,6 +1959,7 @@ extension EditorView {
         /// whenever no snippet is active.
         func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
             recordPendingHighlightEdit(in: textView, affected: affectedCharRange, replacement: replacementString)
+            recordLinkedTagEdit(in: textView, affected: affectedCharRange, replacement: replacementString)
             guard var snippet = activeSnippet else { return true }
             let delta = (replacementString?.utf16.count ?? 0) - affectedCharRange.length
             guard delta != 0 else { return true }
@@ -2388,6 +2412,9 @@ extension EditorView {
                 if let tv = textView, advanceSnippet(in: tv) {
                     return true
                 }
+                if let tv = textView, expandEmmetAbbreviation(in: tv) {
+                    return true
+                }
                 return false
             case 51:  // Backspace — delete an auto-inserted empty pair as a unit
                 if let tv = textView, deleteEmptyPairIfPresent(in: tv) { return true }
@@ -2753,6 +2780,14 @@ extension EditorView {
         /// keystroke even when this was the final stop (landing on `$0`
         /// ends tracking, but the Tab that got you there is still handled,
         /// not passed through as a literal tab character).
+        /// Starts tab-stop tracking for externally expanded snippets (Emmet):
+        /// selects the first stop; Tab then advances through the rest.
+        func beginSnippet(stops: [SnippetTabStop], in tv: NSTextView) {
+            guard let first = stops.first else { activeSnippet = nil; return }
+            activeSnippet = stops.count > 1 ? ActiveSnippet(stops: stops, currentIndex: 0) : nil
+            tv.setSelectedRange(first.range)
+        }
+
         private func advanceSnippet(in tv: NSTextView) -> Bool {
             guard var snippet = activeSnippet else { return false }
             let nextIndex = snippet.currentIndex + 1
