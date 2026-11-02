@@ -337,6 +337,18 @@ struct AthenaCommands: Commands {
                 performAction(.quickFix)
             }
 
+            Button("Organize Imports") {
+                performAction(.organizeImports)
+            }
+
+            Button("Show Call Hierarchy") {
+                performAction(.showCallHierarchy)
+            }
+
+            Button("Show Type Hierarchy") {
+                performAction(.showTypeHierarchy)
+            }
+
             Divider()
 
             Button("Next Problem") {

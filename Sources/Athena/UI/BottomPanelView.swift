@@ -130,6 +130,7 @@ struct BottomPanelView: View {
         case .sfcclogs:  return "SFCC Logs"
         case .references: return "References"
         case .debugConsole: return "Debug Console"
+        case .hierarchy: return "Hierarchy"
         }
     }
 
@@ -145,6 +146,7 @@ struct BottomPanelView: View {
         case .sfcclogs:  SFCCLogView()
         case .references: ReferencesPanelView()
         case .debugConsole: DebugConsoleView()
+        case .hierarchy: HierarchyPanelView()
         }
     }
 }

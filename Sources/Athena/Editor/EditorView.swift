@@ -59,6 +59,8 @@ struct EditorView: NSViewRepresentable {
     var isConflictScanTrusted: Bool = true
     /// The URL of the file being edited — used for import path resolution.
     var fileURL: URL? = nil
+    /// When set, drives LSP inlay hints, code lens, semantic tokens and linked editing.
+    var overlayAppState: AppState? = nil
     /// True when this instance's editor GROUP is the one the user last
     /// interacted with — always `true` in single-pane/unsplit mode (plan.md
     /// item 22). Gates `.find`/`.findAndReplace` in `Coordinator.handle`,
@@ -346,6 +348,13 @@ struct EditorView: NSViewRepresentable {
             coord?.completionController.dismiss()
             coord?.ghostController.dismiss()
             coord?.cancelHover()
+        }
+
+        if let overlayAppState {
+            coord.lspOverlay = LSPOverlayController(
+                textView: textView, appState: overlayAppState,
+                fileURL: { [weak coord] in coord?.parent.fileURL },
+                theme: { [weak coord] in coord?.parent.theme ?? .athenaDracula })
         }
 
         return scrollView
@@ -1831,6 +1840,8 @@ extension EditorView {
 
         // MARK: Symbol occurrence highlight (LSP documentHighlight)
 
+        /// Inlay hints / code lens / semantic tokens / linked editing driver.
+        var lspOverlay: LSPOverlayController?
         private var symbolHighlightTask: Task<Void, Never>?
         private var symbolHighlightGeneration = 0
 

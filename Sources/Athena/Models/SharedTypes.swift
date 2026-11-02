@@ -427,7 +427,7 @@ struct DBQueryResult: Sendable {
 }
 
 enum BottomPanel: String, Sendable, CaseIterable {
-    case terminal, scripts, output, problems, sfcclogs, references, debugConsole
+    case terminal, scripts, output, problems, sfcclogs, references, debugConsole, hierarchy
 }
 
 // MARK: - Language
@@ -1868,4 +1868,112 @@ struct LanguageServerOverride: Codable, Sendable, Equatable {
         path.trimmingCharacters(in: .whitespaces).isEmpty
             && arguments.trimmingCharacters(in: .whitespaces).isEmpty
     }
+}
+
+// MARK: - LSP extras (inlay hints, semantic tokens, code lens, hierarchy, linked editing)
+
+/// A 0-based LSP range. UTF-16 character offsets, same as `NSString`.
+struct LSPRangeSpan: Sendable, Equatable {
+    var startLine: Int
+    var startCharacter: Int
+    var endLine: Int
+    var endCharacter: Int
+}
+
+/// One `textDocument/inlayHint` result with its label parts joined.
+/// `kind`: 1 type, 2 parameter (nil when the server omits it).
+struct InlayHint: Sendable, Equatable {
+    var line: Int
+    var character: Int
+    var label: String
+    var kind: Int?
+    var paddingLeft: Bool = false
+    var paddingRight: Bool = false
+}
+
+/// The `legend` from a server's `semanticTokensProvider`.
+struct SemanticTokensLegend: Sendable, Equatable {
+    var tokenTypes: [String]
+    var tokenModifiers: [String]
+}
+
+/// One decoded semantic token (absolute position, names rather than indices).
+struct SemanticTokenSpan: Sendable, Equatable {
+    var line: Int
+    var startCharacter: Int
+    var length: Int
+    var tokenType: String
+    var modifiers: [String]
+}
+
+/// One `textDocument/codeLens`. `command` is nil until resolved.
+struct CodeLens: Identifiable, Sendable, Equatable {
+    let id = UUID()
+    var line: Int
+    var character: Int
+    var command: LSPCommand?
+    var title: String?
+    /// The lens exactly as the server sent it, replayed for `codeLens/resolve`.
+    var raw: Data
+    static func == (a: CodeLens, b: CodeLens) -> Bool { a.id == b.id }
+}
+
+/// A call- or type-hierarchy node.
+struct HierarchyItem: Identifiable, Sendable {
+    let id = UUID()
+    var name: String
+    var detail: String?
+    var kind: Int
+    var fileURL: URL
+    /// 0-based start of the item's selection range.
+    var line: Int
+    var character: Int
+    /// For call-hierarchy edges: how many call sites the edge covers.
+    var callSiteCount: Int = 0
+    /// The item exactly as the server sent it, replayed for the next request.
+    var raw: Data
+}
+
+/// Which hierarchy relation to follow from an item.
+enum HierarchyDirection: String, Sendable, CaseIterable {
+    case incomingCalls, outgoingCalls, supertypes, subtypes
+
+    var isCall: Bool { self == .incomingCalls || self == .outgoingCalls }
+    var title: String {
+        switch self {
+        case .incomingCalls: return "Incoming Calls"
+        case .outgoingCalls: return "Outgoing Calls"
+        case .supertypes:    return "Supertypes"
+        case .subtypes:      return "Subtypes"
+        }
+    }
+}
+
+/// Ranges that must be edited together (`textDocument/linkedEditingRange`).
+struct LinkedEditingRanges: Sendable, Equatable {
+    var ranges: [LSPRangeSpan]
+    var wordPattern: String?
+}
+
+/// A `workspace.fileOperations` filter (glob + optional file/folder match).
+struct FileOperationFilter: Sendable, Equatable {
+    var glob: String
+    /// "file", "folder" or nil for both.
+    var matches: String?
+    var ignoreCase: Bool = false
+}
+
+/// Server capabilities for the Wave 2 LSP extras, read from `initialize`.
+struct LSPExtraCapabilities: Sendable, Equatable {
+    var inlayHints = false
+    var semanticTokensFull = false
+    var semanticLegend: SemanticTokensLegend?
+    var codeLens = false
+    var codeLensResolve = false
+    var callHierarchy = false
+    var typeHierarchy = false
+    var linkedEditing = false
+    var codeActions = false
+    var willRenameFilters: [FileOperationFilter] = []
+    var didRenameFilters: [FileOperationFilter] = []
 }

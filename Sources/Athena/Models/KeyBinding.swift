@@ -31,6 +31,9 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
     case goToSymbol         = "workbench.action.gotoSymbol"
     case runTask            = "workbench.action.tasks.runTask"
     case goToWorkspaceSymbol = "workbench.action.showAllSymbols"
+    case organizeImports    = "editor.action.organizeImports"
+    case showCallHierarchy  = "references-view.showCallHierarchy"
+    case showTypeHierarchy  = "references-view.showTypeHierarchy"
     case nextProblem        = "editor.action.marker.nextInFiles"
     case previousProblem    = "editor.action.marker.prevInFiles"
     // Layout
@@ -117,6 +120,9 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
         case .goToSymbol:        return "Go to Symbol"
         case .runTask:           return "Run Task"
         case .goToWorkspaceSymbol: return "Go to Symbol in Workspace"
+        case .organizeImports:   return "Organize Imports"
+        case .showCallHierarchy: return "Show Call Hierarchy"
+        case .showTypeHierarchy: return "Show Type Hierarchy"
         case .nextProblem:       return "Go to Next Problem"
         case .previousProblem:   return "Go to Previous Problem"
         case .splitEditorRight:  return "Split Editor Right"
@@ -190,6 +196,7 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
             return "Workspace"
         case .findInFile, .findAndReplace, .toggleComment, .indentLine, .outdentLine,
              .selectNextOccurrence, .findReferences, .renameSymbol, .quickFix,
+             .organizeImports, .showCallHierarchy, .showTypeHierarchy,
              .moveLineUp, .moveLineDown, .copyLineUp, .copyLineDown, .deleteLine,
              .fold, .unfold, .toggleFold, .foldAll, .unfoldAll, .goToMatchingBracket,
              .foldLevel1, .foldLevel2, .foldLevel3, .foldLevel4, .foldLevel5, .foldLevel6, .foldLevel7:
@@ -341,6 +348,10 @@ struct KeyBinding: Identifiable, Codable, Sendable {
         KeyBinding(action: .runTask,           combo: KeyCombo(key: "r",   command: true, option: true)),
         KeyBinding(action: .goToWorkspaceSymbol, combo: KeyCombo(key: "t", command: true)),
         KeyBinding(action: .nextProblem,       combo: KeyCombo(key: "f8")),
+        // VS Code defaults: ⇧⌥O organize imports, ⇧⌥H call hierarchy.
+        KeyBinding(action: .organizeImports,   combo: KeyCombo(key: "o",   shift: true, option: true)),
+        KeyBinding(action: .showCallHierarchy, combo: KeyCombo(key: "h",   shift: true, option: true)),
+        KeyBinding(action: .showTypeHierarchy, combo: nil),
         KeyBinding(action: .previousProblem,   combo: KeyCombo(key: "f8",  shift: true)),
         // Layout — ⌘\ is VS Code's real macOS default for "Split Editor Right"
         // (plan.md item 22); no existing binding above claims the "\" key.

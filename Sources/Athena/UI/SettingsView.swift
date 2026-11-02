@@ -307,6 +307,36 @@ struct SettingsView: View {
                         appState.persistSetting(v, for: "editorFormatOnSave")
                     }
             }
+            SettingRow("Fix All on Save") {
+                Toggle("Fix All on Save", isOn: state.editorFixAllOnSave)
+                    .onChange(of: appState.editorFixAllOnSave) { _, v in
+                        appState.persistSetting(v, for: "editorFixAllOnSave")
+                    }
+            }
+            SettingRow("Inlay Hints") {
+                Toggle("Inlay Hints", isOn: state.editorInlayHints)
+                    .onChange(of: appState.editorInlayHints) { _, v in
+                        appState.persistSetting(v, for: "editorInlayHints")
+                    }
+            }
+            SettingRow("Semantic Highlighting") {
+                Toggle("Semantic Highlighting", isOn: state.editorSemanticTokens)
+                    .onChange(of: appState.editorSemanticTokens) { _, v in
+                        appState.persistSetting(v, for: "editorSemanticTokens")
+                    }
+            }
+            SettingRow("Code Lens") {
+                Toggle("Code Lens", isOn: state.editorCodeLens)
+                    .onChange(of: appState.editorCodeLens) { _, v in
+                        appState.persistSetting(v, for: "editorCodeLens")
+                    }
+            }
+            SettingRow("Linked Editing") {
+                Toggle("Linked Editing", isOn: state.editorLinkedEditing)
+                    .onChange(of: appState.editorLinkedEditing) { _, v in
+                        appState.persistSetting(v, for: "editorLinkedEditing")
+                    }
+            }
             SettingRow("Trim Trailing Whitespace") {
                 Toggle("Trim Trailing Whitespace", isOn: state.editorTrimTrailingWhitespace)
                     .onChange(of: appState.editorTrimTrailingWhitespace) { _, v in
@@ -768,7 +798,7 @@ enum SettingsIndex {
     static let indentation = SettingsIndexEntry(title: "Indentation", labels: ["Tab Size", "Insert Spaces", "Detect Indentation", "Auto Indent"])
     static let display = SettingsIndexEntry(title: "Display", labels: ["Word Wrap", "Line Numbers", "Render Whitespace", "Indent Guides", "Bracket Pair Colorization", "Sticky Scroll", "Scroll Beyond Last Line"])
     static let cursor = SettingsIndexEntry(title: "Cursor", labels: ["Cursor Style", "Cursor Blinking"])
-    static let files = SettingsIndexEntry(title: "Files", labels: ["Format on Save", "Trim Trailing Whitespace", "Insert Final Newline", "Use .editorconfig"])
+    static let files = SettingsIndexEntry(title: "Files", labels: ["Format on Save", "Fix All on Save", "Inlay Hints", "Semantic Highlighting", "Code Lens", "Linked Editing", "Trim Trailing Whitespace", "Insert Final Newline", "Use .editorconfig"])
     static let theme = SettingsIndexEntry(title: "Theme", labels: ["Color Theme", "Import VS Code Theme"])
     static let minimap = SettingsIndexEntry(title: "Minimap", labels: ["Enable Minimap"])
     static let api = SettingsIndexEntry(title: "API", labels: ["Claude API Key", "Default Model"])

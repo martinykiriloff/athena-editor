@@ -97,8 +97,10 @@ extension AppState {
         }
         guard name != url.lastPathComponent else { return }
         do {
+            await applyWillRenameEdits(from: url, to: url.deletingLastPathComponent().appendingPathComponent(name))
             let newURL = try await fileService.rename(url, to: name)
             retargetTabs(from: url, to: newURL)
+            notifyDidRename(from: url, to: newURL)
             await refreshFileTree()
         } catch {
             statusMessage = error.localizedDescription
@@ -186,8 +188,10 @@ extension AppState {
                         continue
                     }
                     let destination = await fileService.uniqueDestination(for: source, in: directory)
+                    await applyWillRenameEdits(from: source, to: destination)
                     try await fileService.moveItem(from: source, to: destination)
                     retargetTabs(from: source, to: destination)
+                    notifyDidRename(from: source, to: destination)
                 } else {
                     let destination = await fileService.uniqueDestination(for: source, in: directory)
                     try await fileService.copyItem(from: source, to: destination)
