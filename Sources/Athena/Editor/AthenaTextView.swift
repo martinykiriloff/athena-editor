@@ -42,8 +42,16 @@ final class AthenaTextView: NSTextView {
 
     // MARK: - Mouse handling
 
+    /// Fired with the 1-based line when a clickable line annotation is hit.
+    var onAnnotationClick: ((Int) -> Void)?
+
     override func mouseDown(with event: NSEvent) {
         onMouseDown?()
+        if let lm = layoutManager as? AthenaLayoutManager,
+           let line = lm.actionAnnotationLine(at: convert(event.locationInWindow, from: nil)) {
+            onAnnotationClick?(line)
+            return
+        }
         if event.modifierFlags.contains(.command) {
             let point   = convert(event.locationInWindow, from: nil)
             let charIdx = characterIndex(for: point)

@@ -221,6 +221,8 @@ final class AppState {
     @ObservationIgnored private var runningScriptProcesses: [String: Process] = [:]
     let npmScriptService: NPMScriptService = NPMScriptService()
     let taskCenter = TaskCenter()   // .vscode/tasks.json — see AppState+Tasks.swift
+    let breakpointCenter = BreakpointCenter()   // breakpoint options, exception pauses, inline values — see AppState+Breakpoints.swift
+    let requestCenter = RequestCenter()         // .http requests + SQL history — see AppState+Requests.swift
 
     // Selected package + script for the Scripts bottom panel.
     var selectedNPMPackageId:   String? = nil
@@ -898,6 +900,7 @@ final class AppState {
         try? await settingsService.setValue(url.path, for: "lastWorkspacePath")
         AppState.registerRecentPath(url)
         AppState.registerRecentWorkspace(url)
+        loadPersistedBreakpoints(for: url)
 
         await discoverNPMPackages()
         // Load SFCC connections here, not (only) in the SFCC sidebar's
@@ -1721,6 +1724,7 @@ final class AppState {
     func removeAllBreakpoints() {
         let count = debugBreakpoints.values.reduce(0) { $0 + $1.count }
         debugBreakpoints = [:]
+        breakpointsDidChange(changedFile: nil)
         statusMessage = count == 0 ? "No breakpoints to remove" : "Removed \(count) breakpoint\(count == 1 ? "" : "s")"
     }
 
@@ -1730,24 +1734,28 @@ final class AppState {
         }
         if debugBreakpoints[filePath]!.contains(line) {
             debugBreakpoints[filePath]!.remove(line)
+            breakpointCenter.options[filePath]?[line] = nil
         } else {
             debugBreakpoints[filePath]!.insert(line)
         }
-        pushBreakpointsToLiveSession(changedFile: filePath)
+        breakpointsDidChange(changedFile: filePath)
     }
 
     /// A toggle during a session reaches the debuggee immediately; a
     /// sandbox keeps halting storefront requests at a breakpoint the user
     /// visibly removed otherwise.
-    private func pushBreakpointsToLiveSession(changedFile: String) {
+    func pushBreakpointsToLiveSession(changedFile: String) {
         switch debugState {
         case .running, .paused: break
         case .idle, .launching, .stopped: return
         }
-        let lines = Array(debugBreakpoints[changedFile] ?? []).sorted()
-        let all = debugBreakpoints.mapValues { Array($0).sorted() }
+        let lines = activeBreakpointLines(in: changedFile)
+        let all = debugBreakpoints.keys.reduce(into: [String: [Int]]()) { $0[$1] = activeBreakpointLines(in: $1) }
+        let options = breakpointCenter.options
+        let exceptions = breakpointCenter.exceptions
         Task {
             do {
+                await debugService.configureBreakpoints(options: options, exceptions: exceptions)
                 try await debugService.updateBreakpoints(changedFile: changedFile, lines: lines, allByFile: all)
             } catch {
                 debugOutput += "[Athena] Couldn't update breakpoints: \(error.localizedDescription)\n"
@@ -1788,7 +1796,8 @@ final class AppState {
             }
         )
 
-        let bpMap = debugBreakpoints.mapValues { Array($0) }
+        let bpMap = debugBreakpoints.keys.reduce(into: [String: [Int]]()) { $0[$1] = activeBreakpointLines(in: $1) }
+        await debugService.configureBreakpoints(options: breakpointCenter.options, exceptions: breakpointCenter.exceptions)
 
         do {
             try await debugService.launch(config, workspaceURL: workspace?.rootURL, breakpointsByFile: bpMap,
@@ -1809,6 +1818,7 @@ final class AppState {
         debugStackFrames = []
         debugVariables   = []
         selectedFrameId  = nil
+        breakpointCenter.inlineValues = [:]
         // Watch expressions themselves persist across sessions (they're
         // user-authored, not session state) — only their last-evaluated
         // values go stale once there's no debuggee to evaluate against.
@@ -1825,6 +1835,7 @@ final class AppState {
         // Cleared before the call: a backend may detect the next halt while
         // the continue request is still in flight, and that marker must win.
         debugCurrentLine = nil
+        breakpointCenter.inlineValues = [:]
         try? await debugService.continueExecution()
     }
 
@@ -1865,6 +1876,7 @@ final class AppState {
             if let file = debugCurrentFile {
                 await openFile(file)
             }
+            updateInlineDebugValues()
         } catch {
             debugOutput += "[Athena] Error fetching debug state: \(error.localizedDescription)\n"
         }
@@ -2410,6 +2422,9 @@ final class AppState {
         dbQueryErrorMessage = nil
         dbQueryIsRunning = true
         defer { dbQueryIsRunning = false }
+        requestCenter.sqlHistory = SQLHistory.adding(
+            SQLHistoryEntry(sql: trimmed, connectionName: dbConnections.first(where: { $0.id == connectionId })?.name ?? "",
+                            date: Date()), to: requestCenter.sqlHistory)
         do {
             let result = try await engine.runQuery(connectionId, sql: trimmed, limit: 500)
             dbQueryResult = result
@@ -3379,6 +3394,9 @@ final class AppState {
                                  : keyBindings.first(where: { $0.combo == combo })
 
         guard let binding = lookup else { return false }
+        // ⌘↩ belongs to other views (Git commit, DB console) unless the
+        // editor on a .http / .rest / .sql file has focus.
+        if binding.action == .runRequestOrQuery, !canRunRequestOrQuery { return false }
         Task { await self.perform(binding.action) }
         return true
     }
@@ -3481,6 +3499,8 @@ final class AppState {
             toggleBreakpointAtCursor()
         case .removeAllBreakpoints:
             removeAllBreakpoints()
+        case .runRequestOrQuery:
+            await runRequestOrQuery()
         case .startOrContinueDebug:
             if case .paused = debugState { await debugContinue() } else { await startDebugging() }
         case .stopDebug:

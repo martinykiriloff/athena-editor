@@ -5,6 +5,12 @@
 
 import AppKit
 
+/// `NSMenuItem.representedObject` carrier for a breakpoint menu choice.
+final class BreakpointMenuPayload: NSObject {
+    let kind: BreakpointEditKind
+    init(kind: BreakpointEditKind) { self.kind = kind }
+}
+
 // MARK: - GutterView
 
 final class GutterView: NSRulerView {
@@ -28,6 +34,9 @@ final class GutterView: NSRulerView {
     /// — kept in sync with the editor's theme by `EditorView`.
     var theme: EditorTheme = .athenaDracula
     var onToggleBreakpoint: ((Int) -> Void)?
+    /// Non-standard breakpoint appearance (conditional / logpoint / disabled).
+    var breakpointStyles: [Int: BreakpointGlyphStyle] = [:]
+    var onBreakpointEdit: ((Int, BreakpointEditKind) -> Void)?
 
     /// Conflict regions found in the current buffer (plan.md item 23, "D5"),
     /// kept in sync by `EditorView.Coordinator.updateConflictHighlights`.
@@ -233,10 +242,24 @@ final class GutterView: NSRulerView {
                 path.close()
                 NSColor.systemYellow.setFill()
             } else {
-                // Filled circle
                 let r = dotRadius
-                path.appendOval(in: NSRect(x: cx - r, y: cy - r, width: r * 2, height: r * 2))
-                NSColor.systemRed.setFill()
+                switch breakpointStyles[lineNum] ?? .standard {
+                case .standard:
+                    path.appendOval(in: NSRect(x: cx - r, y: cy - r, width: r * 2, height: r * 2))
+                    NSColor.systemRed.setFill()
+                case .conditional:
+                    // Diamond: stops only sometimes.
+                    path.move(to: NSPoint(x: cx, y: cy - r - 1)); path.line(to: NSPoint(x: cx + r + 1, y: cy))
+                    path.line(to: NSPoint(x: cx, y: cy + r + 1)); path.line(to: NSPoint(x: cx - r - 1, y: cy)); path.close()
+                    NSColor.systemRed.setFill()
+                case .logpoint:
+                    path.move(to: NSPoint(x: cx, y: cy - r - 1)); path.line(to: NSPoint(x: cx + r + 1, y: cy))
+                    path.line(to: NSPoint(x: cx, y: cy + r + 1)); path.line(to: NSPoint(x: cx - r - 1, y: cy)); path.close()
+                    NSColor.systemOrange.setFill()
+                case .disabled:
+                    path.appendOval(in: NSRect(x: cx - r, y: cy - r, width: r * 2, height: r * 2))
+                    NSColor.systemGray.withAlphaComponent(0.6).setFill()
+                }
             }
             path.fill()
         }
@@ -293,6 +316,48 @@ final class GutterView: NSRulerView {
 
         // Restore focus to the editor so keyboard shortcuts keep working after a gutter click.
         textView.window?.makeFirstResponder(textView)
+    }
+
+    // MARK: - Breakpoint edit menu
+
+    /// Right-click on a gutter row: edit the breakpoint on that line
+    /// (condition, hit count, logpoint, enable/disable, remove). A line with
+    /// no breakpoint yet gets one when a condition/hit count/log is chosen.
+    override func rightMouseDown(with event: NSEvent) {
+        guard let textView = clientView as? NSTextView,
+              let lm = textView.layoutManager,
+              let tc = textView.textContainer else { return }
+        let local = convert(event.locationInWindow, from: nil)
+        let textY = local.y + textView.visibleRect.minY - textView.textContainerOrigin.y
+        let pt = NSPoint(x: textView.textContainerInset.width, y: max(0, textY))
+        let charIdx = lm.characterIndexForGlyph(at: lm.glyphIndex(for: pt, in: tc))
+        let line = lineNumber(in: textView.string as NSString, before: charIdx)
+        pendingBreakpointLine = line
+        let hasBP = breakpoints.contains(line)
+        let menu = NSMenu()
+        func item(_ title: String, _ kind: BreakpointEditKind) -> NSMenuItem {
+            let mi = NSMenuItem(title: title, action: #selector(breakpointMenuAction(_:)), keyEquivalent: "")
+            mi.target = self
+            mi.representedObject = BreakpointMenuPayload(kind: kind)
+            return mi
+        }
+        menu.addItem(item(hasBP ? "Edit Condition…" : "Add Conditional Breakpoint…", .condition))
+        menu.addItem(item("Edit Hit Count…", .hitCount))
+        menu.addItem(item(hasBP ? "Edit Logpoint…" : "Add Logpoint…", .logMessage))
+        if hasBP {
+            menu.addItem(.separator())
+            menu.addItem(item(breakpointStyles[line] == .disabled ? "Enable Breakpoint" : "Disable Breakpoint", .toggleEnabled))
+            menu.addItem(item("Remove Breakpoint", .remove))
+        }
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
+    }
+
+    private var pendingBreakpointLine: Int = 0
+
+    @objc private func breakpointMenuAction(_ sender: NSMenuItem) {
+        guard let payload = sender.representedObject as? BreakpointMenuPayload else { return }
+        onBreakpointEdit?(pendingBreakpointLine, payload.kind)
+        clientView?.window?.makeFirstResponder(clientView)
     }
 
     // MARK: - Merge-conflict resolution menu

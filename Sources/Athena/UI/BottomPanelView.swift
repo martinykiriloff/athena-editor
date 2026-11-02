@@ -125,6 +125,8 @@ struct BottomPanelView: View {
         case .sfcclogs:  return "SFCC Logs"
         case .references: return "References"
         case .debugConsole: return "Debug Console"
+        case .httpResponse: return "HTTP Response"
+        case .queryResults: return "Query Results"
         }
     }
 
@@ -140,6 +142,8 @@ struct BottomPanelView: View {
         case .sfcclogs:  SFCCLogView()
         case .references: ReferencesPanelView()
         case .debugConsole: DebugConsoleView()
+        case .httpResponse: HTTPResponseView()
+        case .queryResults: QueryResultsPanelView()
         }
     }
 }
