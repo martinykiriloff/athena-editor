@@ -498,12 +498,19 @@ actor DebugService {
             if let id = resp?.json["breakpointId"] as? String { cdpBreakpointIds[filePath, default: []].append(id) }
         }
         for line in lines {
-            var base: [String: Any] = ["lineNumber": line - 1]
-            if let cond = BreakpointRequestBuilder.cdpCondition(options: breakpointOptions[filePath]?[line],
-                                                                key: "\(filePath):\(line)") {
-                base["condition"] = cond
+            let options = breakpointOptions[filePath]?[line]
+            // One V8 breakpoint per spelling of the path: each evaluates its
+            // own condition on every hit, so each needs its own hit counter
+            // or the shared one advances several times per pass.
+            var variant = 0
+            func merged(_ extra: [String: Any]) -> Data {
+                variant += 1
+                var params: [String: Any] = ["lineNumber": line - 1]
+                if let cond = BreakpointRequestBuilder.cdpCondition(options: options, key: "\(filePath):\(line)#\(variant)") {
+                    params["condition"] = cond
+                }
+                return cdpJSON(params.merging(extra) { _, new in new })
             }
-            func merged(_ extra: [String: Any]) -> Data { cdpJSON(base.merging(extra) { _, new in new }) }
             if isChrome {
                 let filename = (URL(fileURLWithPath: filePath).lastPathComponent)
                     .replacingOccurrences(of: ".", with: "\\.")

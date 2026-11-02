@@ -60,6 +60,7 @@ enum HTTPRequestParser {
                 let t = ls[idx].1.trimmingCharacters(in: .whitespaces)
                 if t.hasPrefix("?") || t.hasPrefix("&") { url += t; idx += 1 } else { break }
             }
+            if let range = url.range(of: #"\s+HTTP/\d(\.\d)?$"#, options: .regularExpression) { url.removeSubrange(range) }
             // Headers until a blank line.
             var headers: [HTTPHeader] = []
             while idx < ls.count {

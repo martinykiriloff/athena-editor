@@ -183,7 +183,7 @@ enum SQLStatementSplitter {
     /// statements, the one before it.
     static func statement(in sql: String, atOffset offset: Int) -> String? {
         let all = statements(in: sql)
-        if let hit = all.first(where: { NSLocationInRange(offset, NSRange(location: $0.range.location, length: $0.range.length + 1)) }) {
+        if let hit = all.first(where: { NSLocationInRange(offset, NSRange(location: $0.range.location, length: $0.range.length + 2)) }) {
             return hit.text
         }
         return all.last(where: { $0.range.location <= offset })?.text ?? all.first?.text
