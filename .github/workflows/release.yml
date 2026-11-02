@@ -42,8 +42,14 @@ jobs:
       - name: Zip
         run: zip -r Athena.zip Athena.app
 
+      # The in-app updater refuses to install a release without this file.
+      - name: Checksum
+        run: shasum -a 256 Athena.zip > Athena.zip.sha256
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: Athena.zip
+          files: |
+            Athena.zip
+            Athena.zip.sha256
           generate_release_notes: true
