@@ -331,6 +331,7 @@ struct CodeEditorView: View {
                 gitLineChanges:   fileGitLineChanges,
                 isConflictScanTrusted: fileIsConflictScanTrusted,
                 fileURL:          tab.fileURL,
+                overlayAppState:  appState,
                 isFocusedGroup:   appState.focusedGroup == side,
                 onCursorMove: { line, col in
                     appState.setCursorPosition(tabId: tab.id, in: side, line: line, column: col)

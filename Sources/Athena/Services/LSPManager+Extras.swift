@@ -21,6 +21,9 @@ extension LSPManager {
         "async", "modification", "documentation", "defaultLibrary",
     ]
 
+    /// Most lenses resolved per document refresh.
+    static let maxLensResolves = 40
+
     // MARK: - Capabilities
 
     /// Reads the Wave 2 provider flags from an `initialize` reply. A provider
@@ -205,13 +208,21 @@ extension LSPManager {
         var lenses = Self.parseCodeLenses(from: data)
         guard caps.codeLensResolve else { return lenses.filter { $0.command != nil } }
 
-        let pending = lenses.enumerated().filter { $0.element.command == nil }.map { ($0.offset, $0.element.raw) }
-        var resolved: [(Int, CodeLens)] = []
-        for (index, raw) in pending {
-            guard let lensParams = try? JSONSerialization.jsonObject(with: raw) as? [String: Any],
-                  let reply = await rpc("codeLens/resolve", lensParams, language: language),
-                  let updated = Self.parseResolvedCodeLens(from: reply, original: lenses[index]) else { continue }
-            resolved.append((index, updated))
+        // Resolve concurrently, capped so a huge file cannot flood the server.
+        let pending = Array(lenses.enumerated().filter { $0.element.command == nil }.prefix(Self.maxLensResolves))
+            .map { (index: $0.offset, lens: $0.element) }
+        let resolved: [(Int, CodeLens)] = await withTaskGroup(of: (Int, CodeLens)?.self) { group in
+            for item in pending {
+                group.addTask { [self] in
+                    guard let params = try? JSONSerialization.jsonObject(with: item.lens.raw) as? [String: Any],
+                          let reply = await self.rpc("codeLens/resolve", params, language: language),
+                          let updated = Self.parseResolvedCodeLens(from: reply, original: item.lens) else { return nil }
+                    return (item.index, updated)
+                }
+            }
+            var out: [(Int, CodeLens)] = []
+            for await result in group { if let result { out.append(result) } }
+            return out
         }
         for (index, lens) in resolved { lenses[index] = lens }
         return lenses.filter { $0.command != nil }
