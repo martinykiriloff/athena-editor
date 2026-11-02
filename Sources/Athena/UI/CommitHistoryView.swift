@@ -19,7 +19,14 @@ struct CommitHistoryView: View {
             if let path = appState.commitHistoryPath {
                 fileFilterBar(path)
                 Divider()
+            } else if let label = appState.gitExtras.lineHistoryLabel {
+                scopeBar(icon: "text.line.first.and.arrowtriangle.forward", label: "Line \(label)") {
+                    Task { await appState.clearLineHistory() }
+                }
+                Divider()
             }
+            toolbar
+            Divider()
             historyContent
         }
         .onAppear {
@@ -53,6 +60,49 @@ struct CommitHistoryView: View {
         .padding(.vertical, appState.sf(5))
     }
 
+    private func scopeBar(icon: String, label: String, clear: @escaping () -> Void) -> some View {
+        HStack(spacing: appState.sf(6)) {
+            Image(systemName: icon)
+                .font(.system(size: appState.sf(10)))
+                .foregroundStyle(.secondary)
+            Text(label)
+                .font(.system(size: appState.sf(11)))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.head)
+            Spacer()
+            Button(action: clear) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: appState.sf(11)))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, appState.sf(10))
+        .padding(.vertical, appState.sf(5))
+    }
+
+    /// Graph toggle and "history of the cursor line".
+    private var toolbar: some View {
+        HStack(spacing: appState.sf(10)) {
+            Toggle("Graph", isOn: Binding(
+                get: { appState.gitExtras.showGraph },
+                set: { on in Task { await appState.setGraphMode(on) } }
+            ))
+            .toggleStyle(.checkbox)
+            .font(.system(size: appState.sf(11)))
+            .help("Show all branches as a lane graph")
+            Spacer()
+            Button("Line History") { Task { await appState.showLineHistoryForCursor() } }
+                .buttonStyle(.link)
+                .font(.system(size: appState.sf(11)))
+                .disabled(appState.focusedTab?.fileURL == nil)
+                .help("Commits that changed the line the cursor is on")
+        }
+        .padding(.horizontal, appState.sf(10))
+        .padding(.vertical, appState.sf(4))
+    }
+
     @ViewBuilder
     private var historyContent: some View {
         Group {
@@ -66,8 +116,16 @@ struct CommitHistoryView: View {
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(appState.commitHistory) { commit in
-                            CommitRow(commit: commit)
+                        let rows = appState.gitExtras.graphRows
+                        let maxLanes = rows.map(\.laneCount).max() ?? 1
+                        ForEach(Array(appState.commitHistory.enumerated()), id: \.element.id) { index, commit in
+                            HStack(spacing: 0) {
+                                if rows.indices.contains(index) {
+                                    CommitGraphLaneView(row: rows[index], maxLanes: maxLanes, height: appState.sf(44))
+                                        .padding(.leading, appState.sf(6))
+                                }
+                                CommitRow(commit: commit, compact: !rows.isEmpty)
+                            }
                             Divider()
                         }
                     }
@@ -93,6 +151,8 @@ private struct CommitRow: View {
     @Environment(AppState.self) private var appState
 
     let commit: GitCommit
+    /// Graph mode: fixed one-line rows so lanes line up with their commits.
+    var compact = false
 
     @State private var isHovering = false
 
@@ -107,7 +167,7 @@ private struct CommitRow: View {
         VStack(alignment: .leading, spacing: appState.sf(3)) {
             Text(commit.message)
                 .font(.system(size: appState.sf(12), weight: .medium))
-                .lineLimit(2)
+                .lineLimit(compact ? 1 : 2)
                 .foregroundStyle(.primary)
 
             HStack(spacing: appState.sf(6)) {
@@ -135,7 +195,8 @@ private struct CommitRow: View {
         }
         .padding(.horizontal, appState.sf(10))
         .padding(.vertical, appState.sf(6))
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: compact ? appState.sf(44) : nil,
+               maxHeight: compact ? appState.sf(44) : nil, alignment: .leading)
         .background(isHovering ? Color.primary.opacity(0.07) : Color.clear)
         .contentShape(Rectangle())
         .onHover { isHovering = $0 }
@@ -143,5 +204,14 @@ private struct CommitRow: View {
             Task { await appState.openDiffViewer(forCommit: commit) }
         }
         .help("View diff")
+        .contextMenu {
+            Button("Cherry-pick This Commit") { Task { await appState.cherryPick(commit) } }
+            Button("Tag This Commit…") { Task { await appState.showTagSheet(target: commit.hash) } }
+            Divider()
+            Button("Copy Commit Hash") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(commit.hash, forType: .string)
+            }
+        }
     }
 }

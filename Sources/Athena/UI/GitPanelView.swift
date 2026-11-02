@@ -23,6 +23,11 @@ struct GitPanelView: View {
 
             Divider()
 
+            if let operation = appState.gitExtras.operation {
+                GitOperationBanner(operation: operation)
+                Divider()
+            }
+
             if showHistory {
                 // History view
                 CommitHistoryView()
@@ -57,6 +62,20 @@ struct GitPanelView: View {
         .onAppear {
             Task { await appState.refreshGitStatus() }
         }
+        .sheet(isPresented: Binding(
+            get: { appState.gitExtras.mergeEditorPath != nil },
+            set: { if !$0 { appState.gitExtras.mergeEditorPath = nil } }
+        )) {
+            if let path = appState.gitExtras.mergeEditorPath { MergeEditorView(path: path) }
+        }
+        .sheet(isPresented: Binding(
+            get: { appState.gitExtras.showTags },
+            set: { appState.gitExtras.showTags = $0 }
+        )) { GitTagsView() }
+        .sheet(isPresented: Binding(
+            get: { appState.gitExtras.showPullRequests },
+            set: { appState.gitExtras.showPullRequests = $0 }
+        )) { PullRequestStatusView() }
     }
 
     // MARK: - Header
@@ -102,6 +121,8 @@ struct GitPanelView: View {
                     }
                 }
             }
+
+            if !appState.gitStatus.branch.isEmpty { GitActionsMenu() }
 
             // History / Changes toggle
             Button {
@@ -543,6 +564,12 @@ private struct GitFileRow: View {
 
             Button("File History") {
                 Task { await appState.showFileHistory(path: change.path) }
+            }
+
+            if appState.gitStatus.conflicted.contains(where: { $0.path == change.path }) {
+                Button("Resolve in Merge Editor…") {
+                    appState.gitExtras.mergeEditorPath = change.path
+                }
             }
 
             Divider()

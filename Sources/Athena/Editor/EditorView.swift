@@ -204,6 +204,12 @@ struct EditorView: NSViewRepresentable {
         gutter.onToggleBreakpoint = { [weak coordinator] line in
             coordinator?.parent.onToggleBreakpoint(line)
         }
+        gutter.onGitHunkAction = { [weak coordinator] line, action in
+            guard let path = coordinator?.parent.fileURL?.path else { return }
+            NotificationCenter.default.post(name: .athenaGitHunkAction, object: nil, userInfo: [
+                "path": path, "line": line, "action": action.notificationName
+            ])
+        }
         gutter.onConflictResolve = { [weak coordinator] region, choice in
             coordinator?.resolveConflict(region, choice: choice)
         }

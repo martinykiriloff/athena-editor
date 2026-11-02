@@ -207,6 +207,76 @@ struct MergeResolutionTests {
     }
 }
 
+// MARK: - AppState flow
+
+@Suite("AppState git depth flow")
+@MainActor
+struct AppStateGitDepthTests {
+    @Test func mergeConflictResolveInEditorThenContinue() async throws {
+        let dir = try makeRepo(); defer { try? FileManager.default.removeItem(at: dir) }
+        try commit("a.txt", "1\n", "base", dir)
+        try sh(["checkout", "-q", "-b", "x"], dir)
+        try commit("a.txt", "x\n", "x edit", dir)
+        try sh(["checkout", "-q", "main"], dir)
+        try commit("a.txt", "m\n", "m edit", dir)
+
+        let state = AppState()
+        state.workspace = WorkspaceModel(rootURL: dir)
+        await state.mergeBranch("x")
+        #expect(state.gitExtras.operation == .merge)
+        #expect(state.gitStatus.conflicted.map(\.path) == ["a.txt"])
+
+        // What the merge editor does: parse, choose, apply, save + stage.
+        let text = try #require(await state.mergeEditorText(for: "a.txt"))
+        let regions = ConflictParser.parse(text)
+        #expect(regions.count == 1)
+        let resolved = MergeResolution.apply(choices: [0: .both], regions: regions, to: text)
+        #expect(resolved == "m\nx\n")
+        await state.saveMergeResolution(path: "a.txt", text: resolved)
+        #expect(state.gitStatus.conflicted.isEmpty)
+
+        await state.continueGitOperation()
+        #expect(state.gitExtras.operation == nil)
+        let log = try await state.gitService.log(at: dir, limit: 1)
+        #expect(log.first?.parents.count == 2)
+    }
+
+    @Test func rebaseAbortAndTagFlow() async throws {
+        let dir = try makeRepo(); defer { try? FileManager.default.removeItem(at: dir) }
+        try commit("a.txt", "1\n", "base", dir)
+        try sh(["checkout", "-q", "-b", "feat"], dir)
+        try commit("a.txt", "f\n", "feat edit", dir)
+        try sh(["checkout", "-q", "main"], dir)
+        try commit("a.txt", "m\n", "main edit", dir)
+        try sh(["checkout", "-q", "feat"], dir)
+
+        let state = AppState()
+        state.workspace = WorkspaceModel(rootURL: dir)
+        await state.rebaseOnto("main")
+        #expect(state.gitExtras.operation == .rebase)
+        await state.abortGitOperation()
+        #expect(state.gitExtras.operation == nil)
+
+        await state.createTag(name: "v1", target: nil, message: "one")
+        #expect(state.gitExtras.tags.map(\.name) == ["v1"])
+        await state.deleteTag(state.gitExtras.tags[0])
+        #expect(state.gitExtras.tags.isEmpty)
+    }
+
+    @Test func hunkActionStagesViaAppState() async throws {
+        let dir = try makeRepo(); defer { try? FileManager.default.removeItem(at: dir) }
+        try commit("f.txt", "a\nb\nc\n", "base", dir)
+        try write("f.txt", "a\nB\nc\n", dir)
+        let state = AppState()
+        state.workspace = WorkspaceModel(rootURL: dir)
+        await state.applyGitHunk(.stage, fileURL: dir.appendingPathComponent("f.txt"), line: 2)
+        #expect(state.gitStatus.staged.map(\.path) == ["f.txt"])
+        await state.amendLastCommit()
+        #expect(state.gitStatus.isClean)
+        #expect(try await state.gitService.log(at: dir, limit: 5).count == 1)
+    }
+}
+
 // MARK: - Integration
 
 @Suite("GitService advanced (temp repo)")

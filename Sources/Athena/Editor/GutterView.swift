@@ -4,6 +4,7 @@
 // Swift 6, strict concurrency.
 
 import AppKit
+import SwiftUI
 
 // MARK: - GutterView
 
@@ -28,6 +29,8 @@ final class GutterView: NSRulerView {
     /// — kept in sync with the editor's theme by `EditorView`.
     var theme: EditorTheme = .athenaDracula
     var onToggleBreakpoint: ((Int) -> Void)?
+    /// Fired when a hunk popover action is chosen from a change-bar click.
+    var onGitHunkAction: ((Int, GitHunkAction) -> Void)?
 
     /// Conflict regions found in the current buffer (plan.md item 23, "D5"),
     /// kept in sync by `EditorView.Coordinator.updateConflictHighlights`.
@@ -289,10 +292,34 @@ final class GutterView: NSRulerView {
             return
         }
 
+        // A click on the change bar itself (not the breakpoint area) opens
+        // the stage / unstage / revert popover for that hunk.
+        if local.x <= changeBarWidth + 4, gitLineChanges[lineNum] != nil, let onGitHunkAction {
+            showHunkPopover(line: lineNum, at: local, perform: onGitHunkAction)
+            textView.window?.makeFirstResponder(textView)
+            return
+        }
+
         onToggleBreakpoint?(lineNum)
 
         // Restore focus to the editor so keyboard shortcuts keep working after a gutter click.
         textView.window?.makeFirstResponder(textView)
+    }
+
+    // MARK: - Git hunk popover
+
+    private var hunkPopover: NSPopover?
+
+    private func showHunkPopover(line: Int, at point: NSPoint, perform: @escaping (Int, GitHunkAction) -> Void) {
+        hunkPopover?.close()
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.contentViewController = NSHostingController(rootView: GitHunkPopoverView { [weak popover] action in
+            popover?.close()
+            perform(line, action)
+        })
+        hunkPopover = popover
+        popover.show(relativeTo: NSRect(x: 0, y: point.y - 1, width: changeBarWidth, height: 2), of: self, preferredEdge: .maxX)
     }
 
     // MARK: - Merge-conflict resolution menu
