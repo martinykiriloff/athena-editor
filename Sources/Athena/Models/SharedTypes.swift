@@ -653,6 +653,22 @@ enum EditorCommand: Sendable {
     case copyLineUp
     case copyLineDown
     case deleteLine
+    case fold
+    case unfold
+    case toggleFold
+    case foldAll
+    case unfoldAll
+    case foldLevel(Int)
+    case goToMatchingBracket
+}
+
+// MARK: - Code folding
+
+/// A foldable span of lines, 0-based and inclusive. Folding hides lines
+/// `startLine + 1 ... endLine` and leaves `startLine` (the header) visible.
+struct FoldRange: Sendable, Equatable, Hashable {
+    var startLine: Int
+    var endLine: Int
 }
 
 // MARK: - Workspace & Files

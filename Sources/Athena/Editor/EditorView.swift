@@ -1050,6 +1050,9 @@ extension EditorView {
             // opens — both panes' Coordinators receive this notification.
             case .find:           guard parent.isFocusedGroup else { return }; findReplaceController?.present(withReplace: false)
             case .findAndReplace: guard parent.isFocusedGroup else { return }; findReplaceController?.present(withReplace: true)
+            case .fold, .unfold, .toggleFold, .foldAll, .unfoldAll, .foldLevel, .goToMatchingBracket:
+                guard tv.window?.firstResponder === tv else { return }
+                break // TEMP
             case .goToLine, .toggleComment, .indent, .outdent, .selectNextOccurrence,
                  .findReferences, .renameSymbol, .quickFix,
                  .moveLineUp, .moveLineDown, .copyLineUp, .copyLineDown, .deleteLine:
@@ -1068,7 +1071,7 @@ extension EditorView {
                 case .copyLineUp:    applyLineEdit(LineOperations.copyUp(text: tv.string, selection: tv.selectedRange()), in: tv)
                 case .copyLineDown:  applyLineEdit(LineOperations.copyDown(text: tv.string, selection: tv.selectedRange()), in: tv)
                 case .deleteLine:    applyLineEdit(LineOperations.deleteLines(text: tv.string, selection: tv.selectedRange()), in: tv)
-                case .find, .findAndReplace: break // handled above
+                case .find, .findAndReplace, .fold, .unfold, .toggleFold, .foldAll, .unfoldAll, .foldLevel, .goToMatchingBracket: break // handled above
                 }
             }
         }

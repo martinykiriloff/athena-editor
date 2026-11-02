@@ -140,6 +140,7 @@ actor LSPManager {
                     // Drizzle's own authored snippets (plan.md item 16, "B5").
                     "completion": ["dynamicRegistration": false, "completionItem": ["snippetSupport": true]],
                     "hover":      ["dynamicRegistration": false],
+                    "foldingRange": ["dynamicRegistration": false, "lineFoldingOnly": true],
                     "documentHighlight": ["dynamicRegistration": false],
                     // `labelOffsetSupport` lets a server return each
                     // parameter's position inside the signature label as
@@ -931,6 +932,31 @@ actor LSPManager {
         let path = (resolved?.isEmpty == false) ? resolved! : fallback
         cachedUserPath = path
         return path
+    }
+
+    // MARK: - Folding
+
+    /// `textDocument/foldingRange` for `fileURL`. Nil when no server runs or
+    /// the request fails or is unsupported, so the caller can fall back to
+    /// its own computation; an empty array means the server found no folds.
+    func foldingRanges(fileURL: URL) async -> [FoldRange]? {
+        let language = Language.detect(from: fileURL)
+        guard servers[language] != nil else { return nil }
+        let params: [String: Any] = ["textDocument": ["uri": fileURL.absoluteString]]
+        guard let data = try? await sendRequest(method: "textDocument/foldingRange", params: params, language: language) else {
+            return nil
+        }
+        return Self.parseFoldingRanges(from: data)
+    }
+
+    /// Parses a `FoldingRange[] | null` reply (0-based lines).
+    static func parseFoldingRanges(from data: Data) -> [FoldRange]? {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let result = json["result"] as? [[String: Any]] else { return nil }
+        return result.compactMap { entry in
+            guard let s = entry["startLine"] as? Int, let e = entry["endLine"] as? Int else { return nil }
+            return FoldRange(startLine: s, endLine: e)
+        }
     }
 
     // MARK: - JSON-RPC message construction
