@@ -179,8 +179,15 @@ struct EditorView: NSViewRepresentable {
     /// Resolves documentation for one completion item (by id) via
     /// `completionItem/resolve`. Returns nil when there's nothing more to add.
     var onResolveCompletionDoc: (UUID) async -> String? = { _ in nil }
-    /// Returns an AI ghost-text suggestion given the text before and after the cursor.
-    var onRequestGhostText: (String, String) async -> String? = { _, _ in nil }
+    /// Streams an AI ghost-text suggestion for the text around the caret.
+    /// Finishing the stream ends the request; cancelling the consuming task
+    /// cancels it.
+    var onRequestGhostText: @MainActor (InlineCompletionQuery) -> AsyncStream<InlineCompletionEvent> = { _ in
+        AsyncStream { $0.finish() }
+    }
+    /// Session counters for Settings (suggestions shown / accepted).
+    var onGhostTextShown: () -> Void = {}
+    var onGhostTextAccepted: () -> Void = {}
     /// User-tunable delay (Settings → AI) before a ghost-text request fires
     /// after the last keystroke — mirrors the completion popup's fixed 150ms
     /// debounce just below, but configurable since local-LLM latency varies
@@ -295,6 +302,17 @@ struct EditorView: NSViewRepresentable {
         ghostLabel.alphaValue      = 0
         textView.addSubview(ghostLabel)
         context.coordinator.ghostController.install(label: ghostLabel)
+        let driver = context.coordinator.inlineDriver
+        driver.textView = textView
+        driver.debounceMs = ghostTextDebounceMs
+        driver.requestStream = { [weak coord = context.coordinator] query in
+            coord?.parent.onRequestGhostText(query) ?? AsyncStream { $0.finish() }
+        }
+        driver.isPopupVisible = { [weak coord = context.coordinator] in
+            coord?.completionController.isVisible ?? false
+        }
+        driver.onShown = { [weak coord = context.coordinator] in coord?.parent.onGhostTextShown() }
+        driver.onAccepted = { [weak coord = context.coordinator] in coord?.parent.onGhostTextAccepted() }
 
         // Expose scroll view via proxy so the minimap can drive scrolling.
         let proxy = EditorScrollProxy()
@@ -380,7 +398,7 @@ struct EditorView: NSViewRepresentable {
         // don't block Cmd+Click.
         textView.onMouseDown = { [weak coord] in
             coord?.completionController.dismiss()
-            coord?.ghostController.dismiss()
+            coord?.inlineDriver.mouseDown()
             coord?.cancelHover()
         }
 
@@ -410,6 +428,7 @@ struct EditorView: NSViewRepresentable {
 
         let coord = context.coordinator
         coord.parent = self          // keep fileURL and callbacks fresh on every render
+        coord.inlineDriver.debounceMs = ghostTextDebounceMs
         (textView.layoutManager as? AthenaLayoutManager)?.tailwindSwatches = TailwindSupport.supportsSwatches(fileURL: fileURL)
         coord.currentTabSize      = tabSize
         coord.currentInsertSpaces = insertSpaces
@@ -775,7 +794,10 @@ extension EditorView {
 
         // Completion popup and ghost text
         let completionController = CompletionWindowController()
-        let ghostController      = GhostTextController()
+        /// Ghost text: request timing, staleness, type-through, partial
+        /// accept and alternatives (see `InlineSuggestionDriver`).
+        let inlineDriver         = InlineSuggestionDriver()
+        var ghostController: GhostTextController { inlineDriver.ghost }
         @ObservationIgnored private var completionDebounce: Task<Void, Never>?
         let signatureController = SignatureHelpController()
         @ObservationIgnored private var signatureDebounce: Task<Void, Never>?
@@ -790,7 +812,6 @@ extension EditorView {
         /// Set when the user dismisses the popup with Escape; cleared on the
         /// next edit, so a late language-server reply can't pop it back up.
         private var completionSuppressed = false
-        @ObservationIgnored private var ghostDebounce:      Task<Void, Never>?
 
         // Completion-item documentation panel — a dedicated HoverWindowController
         // instance (not the mouse-hover one below) so resolving docs for a
@@ -1878,26 +1899,25 @@ extension EditorView {
             decorations.textChanged()
             applyHighlighting(to: textView, edit: consumePendingHighlightEdit(for: textView))
 
-            // Dismiss ghost text and hover tooltip on every keystroke; reschedule both triggers.
+            // Ghost text either advances (the keystroke typed through the
+            // suggestion) or is dismissed and rescheduled by the driver.
+            let typedThrough = inlineDriver.textDidChange()
             completionDebounce?.cancel()
-            ghostDebounce?.cancel()
-            ghostController.dismiss()
             cancelHover()
             completionSuppressed = false
             updateSignatureHelp(in: textView, allowShow: true)
 
-            completionDebounce = Task { [weak self] in
-                let clock = ContinuousClock()
-                try? await clock.sleep(until: clock.now.advanced(by: .milliseconds(150)))
-                guard !Task.isCancelled, let self else { return }
-                await self.triggerCompletion()
-            }
-            let debounceMs = parent.ghostTextDebounceMs
-            ghostDebounce = Task { [weak self] in
-                let clock = ContinuousClock()
-                try? await clock.sleep(until: clock.now.advanced(by: .milliseconds(debounceMs)))
-                guard !Task.isCancelled, let self else { return }
-                await self.triggerGhostText()
+            if typedThrough {
+                // Typing what the suggestion already says: keep it, and keep
+                // the popup out of the way so Tab still means "accept".
+                completionController.dismiss()
+            } else {
+                completionDebounce = Task { [weak self] in
+                    let clock = ContinuousClock()
+                    try? await clock.sleep(until: clock.now.advanced(by: .milliseconds(150)))
+                    guard !Task.isCancelled, let self else { return }
+                    await self.triggerCompletion()
+                }
             }
             applyLinkedTagRename(in: textView)
         }
@@ -1927,6 +1947,7 @@ extension EditorView {
             updateConflictHighlights(in: textView)
             updateActiveSnippetTracking(for: textView)
             scheduleSymbolHighlights(in: textView)
+            inlineDriver.selectionDidChange()
         }
 
         // MARK: Symbol occurrence highlight (LSP documentHighlight)
@@ -1994,6 +2015,7 @@ extension EditorView {
         /// whenever no snippet is active.
         func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
             recordPendingHighlightEdit(in: textView, affected: affectedCharRange, replacement: replacementString)
+            inlineDriver.willChangeText(range: affectedCharRange, replacement: replacementString)
             recordLinkedTagEdit(in: textView, affected: affectedCharRange, replacement: replacementString)
             guard var snippet = activeSnippet else { return true }
             let delta = (replacementString?.utf16.count ?? 0) - affectedCharRange.length
@@ -2436,14 +2458,9 @@ extension EditorView {
                 if completionController.isVisible {
                     return completionController.confirmSelection()
                 }
-                if ghostController.hasSuggestion, let tv = textView {
-                    let accepted = ghostController.accept(in: tv)
-                    if accepted {
-                        parent.onContentChange(tv.string)
-                        applyHighlighting(to: tv)
-                    }
-                    return accepted
-                }
+                // Accepting goes through shouldChangeText/didChangeText, so
+                // textDidChange already updates content and highlighting.
+                if inlineDriver.handleKey(event) { return true }
                 if let tv = textView, advanceSnippet(in: tv) {
                     return true
                 }
@@ -2461,7 +2478,7 @@ extension EditorView {
                     shownCompletionLabels = []
                     return true
                 }
-                if ghostController.hasSuggestion    { ghostController.dismiss();      return true }
+                if inlineDriver.handleKey(event) { return true }
                 if signatureController.isVisible {
                     signatureDebounce?.cancel()
                     signatureController.dismiss()
@@ -2487,7 +2504,10 @@ extension EditorView {
                 if completionController.isVisible  { completionController.moveUp();   return true }
                 return false
             default:
-                return false
+                // ⌘→ (accept next word) and ⌥] / ⌥[ (alternatives) — only
+                // while ghost text is showing; otherwise the keys keep
+                // their normal meaning.
+                return inlineDriver.handleKey(event)
             }
         }
 
@@ -2628,34 +2648,6 @@ extension EditorView {
             guard completionController.isVisible else { return }
             completionDocController.fontSize = max(parent.fontSize - 2, 9)
             completionDocController.show(text: text, near: completionController.screenFrame, placement: .rightOf)
-        }
-
-        // MARK: - Ghost text trigger
-
-        private func triggerGhostText() async {
-            guard let tv = textView else { return }
-            let cursorIdx = tv.selectedRange().location
-            let text      = tv.string
-
-            // Finishing an identifier belongs to the popup — instant, from
-            // the language server and the buffer. The model is asked only
-            // where a whole line or block is what comes next, and never
-            // while the popup is already answering (see `GhostTextPolicy`).
-            guard GhostTextPolicy.shouldRequest(
-                text: text as NSString,
-                cursor: cursorIdx,
-                isPopupVisible: completionController.isVisible
-            ) else { return }
-
-            let prefix = String(text.prefix(cursorIdx))
-            let suffix = String(text.suffix(text.count - min(cursorIdx, text.count)))
-
-            guard let suggestion = await parent.onRequestGhostText(prefix, suffix) else { return }
-            // A one-token answer is what the popup already gives, faster.
-            guard GhostTextPolicy.isSubstantial(suggestion) else { return }
-
-            let font = tv.font ?? NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
-            ghostController.show(text: suggestion, after: cursorIdx, font: font, in: tv)
         }
 
         // MARK: - Signature help (parameter hints)

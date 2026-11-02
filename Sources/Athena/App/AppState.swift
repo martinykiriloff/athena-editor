@@ -1352,6 +1352,18 @@ final class AppState {
     /// A local provider's connectivity/server errors land in `statusMessage`;
     /// `nil` otherwise covers "no provider configured", "empty response",
     /// and "request cancelled by the next keystroke" alike.
+    /// Streams ghost-text events for one editor query.
+    func inlineCompletionStream(_ query: InlineCompletionQuery) -> AsyncStream<InlineCompletionEvent> {
+        AsyncStream { continuation in
+            let task = Task { @MainActor [weak self] in
+                let text = await self?.requestInlineCompletion(prefix: query.prefix, suffix: query.suffix)
+                continuation.yield(.finished(text))
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
     func requestInlineCompletion(prefix: String, suffix: String) async -> String? {
         switch ghostTextProvider {
         case .none:

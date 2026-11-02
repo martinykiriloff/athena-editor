@@ -1635,6 +1635,74 @@ func importLines(in text: String) -> [String] {
     }
 }
 
+// MARK: - Inline completion (ghost text)
+
+/// Where the caret sits when a ghost-text request fires. End of line allows
+/// a multi-line block; mid-line (only closing punctuation to the right, e.g.
+/// `foo(|)`) allows a single line that slots in before that punctuation.
+enum InlineCompletionMode: String, Sendable, Equatable {
+    case endOfLine
+    case midLine
+}
+
+/// What the editor asks for: the text around the caret, plus which sampled
+/// alternative this is (`0` is the primary suggestion, `1...` the ones
+/// fetched on demand by ⌥] / ⌥[).
+struct InlineCompletionQuery: Sendable, Equatable {
+    var prefix: String
+    var suffix: String
+    var mode: InlineCompletionMode
+    var variant: Int = 0
+}
+
+/// A piece of another file the model sees as context, labelled by path.
+struct InlineContextSnippet: Sendable, Equatable {
+    var path: String
+    var text: String
+}
+
+/// Everything a provider needs to build its prompt for one suggestion.
+struct InlineCompletionRequest: Sendable, Equatable {
+    var prefix: String
+    var suffix: String
+    var mode: InlineCompletionMode
+    var variant: Int
+    /// Workspace-relative path of the file being edited (or its title).
+    var path: String
+    var language: Language
+    /// Imports and enclosing symbol of the current file ("" when off).
+    var header: String
+    var snippets: [InlineContextSnippet]
+}
+
+/// One step of a streamed inline completion.
+enum InlineCompletionEvent: Sendable, Equatable {
+    /// The cleaned suggestion so far (cumulative, not a delta).
+    case text(String)
+    /// The request finished; `String?` is the final cleaned suggestion.
+    case finished(String?)
+    /// A connectivity, auth, or server error worth showing the user.
+    case failed(String)
+    /// The provider asked us to slow down; no request before `until`.
+    case rateLimited(until: Date)
+}
+
+/// A predicted follow-up edit elsewhere in the file (next-edit suggestion).
+/// `range` is UTF-16, valid only for the buffer `docVersion` it was made from.
+struct NextEditPrediction: Sendable, Equatable {
+    var range: NSRange
+    var original: String
+    var replacement: String
+}
+
+/// One recent edit, for next-edit prediction: the line it touched (1-based)
+/// and that line's text before and after the burst of typing.
+struct RecentEdit: Sendable, Equatable {
+    var line: Int
+    var before: String
+    var after: String
+}
+
 // MARK: - File Watching
 
 /// Emitted by `FileWatchService` when a watched file or directory changes on

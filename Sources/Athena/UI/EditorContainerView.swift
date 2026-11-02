@@ -497,8 +497,8 @@ struct CodeEditorView: View {
                     let language = Language.detect(from: fileURL)
                     return try? await appState.lspManager.resolve(itemID: itemID, language: language)
                 },
-                onRequestGhostText: { prefix, suffix in
-                    await appState.requestInlineCompletion(prefix: prefix, suffix: suffix)
+                onRequestGhostText: { query in
+                    appState.inlineCompletionStream(query)
                 },
                 ghostTextDebounceMs: appState.ghostTextDebounceMs
             )
