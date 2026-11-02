@@ -38,29 +38,29 @@ actor ToolCheckService {
     /// The notice for a language whose server isn't installed, or nil for a
     /// language Athena has no server for at all.
     nonisolated static func languageServerNotice(for language: Language) -> ToolNotice? {
-        let server: (language: String, name: String, command: String)
+        // Swift falls back to `xcrun sourcekit-lsp`, which always
+        // resolves, so a missing server can't be told apart there.
+        guard let spec = LanguageServerCatalog.spec(for: language) else { return nil }
+        let label: String
+        let servers: String
         switch language {
         case .typescript, .javascript:
-            server = ("TypeScript/JavaScript", "typescript-language-server",
-                      "npm install -g typescript-language-server typescript")
-        case .python:
-            server = ("Python", "pylsp", "pip3 install 'python-lsp-server[all]'")
-        case .rust:
-            server = ("Rust", "rust-analyzer", "rustup component add rust-analyzer")
-        case .go:
-            server = ("Go", "gopls", "go install golang.org/x/tools/gopls@latest")
+            label = "TypeScript/JavaScript"
+            servers = "`\(spec.serverName)`"
+        case .css, .html, .json:
+            label = "CSS/HTML/JSON"
+            servers = "`vscode-css-language-server`, `vscode-html-language-server` and `vscode-json-language-server`"
         default:
-            // Swift falls back to `xcrun sourcekit-lsp`, which always
-            // resolves, so a missing server can't be told apart there.
-            return nil
+            label = language.displayName
+            servers = "`\(spec.serverName)`"
         }
-        // JavaScript and TypeScript share one server, so one notice.
-        let key = language == .javascript ? Language.typescript.rawValue : language.rawValue
+        // Languages sharing one install share one notice id.
         return ToolNotice(
-            id: "lsp.\(key)",
-            title: "No \(server.language) language server",
-            detail: "Completions, errors, go to definition and quick fixes need `\(server.name)`.",
-            installCommand: server.command
+            id: "lsp.\(spec.noticeKey)",
+            title: "No \(label) language server",
+            detail: "Completions, errors, go to definition and quick fixes need \(servers). "
+                + "You can point Athena at an existing install in Settings, Language Servers.",
+            installCommand: spec.installCommand
         )
     }
 

@@ -14,6 +14,12 @@ struct SyntaxRule {
     var group: Int = 0
 }
 
+private extension String {
+    /// Makes `^` / `$` match at line boundaries (the highlighter compiles
+    /// patterns without `.anchorsMatchLines`).
+    var inlineMultiline: String { "(?m)" + self }
+}
+
 // MARK: - SyntaxHighlighter
 
 final class SyntaxHighlighter {
@@ -189,6 +195,14 @@ final class SyntaxHighlighter {
             add("\\b(\(tsKeywords.joined(separator: "|")))\\b", color: kw, group: 1)
             add("\\b([A-Z][A-Za-z0-9_]*)\\b", color: typ, group: 1)
             add("\\b([a-z_][A-Za-z0-9_]*)(?=\\s*\\()", color: fn, group: 1)
+            // JSX/TSX tags. Conservative so plain TS generics (`Array<string>`,
+            // `foo<T>(x)`) stay untouched: the `<` must not follow an
+            // identifier or closing bracket, and a one-letter uppercase name
+            // (`<T>`) is treated as a type parameter, not a tag.
+            add(#"(?<![\w$)\]])<((?:[A-Za-z][\w.:-]+|[a-z])(?=[\s/>]))"#, color: kw, group: 1)
+            // `</` can't start anything else, so closing tags need no lookbehind.
+            add(#"</((?:[A-Za-z][\w.:-]+|[a-z])(?=>))"#, color: kw, group: 1)
+            add(#"(?<![\w$)\]])</?>"#, color: kw)
             add("`(?:[^`\\\\]|\\\\.)*`", color: str)
             add("\"(?:[^\"\\\\]|\\\\.)*\"", color: str)
             add("'(?:[^'\\\\]|\\\\.)*'", color: str)
@@ -337,6 +351,230 @@ final class SyntaxHighlighter {
         // Image tabs render `ImagePreviewView` instead of the text editor, so
         // this highlighter never actually runs against one in practice — a
         // no-op case is here only to keep the switch exhaustive.
+        case .yaml:
+            add(#"^\s*(?:-\s+)?([\w./-]+|"[^"\n]*"|'[^'\n]*')(?=\s*:(?:\s|$))"#.inlineMultiline, color: typ, group: 1)
+            add(#"[&*][\w-]+"#, color: fn)
+            add(#"(?<![\w.-])(?:true|false|yes|no|on|off|null|~)(?![\w.-])"#, color: kw)
+            add(#"(?<![\w.-])-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?(?![\w.-])"#, color: num)
+            add(#"^---|^\.\.\."#.inlineMultiline, color: kw)
+            add(#""(?:[^"\\\n]|\\.)*""#, color: str)
+            add(#"'(?:[^'\n]|'')*'"#, color: str)
+            add(#"(?<![^\s])#[^\n]*"#, color: cmt)
+
+        // --------------------------------------------------------------------
+        case .sql:
+            let sqlKeywords = [
+                "select", "from", "where", "insert", "into", "values", "update", "set", "delete",
+                "create", "alter", "drop", "table", "index", "view", "database", "schema", "join",
+                "inner", "left", "right", "full", "outer", "cross", "on", "as", "and", "or", "not",
+                "null", "is", "in", "like", "between", "exists", "group", "by", "order", "having",
+                "limit", "offset", "union", "all", "distinct", "case", "when", "then", "else", "end",
+                "primary", "key", "foreign", "references", "constraint", "default", "unique",
+                "check", "begin", "commit", "rollback", "transaction", "with", "returning",
+                "asc", "desc", "true", "false", "if", "cascade", "add", "column"
+            ]
+            add("(?i)\\b(\(sqlKeywords.joined(separator: "|")))\\b", color: kw, group: 1)
+            add(#"(?i)\b(int|integer|bigint|smallint|serial|bigserial|varchar|char|text|boolean|bool|date|timestamp|timestamptz|numeric|decimal|float|double|real|uuid|json|jsonb|blob)\b"#, color: typ, group: 1)
+            add(#"\b([A-Za-z_][A-Za-z0-9_]*)(?=\s*\()"#, color: fn, group: 1)
+            add(#"\b\d+(?:\.\d+)?\b"#, color: num)
+            add(#""(?:[^"]|"")*""#, color: str)
+            add(#"'(?:[^']|'')*'"#, color: str)
+            add(#"--[^\n]*"#, color: cmt)
+            add(#"/\*[\s\S]*?\*/"#, color: cmt)
+
+        // --------------------------------------------------------------------
+        case .shell:
+            let shKeywords = [
+                "if", "then", "else", "elif", "fi", "for", "while", "until", "do", "done", "case",
+                "esac", "in", "function", "select", "return", "exit", "break", "continue",
+                "local", "export", "readonly", "declare", "unset", "source", "alias", "set",
+                "shift", "trap", "eval", "exec", "time"
+            ]
+            add("(?<![\\w-])(\(shKeywords.joined(separator: "|")))(?![\\w-])", color: kw, group: 1)
+            add(#"(?<![\w-])(echo|cd|ls|cat|grep|sed|awk|rm|cp|mv|mkdir|chmod|chown|curl|git|make|test|printf|read|touch|find|xargs)(?![\w-])"#, color: fn, group: 1)
+            add(#"\$(?:\{[^}\n]*\}|[A-Za-z_][A-Za-z0-9_]*|[0-9@*#?$!-])"#, color: typ)
+            add(#"(?<![\w$])\b\d+\b"#, color: num)
+            add(#"^\s*([A-Za-z_][A-Za-z0-9_]*)(?==)"#.inlineMultiline, color: typ, group: 1)
+            add(#""(?:[^"\\]|\\[\s\S])*""#, color: str)
+            add(#"'[^']*'"#, color: str)
+            add(#"<<-?\s*(["']?)(\w+)\1[^\n]*\n[\s\S]*?^[ \t]*\2[ \t]*$"#.inlineMultiline, color: str)
+            add(#"(?<![^\s;|&])#[^\n]*"#, color: cmt)
+
+        // --------------------------------------------------------------------
+        case .php:
+            let phpKeywords = [
+                "function", "class", "interface", "trait", "extends", "implements", "namespace",
+                "use", "return", "if", "else", "elseif", "foreach", "for", "while", "do", "switch",
+                "case", "default", "break", "continue", "try", "catch", "finally", "throw", "new",
+                "public", "private", "protected", "static", "abstract", "final", "const", "echo",
+                "print", "isset", "unset", "empty", "true", "false", "null", "as", "instanceof",
+                "match", "fn", "readonly", "enum", "require", "require_once", "include",
+                "include_once", "global", "self", "parent"
+            ]
+            add("\\b(\(phpKeywords.joined(separator: "|")))\\b", color: kw, group: 1)
+            add(#"\b([A-Z][A-Za-z0-9_]*)\b"#, color: typ, group: 1)
+            add(#"\b([A-Za-z_][A-Za-z0-9_]*)(?=\s*\()"#, color: fn, group: 1)
+            add(#"<\?php|<\?=|\?>"#, color: kw)
+            add(#"\$[A-Za-z_][A-Za-z0-9_]*"#, color: typ)
+            add(#"\b\d+(?:\.\d+)?\b"#, color: num)
+            add(#""(?:[^"\\]|\\[\s\S])*""#, color: str)
+            add(#"'(?:[^'\\]|\\[\s\S])*'"#, color: str)
+            add(#"<<<\s*(["']?)(\w+)\1[^\n]*\n[\s\S]*?^[ \t]*\2\b"#.inlineMultiline, color: str)
+            add(#"//[^\n]*"#, color: cmt)
+            add(#"(?<![\w$])#(?!\[)[^\n]*"#, color: cmt)
+            add(#"/\*[\s\S]*?\*/"#, color: cmt)
+
+        // --------------------------------------------------------------------
+        case .java, .kotlin, .c, .cpp:
+            let words: [String]
+            switch language {
+            case .java:
+                words = ["abstract", "assert", "boolean", "break", "byte", "case", "catch", "char",
+                         "class", "const", "continue", "default", "do", "double", "else", "enum",
+                         "extends", "final", "finally", "float", "for", "if", "implements", "import",
+                         "instanceof", "int", "interface", "long", "new", "package", "private",
+                         "protected", "public", "return", "short", "static", "super", "switch",
+                         "synchronized", "this", "throw", "throws", "try", "void", "volatile",
+                         "while", "var", "record", "true", "false", "null"]
+            case .kotlin:
+                words = ["fun", "val", "var", "class", "object", "interface", "package", "import",
+                         "return", "if", "else", "when", "for", "while", "do", "break", "continue",
+                         "try", "catch", "finally", "throw", "is", "in", "as", "this", "super",
+                         "null", "true", "false", "override", "open", "abstract", "sealed", "data",
+                         "enum", "companion", "private", "public", "protected", "internal",
+                         "suspend", "inline", "lateinit", "const", "typealias", "by", "init"]
+            case .c:
+                words = ["auto", "break", "case", "char", "const", "continue", "default", "do",
+                         "double", "else", "enum", "extern", "float", "for", "goto", "if", "inline",
+                         "int", "long", "register", "return", "short", "signed", "sizeof", "static",
+                         "struct", "switch", "typedef", "union", "unsigned", "void", "volatile",
+                         "while", "NULL", "true", "false"]
+            default:
+                words = ["auto", "break", "case", "catch", "char", "class", "const", "constexpr",
+                         "continue", "default", "delete", "do", "double", "else", "enum", "explicit",
+                         "extern", "float", "for", "friend", "if", "inline", "int", "long",
+                         "namespace", "new", "noexcept", "nullptr", "operator", "private",
+                         "protected", "public", "return", "short", "signed", "sizeof", "static",
+                         "struct", "switch", "template", "this", "throw", "try", "typedef",
+                         "typename", "union", "unsigned", "using", "virtual", "void", "volatile",
+                         "while", "override", "final", "true", "false"]
+            }
+            add("\\b(\(words.joined(separator: "|")))\\b", color: kw, group: 1)
+            add(#"\b([A-Z][A-Za-z0-9_]*)\b"#, color: typ, group: 1)
+            add(#"\b([A-Za-z_][A-Za-z0-9_]*)(?=\s*\()"#, color: fn, group: 1)
+            add(#"@[A-Za-z_][A-Za-z0-9_.]*"#, color: typ)
+            if language == .c || language == .cpp {
+                add(#"^\s*#\s*[a-z]+"#.inlineMultiline, color: kw)
+            }
+            add(#"\b(?:0[xX][0-9a-fA-F]+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)[uUlLfF]*\b"#, color: num)
+            add(#""(?:[^"\\\n]|\\.)*""#, color: str)
+            add(#"'(?:[^'\\\n]|\\.)+'"#, color: str)
+            if language == .java || language == .kotlin {
+                add("\"\"\"[\\s\\S]*?\"\"\"", color: str)
+            }
+            if language == .cpp {
+                add(#"R"([^()\s]*)\([\s\S]*?\)\1""#, color: str)
+            }
+            add(#"//[^\n]*"#, color: cmt)
+            add(#"/\*[\s\S]*?\*/"#, color: cmt)
+
+        // --------------------------------------------------------------------
+        case .ruby:
+            let rbKeywords = [
+                "def", "class", "module", "end", "if", "elsif", "else", "unless", "case", "when",
+                "while", "until", "for", "in", "do", "begin", "rescue", "ensure", "raise",
+                "return", "yield", "break", "next", "redo", "retry", "self", "super", "nil",
+                "true", "false", "and", "or", "not", "then", "require", "require_relative",
+                "include", "extend", "attr_accessor", "attr_reader", "attr_writer", "private",
+                "public", "protected", "lambda", "proc", "alias", "defined?"
+            ]
+            add("\\b(\(rbKeywords.joined(separator: "|")))\\b", color: kw, group: 1)
+            add(#"\b([A-Z][A-Za-z0-9_]*)\b"#, color: typ, group: 1)
+            add(#"\b([a-z_][A-Za-z0-9_]*[?!]?)(?=\s*\()"#, color: fn, group: 1)
+            add(#"(?<![:\w]):[A-Za-z_][A-Za-z0-9_]*[?!]?"#, color: num)
+            add(#"@@?[A-Za-z_][A-Za-z0-9_]*|\$[A-Za-z_][A-Za-z0-9_]*"#, color: typ)
+            add(#"\b\d+(?:\.\d+)?\b"#, color: num)
+            add(#""(?:[^"\\]|\\[\s\S])*""#, color: str)
+            add(#"'(?:[^'\\]|\\[\s\S])*'"#, color: str)
+            add(#"<<[~-]?(["']?)([A-Z_]+)\1[^\n]*\n[\s\S]*?^[ \t]*\2$"#.inlineMultiline, color: str)
+            add(#"#[^\n]*"#, color: cmt)
+            add(#"^=begin[\s\S]*?^=end"#.inlineMultiline, color: cmt)
+
+        // --------------------------------------------------------------------
+        // Vue / Svelte single-file components: HTML tags and attributes,
+        // directives, `{{ }}` / `{ }` expressions, plus a few distinctive
+        // script keywords. Embedded <script>/<style> bodies are not parsed
+        // as separate languages (regex highlighter, one rule set per file).
+        case .vue, .svelte:
+            add(#"\b(import|export|const|let|function|return|await|defineProps|defineEmits)\b"#, color: kw, group: 1)
+            add(#"</?([a-zA-Z][a-zA-Z0-9.-]*)(?=[\s/>]|$)"#, color: fn, group: 1)
+            add(#"\b([a-zA-Z@:#][a-zA-Z0-9_:.@#-]*)(?=\s*=)"#, color: typ, group: 1)
+            add(#"(?<=\s)(v-[a-z-]+|:[a-zA-Z-]+|@[a-zA-Z.-]+|#[a-zA-Z-]+|on:[a-z]+|bind:[a-z]+|use:[a-z]+|class:[a-z-]+)"#, color: kw, group: 1)
+            if language == .vue {
+                add(#"\{\{[\s\S]*?\}\}"#, color: num)
+            } else {
+                add(#"\{[#:/@](?:if|else|each|await|then|catch|key|html|const|debug|snippet|render)\b[^}\n]*\}"#, color: kw)
+            }
+            add(#""(?:[^"\\]|\\.)*""#, color: str)
+            add(#"'(?:[^'\\]|\\.)*'"#, color: str)
+            add(#"<!--[\s\S]*?-->"#, color: cmt)
+            add(#"//[^\n]*"#, color: cmt)
+
+        // --------------------------------------------------------------------
+        case .toml:
+            add(#"^\s*\[\[?[^\]\n]+\]\]?"#.inlineMultiline, color: kw)
+            add(#"^\s*([A-Za-z0-9_.-]+|"[^"\n]*")(?=\s*=)"#.inlineMultiline, color: typ, group: 1)
+            add(#"\b(?:true|false)\b"#, color: kw)
+            add(#"(?<![\w-])[+-]?\d[\d_]*(?:\.\d+)?(?:[eE][+-]?\d+)?(?![\w-])"#, color: num)
+            add(#""(?:[^"\\\n]|\\.)*""#, color: str)
+            add(#"'[^'\n]*'"#, color: str)
+            add("\"\"\"[\\s\\S]*?\"\"\"", color: str)
+            add(#"'''[\s\S]*?'''"#, color: str)
+            add(#"#[^\n]*"#, color: cmt)
+
+        // --------------------------------------------------------------------
+        case .graphql:
+            let gqlKeywords = [
+                "query", "mutation", "subscription", "fragment", "on", "type", "interface", "enum",
+                "union", "input", "scalar", "schema", "extend", "directive", "implements",
+                "repeatable", "true", "false", "null"
+            ]
+            add("\\b(\(gqlKeywords.joined(separator: "|")))\\b", color: kw, group: 1)
+            add(#"\b([A-Z][A-Za-z0-9_]*)\b"#, color: typ, group: 1)
+            add(#"\b([A-Za-z_][A-Za-z0-9_]*)(?=\s*[:(])"#, color: fn, group: 1)
+            add(#"[$@][A-Za-z_][A-Za-z0-9_]*"#, color: typ)
+            add(#"-?\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b"#, color: num)
+            add(#""(?:[^"\\\n]|\\.)*""#, color: str)
+            add("\"\"\"[\\s\\S]*?\"\"\"", color: str)
+            add(#"#[^\n]*"#, color: cmt)
+
+        // --------------------------------------------------------------------
+        case .env:
+            add(#"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_.]*)(?==)"#.inlineMultiline, color: typ, group: 1)
+            add(#"^\s*(export)\s+(?=[A-Za-z_])"#.inlineMultiline, color: kw, group: 1)
+            add(#"(?<==)[^\n#"']*"#, color: str)
+            add(#"\$(?:\{[^}\n]*\}|[A-Za-z_][A-Za-z0-9_]*)"#, color: fn)
+            add(#""(?:[^"\\\n]|\\.)*""#, color: str)
+            add(#"'[^'\n]*'"#, color: str)
+            add(#"(?:^|(?<=\s))#[^\n]*"#.inlineMultiline, color: cmt)
+
+        // --------------------------------------------------------------------
+        case .dockerfile:
+            let dockerInstructions = [
+                "FROM", "RUN", "CMD", "LABEL", "MAINTAINER", "EXPOSE", "ENV", "ADD", "COPY",
+                "ENTRYPOINT", "VOLUME", "USER", "WORKDIR", "ARG", "ONBUILD", "STOPSIGNAL",
+                "HEALTHCHECK", "SHELL"
+            ]
+            add("(?i)^\\s*(\(dockerInstructions.joined(separator: "|")))\\b".inlineMultiline, color: kw, group: 1)
+            add(#"(?i)\bAS\b(?=\s+\w)"#, color: kw)
+            add(#"--[a-z-]+(?==|\b)"#, color: typ)
+            add(#"\$(?:\{[^}\n]*\}|[A-Za-z_][A-Za-z0-9_]*)"#, color: fn)
+            add(#"\b\d+(?:\.\d+)?\b"#, color: num)
+            add(#""(?:[^"\\\n]|\\.)*""#, color: str)
+            add(#"'[^'\n]*'"#, color: str)
+            add(#"^\s*#[^\n]*"#.inlineMultiline, color: cmt)
+
+        // --------------------------------------------------------------------
         case .plaintext, .image:
             break
         }

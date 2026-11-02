@@ -1319,12 +1319,7 @@ extension EditorView {
         /// Comment token for the current language, or "" if line comments
         /// aren't well-defined for it.
         private var lineCommentToken: String {
-            switch currentLanguage {
-            case .python:                         return "#"
-            case .swift, .typescript, .javascript,
-                 .rust, .go, .css, .ds:            return "//"
-            case .json, .html, .isml, .markdown, .plaintext, .image: return ""
-            }
+            currentLanguage.lineCommentToken
         }
 
         private func toggleComment(_ tv: NSTextView) {

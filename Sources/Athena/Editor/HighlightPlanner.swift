@@ -99,12 +99,17 @@ enum HighlightPlanner {
 
     private static func delimiters(for language: Language) -> [String] {
         switch language {
-        case .swift, .typescript, .javascript, .rust, .go, .css, .ds: return ["/*", "*/"]
-        case .html:     return ["<!--", "-->"]
+        case .swift, .typescript, .javascript, .rust, .go, .css, .ds, .sql: return ["/*", "*/"]
+        case .html, .vue, .svelte: return ["<!--", "-->"]
         case .isml:     return ["<!--", "-->", "--->"]
-        case .python:   return ["\"\"\"", "'''"]
+        case .python, .toml, .graphql: return ["\"\"\"", "'''"]
         case .markdown: return ["```"]
-        case .json, .plaintext, .image: return []
+        case .php:      return ["/*", "*/", "<<<"]
+        case .java, .kotlin: return ["/*", "*/", "\"\"\""]
+        case .c, .cpp:  return ["/*", "*/", "R\""]
+        case .ruby:     return ["=begin", "=end", "<<"]
+        case .shell, .dockerfile: return ["<<"]
+        case .json, .plaintext, .image, .yaml, .env: return []
         }
     }
 
@@ -114,6 +119,7 @@ enum HighlightPlanner {
         switch language {
         case .markdown: return ["*", "`", "[", "]", "(", ")"]
         case .isml:     return ["{", "}", "$"]
+        case .vue, .svelte: return ["{", "}"]
         default:        return []
         }
     }

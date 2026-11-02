@@ -455,7 +455,9 @@ private struct FileNodeRow<Menu: View>: View {
 
     private func iconName(for language: Language) -> String {
         switch language {
-        case .swift, .typescript, .javascript, .python, .rust, .go, .json, .css, .html, .ds:
+        case .swift, .typescript, .javascript, .python, .rust, .go, .json, .css, .html, .ds,
+             .yaml, .sql, .shell, .php, .java, .kotlin, .c, .cpp, .ruby, .vue, .svelte,
+             .toml, .graphql, .env, .dockerfile:
             return "doc.text.fill"
         case .isml:
             return "curlybraces.square.fill"
@@ -484,6 +486,14 @@ private struct FileNodeRow<Menu: View>: View {
         case .markdown:   return .white
         case .image:      return .pink
         case .plaintext:  return .secondary
+        case .yaml, .toml, .env:   return .gray
+        case .sql:                 return .teal
+        case .shell, .dockerfile:  return .mint
+        case .php, .graphql:       return .indigo
+        case .java, .kotlin, .ruby: return .red
+        case .c, .cpp:             return .blue
+        case .vue:                 return .green
+        case .svelte:              return .orange
         }
     }
 }

@@ -327,6 +327,15 @@ struct SettingsView: View {
                     }
             }
         }
+
+        // ── Language Servers ──────────────────────────────────────
+        SettingsSection(SettingsIndex.languageServers) {
+            ForEach(LanguageServerCatalog.configurableLanguages, id: \.self) { language in
+                SettingRow(SettingsIndex.languageServerLabel(language)) {
+                    LanguageServerOverrideRow(language: language)
+                }
+            }
+        }
     }
 
     // MARK: - Appearance Tab
@@ -765,7 +774,12 @@ enum SettingsIndex {
     static let api = SettingsIndexEntry(title: "API", labels: ["Claude API Key", "Default Model"])
     static let ghostText = SettingsIndexEntry(title: "Predictive Completion (Ghost Text)", labels: ["Provider"])
 
-    static let all = [font, indentation, display, cursor, files, theme, minimap, api, ghostText]
+    static func languageServerLabel(_ language: Language) -> String { "\(language.displayName) Server" }
+    static let languageServers = SettingsIndexEntry(
+        title: "Language Servers",
+        labels: LanguageServerCatalog.configurableLanguages.map(languageServerLabel) + ["LSP", "Language Server Path"])
+
+    static let all = [font, indentation, display, cursor, files, theme, minimap, api, ghostText, languageServers]
 }
 
 private struct SettingsSection<Content: View>: View {
