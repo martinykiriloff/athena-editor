@@ -8,7 +8,7 @@ import SwiftUI
 // MARK: - Panels
 
 enum SidebarPanel: String, Sendable, CaseIterable {
-    case files, git, search, database, sfcc, npm, debug, outline
+    case files, git, search, database, sfcc, npm, debug, outline, testing
 }
 
 // MARK: - Debugger
@@ -144,11 +144,29 @@ struct LaunchConfig: Identifiable, Codable, Sendable {
     var username: String? = nil
     var password: String? = nil
     var codeVersion: String? = nil
+    /// Non-nil for a launch.json `compounds` entry: the names of the
+    /// configurations it starts, in order (`type` is "compound").
+    var compoundMembers: [String]? = nil
 
     /// Launch config types Athena debugs through the SFCC Script Debugger
     /// API. "prophet" is what existing VS Code launch.json files contain.
     static let sfccTypes: Set<String> = ["prophet", "sfcc"]
     var isSFCC: Bool { Self.sfccTypes.contains(type) }
+
+    /// launch.json `compounds`: `{ "name": …, "configurations": ["a", "b" or {name}] }`,
+    /// as pseudo-configs of type "compound" so they show up in the config picker.
+    static func compounds(from json: [String: Any]) -> [LaunchConfig] {
+        (json["compounds"] as? [[String: Any]] ?? []).compactMap { c in
+            guard let name = c["name"] as? String else { return nil }
+            let members = (c["configurations"] as? [Any] ?? []).compactMap {
+                ($0 as? String) ?? (($0 as? [String: Any])?["name"] as? String)
+            }
+            guard !members.isEmpty else { return nil }
+            var config = LaunchConfig(type: "compound", request: "launch", name: name, program: "")
+            config.compoundMembers = members
+            return config
+        }
+    }
 
     /// Parses one entry of launch.json's `configurations` array. `nil` when
     /// the three required keys (type, name, request) are missing.
@@ -1089,6 +1107,10 @@ struct Diagnostic: Identifiable, Sendable, Equatable {
     var column: Int
     var message: String
     var severity: DiagnosticSeverity
+    /// Where it came from: nil for LSP `publishDiagnostics`; "eslint",
+    /// "biome", "tsc" or "task: <label>" for the external feeds kept in
+    /// `DiagnosticsCenter` (never overwritten by LSP publishes).
+    var source: String? = nil
 
     /// Compares by content, not `id` — a fresh `publishDiagnostics` batch
     /// reconstructs every `Diagnostic` with a new random `id` even when
@@ -1097,7 +1119,7 @@ struct Diagnostic: Identifiable, Sendable, Equatable {
     /// underlines) needs value equality here, not identity.
     static func == (lhs: Diagnostic, rhs: Diagnostic) -> Bool {
         lhs.fileURL == rhs.fileURL && lhs.line == rhs.line && lhs.column == rhs.column
-            && lhs.message == rhs.message && lhs.severity == rhs.severity
+            && lhs.message == rhs.message && lhs.severity == rhs.severity && lhs.source == rhs.source
     }
 }
 
@@ -1687,6 +1709,9 @@ struct TaskDefinition: Identifiable, Sendable, Equatable {
     /// `dependsOrder` was "sequence". Athena runs dependencies one after
     /// another either way; kept so the parse is lossless.
     var dependsSequence: Bool = false
+    /// `isBackground` — a watcher that never exits; Athena doesn't wait for
+    /// it to finish, so dependents proceed once it has started.
+    var isBackground: Bool = false
     var problemMatchers: [TaskProblemMatcher] = []
     var detail: String?
 }
@@ -1695,6 +1720,22 @@ struct TaskDefinition: Identifiable, Sendable, Equatable {
 enum TaskProblemMatcher: String, Sendable, Equatable {
     case tsc = "$tsc"
     case eslintStylish = "$eslint-stylish"
+}
+
+/// How a task and its dependencies are scheduled. VS Code's `dependsOrder`
+/// defaults to parallel; "sequence" runs dependencies one after another.
+indirect enum TaskPlan: Sendable, Equatable {
+    case run(TaskDefinition)
+    case sequence([TaskPlan])
+    case parallel([TaskPlan])
+
+    var containsParallel: Bool {
+        switch self {
+        case .run: return false
+        case .parallel(let p): return p.count > 1 || p.contains { $0.containsParallel }
+        case .sequence(let s): return s.contains { $0.containsParallel }
+        }
+    }
 }
 
 enum TaskError: Error, Sendable, Equatable, LocalizedError {
@@ -1717,4 +1758,95 @@ struct TaskVariableContext: Sendable, Equatable {
     var activeFile: String?
     var environment: [String: String] = [:]
     var home: String = NSHomeDirectory()
+}
+
+// MARK: - Test runner
+
+enum TestFramework: String, Sendable, CaseIterable, Equatable {
+    case jest, vitest, pytest, swiftTest
+
+    var displayName: String {
+        switch self {
+        case .jest: return "Jest"
+        case .vitest: return "Vitest"
+        case .pytest: return "pytest"
+        case .swiftTest: return "swift test"
+        }
+    }
+}
+
+enum TestStatus: String, Sendable, Equatable {
+    case unknown, running, passed, failed, skipped
+}
+
+/// One test (or suite) declaration found by scanning a test file.
+struct TestDeclaration: Sendable, Equatable, Identifiable {
+    var id: String { "\(line):\(fullName)" }
+    /// 1-based line.
+    var line: Int
+    var title: String
+    /// Ancestors + title in the framework's own naming: jest "a b c",
+    /// pytest "Class::test", swift "Class/testName".
+    var fullName: String
+    var isSuite: Bool
+    /// Nesting level (0 = top level), for indenting the tree.
+    var depth: Int = 0
+}
+
+/// What one test run produced.
+struct TestRunOutcome: Sendable {
+    var results: [TestCaseResult]
+    var output: String
+    var exitStatus: Int32
+    /// Set when the run could not start or produced nothing parseable.
+    var error: String?
+}
+
+/// A discovered test file with its declarations.
+struct TestFileNode: Sendable, Equatable, Identifiable {
+    var id: String { path }
+    var path: String
+    var framework: TestFramework
+    var declarations: [TestDeclaration]
+}
+
+/// One reported test outcome.
+struct TestCaseResult: Sendable, Equatable, Identifiable {
+    var id: String { filePath + "\u{1F}" + fullName }
+    /// Absolute path, or "" when the framework did not say (swift test).
+    var filePath: String
+    var fullName: String
+    var title: String
+    var status: TestStatus
+    var message: String? = nil
+    var duration: Double? = nil
+}
+
+enum TestRunScope: Sendable, Equatable {
+    case all
+    case file(path: String)
+    case test(path: String, fullName: String)
+    case failed([TestCaseResult])
+}
+
+// MARK: - Diagnostics tools
+
+enum LintTool: String, Sendable, CaseIterable, Equatable {
+    case eslint, biome, tsc
+}
+
+struct AuditVulnerability: Sendable, Equatable {
+    var name: String
+    var severity: String
+    var title: String
+    var url: String?
+    var range: String?
+    var isDirect: Bool
+    var fixAvailable: Bool
+}
+
+struct AuditReport: Sendable, Equatable {
+    var vulnerabilities: [AuditVulnerability]
+    /// severity -> count, from the report's own metadata when present.
+    var counts: [String: Int]
 }

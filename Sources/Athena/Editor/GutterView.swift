@@ -28,6 +28,11 @@ final class GutterView: NSRulerView {
     /// — kept in sync with the editor's theme by `EditorView`.
     var theme: EditorTheme = .athenaDracula
     var onToggleBreakpoint: ((Int) -> Void)?
+    /// 1-based test/suite declaration lines -> last known state. Drawn in the
+    /// breakpoint column (run triangle, or pass/fail mark); a click runs the
+    /// test, ⌥-click still toggles a breakpoint.
+    var testMarks: [Int: TestStatus] = [:]
+    var onRunTest: ((Int) -> Void)?
 
     /// Conflict regions found in the current buffer (plan.md item 23, "D5"),
     /// kept in sync by `EditorView.Coordinator.updateConflictHighlights`.
@@ -241,6 +246,8 @@ final class GutterView: NSRulerView {
             path.fill()
         }
 
+        if !hasBP, !isDebugLine, let state = testMarks[lineNum] { drawTestMark(state, rulerY: rulerY, height: height) }
+
         // Line number
         let numStr = "\(lineNum)" as NSString
         let attrs  = isDebugLine
@@ -252,6 +259,39 @@ final class GutterView: NSRulerView {
         let x = max(numbersLeftEdge, gutterWidth - numberRightPad - size.width)
         let y = rulerY + (height - size.height) / 2
         numStr.draw(at: NSPoint(x: x, y: y), withAttributes: attrs)
+    }
+
+    /// Run triangle (unknown/skipped), green check, red cross, or an amber dot while running.
+    private func drawTestMark(_ state: TestStatus, rulerY: CGFloat, height: CGFloat) {
+        let cx = dotColumnX, cy = rulerY + height / 2, s: CGFloat = 4.5
+        let path = NSBezierPath()
+        switch state {
+        case .passed:
+            path.move(to: NSPoint(x: cx - s, y: cy))
+            path.line(to: NSPoint(x: cx - 1, y: cy + s - 1))
+            path.line(to: NSPoint(x: cx + s, y: cy - s + 1))
+            NSColor.systemGreen.setStroke()
+            path.lineWidth = 2
+        case .failed:
+            path.move(to: NSPoint(x: cx - s + 1, y: cy - s + 1)); path.line(to: NSPoint(x: cx + s - 1, y: cy + s - 1))
+            path.move(to: NSPoint(x: cx - s + 1, y: cy + s - 1)); path.line(to: NSPoint(x: cx + s - 1, y: cy - s + 1))
+            NSColor.systemRed.setStroke()
+            path.lineWidth = 2
+        case .running:
+            path.appendOval(in: NSRect(x: cx - 3, y: cy - 3, width: 6, height: 6))
+            NSColor.systemOrange.setFill()
+            path.fill()
+            return
+        case .unknown, .skipped:
+            path.move(to: NSPoint(x: cx - s + 1, y: cy - s))
+            path.line(to: NSPoint(x: cx + s, y: cy))
+            path.line(to: NSPoint(x: cx - s + 1, y: cy + s))
+            path.close()
+            (state == .skipped ? NSColor.systemGray : NSColor.systemGreen.withAlphaComponent(0.8)).setFill()
+            path.fill()
+            return
+        }
+        path.stroke()
     }
 
     // MARK: - Click handling
@@ -289,7 +329,12 @@ final class GutterView: NSRulerView {
             return
         }
 
-        onToggleBreakpoint?(lineNum)
+        let hasBreakpoint = breakpoints.contains(lineNum)
+        if testMarks[lineNum] != nil, !hasBreakpoint, !event.modifierFlags.contains(.option), local.x < dotColumnX + 8 {
+            onRunTest?(lineNum)
+        } else {
+            onToggleBreakpoint?(lineNum)
+        }
 
         // Restore focus to the editor so keyboard shortcuts keep working after a gutter click.
         textView.window?.makeFirstResponder(textView)

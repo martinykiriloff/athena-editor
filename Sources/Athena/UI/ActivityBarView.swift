@@ -20,6 +20,7 @@ struct ActivityBarView: View {
         (.sfcc,     "cloud.fill",              "SFCC Sandboxes"),
         (.npm,      "shippingbox.fill",        "NPM Scripts"),
         (.debug,    "ladybug.fill",            "Run and Debug"),
+        (.testing,  "checkmark.diamond.fill",  "Testing"),
     ]
 
     var body: some View {

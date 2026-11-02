@@ -221,6 +221,8 @@ final class AppState {
     @ObservationIgnored private var runningScriptProcesses: [String: Process] = [:]
     let npmScriptService: NPMScriptService = NPMScriptService()
     let taskCenter = TaskCenter()   // .vscode/tasks.json — see AppState+Tasks.swift
+    let testCenter = TestCenter()   // Testing sidebar — see AppState+Tests.swift
+    let diagnosticsCenter = DiagnosticsCenter()   // ESLint/Biome/tsc/task feeds — see AppState+Diagnostics.swift
 
     // Selected package + script for the Scripts bottom panel.
     var selectedNPMPackageId:   String? = nil
@@ -868,6 +870,7 @@ final class AppState {
         // still registered and skip starting a correctly-rooted one.
         await lspManager.stopAllServers()
         diagnostics = [:]
+        diagnosticsCenter.clearAll()
 
         // Source Control state is per-repository; a File History filter,
         // stash list or half-typed commit message from the previous
@@ -1141,6 +1144,7 @@ final class AppState {
         editorCursorBlink       = await cb
         editorScrollBeyondLastLine = await sbl
         editorFormatOnSave      = await fos
+        await loadDiagnosticsSettings()
         editorAutoIndent        = await ai
         editorDetectIndentation = await di
         largeFileThresholdKB    = await lft
@@ -1531,6 +1535,7 @@ final class AppState {
         // gutter's change bar for it now rather than waiting for the next
         // debounced edit or tab switch.
         await refreshGitLineChanges(for: tab)
+        scheduleDiagnostics(forSaved: url)
 
         // SFCC upload is NOT triggered here: the disk write above fires the
         // cartridges FSEvents watch (`restartSFCCAutoUpload`), so editor
@@ -1616,6 +1621,7 @@ final class AppState {
         await fileWatchService.stopAll()
         stopSFCCAutoUpload()
         diagnostics  = [:]
+        diagnosticsCenter.clearAll()
         gitLineChanges = [:]
 
         workspace    = nil
@@ -1755,11 +1761,12 @@ final class AppState {
         }
     }
 
-    func startDebugging() async {
+    func startDebugging(using override: LaunchConfig? = nil) async {
         guard debugState == .idle || debugState == .stopped,
-              let config = launchConfigs.first(where: { $0.id == selectedLaunchConfigId })
+              let config = override ?? launchConfigs.first(where: { $0.id == selectedLaunchConfigId })
                ?? launchConfigs.first
         else { return }
+        if let members = config.compoundMembers { await startCompound(config, members: members); return }
 
         debugState = .launching
         debugOutput = ""
@@ -1950,7 +1957,7 @@ final class AppState {
         if let data = try? Data(contentsOf: launchJSON),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let configs = json["configurations"] as? [[String: Any]] {
-            launchConfigs = configs.compactMap(LaunchConfig.from(json:))
+            launchConfigs = configs.compactMap(LaunchConfig.from(json:)) + LaunchConfig.compounds(from: json)
             // A workspace with dw.json / an SFCC connection gets the SFCC
             // config even when launch.json predates Athena's debugger.
             if !launchConfigs.contains(where: \.isSFCC), let sfcc = sfccLaunchConfigIfApplicable() {
@@ -3433,6 +3440,20 @@ final class AppState {
             presentQuickOpen(prefill: ">")
         case .runTask:
             presentTaskPicker()
+        case .stopTask:
+            stopWorkspaceTask()
+        case .showTesting:
+            activateSidebarPanel(.testing)
+            await refreshTests()
+        case .runAllTests:
+            await refreshTests()
+            runAllTests()
+        case .rerunFailedTests:
+            rerunFailedTests()
+        case .runDiagnostics:
+            await runWorkspaceDiagnostics()
+        case .npmAudit:
+            await runNPMAudit()
         case .goToSymbol:
             presentQuickOpen(prefill: "@")
         case .goToWorkspaceSymbol:

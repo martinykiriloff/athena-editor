@@ -14,13 +14,13 @@ struct StatusBarView: View {
     // MARK: Diagnostic counts
 
     private var errorCount: Int {
-        appState.diagnostics.values.reduce(0) { count, diags in
+        appState.mergedDiagnostics.values.reduce(0) { count, diags in
             count + diags.filter { $0.severity == .error }.count
         }
     }
 
     private var warningCount: Int {
-        appState.diagnostics.values.reduce(0) { count, diags in
+        appState.mergedDiagnostics.values.reduce(0) { count, diags in
             count + diags.filter { $0.severity == .warning }.count
         }
     }

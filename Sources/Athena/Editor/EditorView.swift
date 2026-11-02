@@ -131,6 +131,9 @@ struct EditorView: NSViewRepresentable {
     var debugLine: Int? = nil
     /// Called when the user clicks in the gutter to toggle a breakpoint.
     var onToggleBreakpoint: (Int) -> Void = { _ in }
+    /// Test/suite declaration lines -> state, and the gutter run-icon click.
+    var testMarks: [Int: TestStatus] = [:]
+    var onRunTest: (Int) -> Void = { _ in }
     /// Opens the diff viewer comparing one conflict region's "ours" vs
     /// "theirs" content — the gutter menu's "Compare" action (plan.md item
     /// 23, "D5").
@@ -204,6 +207,8 @@ struct EditorView: NSViewRepresentable {
         gutter.onToggleBreakpoint = { [weak coordinator] line in
             coordinator?.parent.onToggleBreakpoint(line)
         }
+        gutter.testMarks = testMarks
+        gutter.onRunTest = { [weak coordinator] line in coordinator?.parent.onRunTest(line) }
         gutter.onConflictResolve = { [weak coordinator] region, choice in
             coordinator?.resolveConflict(region, choice: choice)
         }
@@ -423,6 +428,10 @@ struct EditorView: NSViewRepresentable {
 
         // Sync gutter breakpoints / debug line.
         if let gutter = coord.gutterView {
+            if gutter.testMarks != testMarks {
+                gutter.testMarks = testMarks
+                gutter.needsDisplay = true
+            }
             if gutter.breakpoints != breakpoints || gutter.debugLine != debugLine {
                 gutter.breakpoints = breakpoints
                 gutter.debugLine   = debugLine

@@ -68,6 +68,11 @@ struct BottomPanelView: View {
             }
             .disabled(appState.activeTerminalSessionId == nil)
         case .output:
+            if appState.taskCenter.runningLabel != nil || !appState.taskCenter.backgroundLabels.isEmpty {
+                PanelHeaderButton(systemImage: "stop.fill", help: "Stop Task") {
+                    appState.stopWorkspaceTask()
+                }
+            }
             PanelHeaderButton(systemImage: "trash", help: "Clear Output") {
                 appState.scriptOutput = ""
             }
@@ -113,7 +118,7 @@ struct BottomPanelView: View {
     }
 
     private var problemCount: Int {
-        appState.diagnostics.values.reduce(0) { $0 + $1.count }
+        appState.mergedDiagnostics.values.reduce(0) { $0 + $1.count }
     }
 
     private func panelLabel(_ panel: BottomPanel) -> String {
@@ -253,7 +258,7 @@ struct ProblemsView: View {
 
     var body: some View {
         Group {
-            if appState.diagnostics.isEmpty {
+            if appState.mergedDiagnostics.values.allSatisfy(\.isEmpty) {
                 emptyState
             } else {
                 diagnosticsList
@@ -279,8 +284,9 @@ struct ProblemsView: View {
         List {
             // Sorted like `sortedDiagnostics` (F8's order) — dictionary key
             // order is arbitrary and reshuffles on every publish.
-            ForEach(appState.diagnostics.keys.sorted { $0.path < $1.path }, id: \.self) { fileURL in
-                let fileDiagnostics = (appState.diagnostics[fileURL] ?? []).sorted {
+            let merged = appState.mergedDiagnostics
+            ForEach(merged.keys.sorted { $0.path < $1.path }, id: \.self) { fileURL in
+                let fileDiagnostics = (merged[fileURL] ?? []).sorted {
                     ($0.line, $0.column) < ($1.line, $1.column)
                 }
                 if !fileDiagnostics.isEmpty {
@@ -323,7 +329,8 @@ private struct DiagnosticRowView: View {
                     .font(.system(size: appState.sf(12)))
                     .foregroundColor(.primary)
 
-                Text("\(diagnostic.fileURL.lastPathComponent):\(diagnostic.line):\(diagnostic.column)")
+                Text("\(diagnostic.fileURL.lastPathComponent):\(diagnostic.line):\(diagnostic.column)"
+                     + (diagnostic.source.map { " · \($0)" } ?? ""))
                     .font(.system(size: appState.sf(11)))
                     .foregroundColor(.secondary)
             }

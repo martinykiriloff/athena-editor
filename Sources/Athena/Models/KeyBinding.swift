@@ -30,6 +30,12 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
     case goToLine           = "workbench.action.gotoLine"
     case goToSymbol         = "workbench.action.gotoSymbol"
     case runTask            = "workbench.action.tasks.runTask"
+    case stopTask           = "workbench.action.tasks.terminate"
+    case showTesting        = "workbench.view.testing.focus"
+    case runAllTests        = "testing.runAll"
+    case rerunFailedTests   = "testing.reRunFailTests"
+    case runDiagnostics     = "athena.diagnostics.run"
+    case npmAudit           = "athena.npm.audit"
     case goToWorkspaceSymbol = "workbench.action.showAllSymbols"
     case nextProblem        = "editor.action.marker.nextInFiles"
     case previousProblem    = "editor.action.marker.prevInFiles"
@@ -98,6 +104,12 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
         case .goToLine:          return "Go to Line"
         case .goToSymbol:        return "Go to Symbol"
         case .runTask:           return "Run Task"
+        case .stopTask:          return "Terminate Task"
+        case .showTesting:       return "Show Testing"
+        case .runAllTests:       return "Test: Run All Tests"
+        case .rerunFailedTests:  return "Test: Re-run Failed Tests"
+        case .runDiagnostics:    return "Run Diagnostics (ESLint, Biome, tsc)"
+        case .npmAudit:          return "npm: Audit Dependencies"
         case .goToWorkspaceSymbol: return "Go to Symbol in Workspace"
         case .nextProblem:       return "Go to Next Problem"
         case .previousProblem:   return "Go to Previous Problem"
@@ -135,8 +147,12 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
         case .quickOpen, .commandPalette, .nextTab, .previousTab, .goToLine, .goToSymbol,
              .goToWorkspaceSymbol,             .nextProblem, .previousProblem:
             return "Navigation"
-        case .runTask:
+        case .runTask, .stopTask:
             return "Tasks"
+        case .showTesting, .runAllTests, .rerunFailedTests:
+            return "Testing"
+        case .runDiagnostics, .npmAudit:
+            return "Diagnostics"
         case .toggleBreakpoint, .removeAllBreakpoints, .startOrContinueDebug, .stopDebug,
              .debugStepOver, .debugStepInto, .debugStepOut:
             return "Debug"
@@ -292,6 +308,12 @@ struct KeyBinding: Identifiable, Codable, Sendable {
         KeyBinding(action: .goToSymbol,        combo: KeyCombo(key: "o",   command: true, shift: true)),
         KeyBinding(action: .runTask,           combo: KeyCombo(key: "r",   command: true, option: true)),
         KeyBinding(action: .goToWorkspaceSymbol, combo: KeyCombo(key: "t", command: true)),
+        KeyBinding(action: .stopTask,          combo: nil),
+        KeyBinding(action: .showTesting,       combo: nil),
+        KeyBinding(action: .runAllTests,       combo: nil),
+        KeyBinding(action: .rerunFailedTests,  combo: nil),
+        KeyBinding(action: .runDiagnostics,    combo: nil),
+        KeyBinding(action: .npmAudit,          combo: nil),
         KeyBinding(action: .nextProblem,       combo: KeyCombo(key: "f8")),
         KeyBinding(action: .previousProblem,   combo: KeyCombo(key: "f8",  shift: true)),
         // Layout — ⌘\ is VS Code's real macOS default for "Split Editor Right"

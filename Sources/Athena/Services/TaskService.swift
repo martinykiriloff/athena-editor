@@ -84,6 +84,7 @@ actor TaskService {
                 isDefaultGroup: isDefault,
                 dependsOn: dependsOn,
                 dependsSequence: (entry["dependsOrder"] as? String) == "sequence",
+                isBackground: (entry["isBackground"] as? Bool) ?? false,
                 problemMatchers: matcherNames.compactMap(TaskProblemMatcher.init(rawValue:)),
                 detail: entry["detail"] as? String
             ))
@@ -154,6 +155,32 @@ actor TaskService {
         }
         try visit(label, path: [])
         return plan
+    }
+
+    /// The schedule for `label`: dependencies in parallel (VS Code's default)
+    /// or in sequence when `dependsOrder` is "sequence", then the task itself.
+    /// Shared dependencies appear in several places; the runner runs each once.
+    nonisolated static func executionTree(for label: String, in tasks: [TaskDefinition]) throws -> TaskPlan {
+        let byLabel = Dictionary(tasks.map { ($0.label, $0) }, uniquingKeysWith: { first, _ in first })
+        func node(_ name: String, path: [String]) throws -> TaskPlan {
+            if path.contains(name) { throw TaskError.dependencyCycle(path + [name]) }
+            guard let task = byLabel[name] else { throw TaskError.unknownTask(name) }
+            let deps = try task.dependsOn.map { try node($0, path: path + [name]) }
+            let own: [TaskPlan] = task.command.isEmpty ? [] : [.run(task)]
+            if deps.isEmpty { return own.first ?? .sequence([]) }
+            if task.dependsSequence { return .sequence(deps + own) }
+            return .sequence([deps.count == 1 ? deps[0] : .parallel(deps)] + own)
+        }
+        return try node(label, path: [])
+    }
+
+    /// For a watcher's output: the text after the last "compilation starting"
+    /// marker, so a re-compile replaces rather than duplicates old problems.
+    nonisolated static func backgroundWindow(_ buffer: String) -> String {
+        guard let re = try? NSRegularExpression(pattern: "Starting (incremental )?compilation|File change detected"),
+              let last = re.matches(in: buffer, range: NSRange(buffer.startIndex..., in: buffer)).last,
+              let r = Range(last.range, in: buffer) else { return buffer }
+        return String(buffer[r.lowerBound...])
     }
 
     // MARK: - Running

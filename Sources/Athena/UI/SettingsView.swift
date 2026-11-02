@@ -303,6 +303,41 @@ struct SettingsView: View {
                     }
             }
         }
+
+        // ── Diagnostics (workspace-local ESLint / Biome / tsc) ────
+        let lint = Bindable(appState.diagnosticsCenter)
+        SettingsSection(SettingsIndex.diagnostics) {
+            SettingRow("ESLint on Save") {
+                Toggle("ESLint on Save", isOn: lint.eslintOnSave)
+                    .onChange(of: appState.diagnosticsCenter.eslintOnSave) { _, v in
+                        appState.persistSetting(v, for: "lintEslintOnSave")
+                    }
+            }
+            SettingRow("Biome on Save") {
+                Toggle("Biome on Save", isOn: lint.biomeOnSave)
+                    .onChange(of: appState.diagnosticsCenter.biomeOnSave) { _, v in
+                        appState.persistSetting(v, for: "lintBiomeOnSave")
+                    }
+            }
+            SettingRow("tsc on Save") {
+                Toggle("tsc on Save", isOn: lint.tscOnSave)
+                    .onChange(of: appState.diagnosticsCenter.tscOnSave) { _, v in
+                        appState.persistSetting(v, for: "lintTscOnSave")
+                    }
+            }
+            SettingRow("Report Unused Imports (tsc)") {
+                Toggle("Report Unused Imports (tsc)", isOn: lint.tscReportUnused)
+                    .onChange(of: appState.diagnosticsCenter.tscReportUnused) { _, v in
+                        appState.persistSetting(v, for: "lintTscUnused")
+                    }
+            }
+            SettingRow("Fix on Save (ESLint --fix, Biome --write)") {
+                Toggle("Fix on Save (ESLint --fix, Biome --write)", isOn: lint.fixOnSave)
+                    .onChange(of: appState.diagnosticsCenter.fixOnSave) { _, v in
+                        appState.persistSetting(v, for: "lintFixOnSave")
+                    }
+            }
+        }
     }
 
     // MARK: - Appearance Tab
@@ -736,12 +771,13 @@ enum SettingsIndex {
     static let display = SettingsIndexEntry(title: "Display", labels: ["Word Wrap", "Line Numbers", "Render Whitespace", "Scroll Beyond Last Line"])
     static let cursor = SettingsIndexEntry(title: "Cursor", labels: ["Cursor Style", "Cursor Blinking"])
     static let files = SettingsIndexEntry(title: "Files", labels: ["Format on Save", "Trim Trailing Whitespace", "Insert Final Newline", "Use .editorconfig"])
+    static let diagnostics = SettingsIndexEntry(title: "Diagnostics", labels: ["ESLint on Save", "Biome on Save", "tsc on Save", "Report Unused Imports (tsc)", "Fix on Save (ESLint --fix, Biome --write)"])
     static let theme = SettingsIndexEntry(title: "Theme", labels: ["Color Theme", "Import VS Code Theme"])
     static let minimap = SettingsIndexEntry(title: "Minimap", labels: ["Enable Minimap"])
     static let api = SettingsIndexEntry(title: "API", labels: ["Claude API Key", "Default Model"])
     static let ghostText = SettingsIndexEntry(title: "Predictive Completion (Ghost Text)", labels: ["Provider"])
 
-    static let all = [font, indentation, display, cursor, files, theme, minimap, api, ghostText]
+    static let all = [font, indentation, display, cursor, files, diagnostics, theme, minimap, api, ghostText]
 }
 
 private struct SettingsSection<Content: View>: View {
