@@ -128,6 +128,9 @@ final class AppState {
     /// Source Control panel toggle between Changes and History — lives here
     /// (not in the view) so "File History" from a file row can switch it.
     var gitPanelShowsHistory: Bool = false
+    /// Merge/rebase state, tags, graph, PR status (see `AppState+GitAdvanced.swift`).
+    var gitExtras = GitExtrasState()
+    let githubService = GitHubService()
     var currentTheme: EditorTheme = .athenaDracula {
         didSet { if currentTheme != oldValue { applyAppearance() } }
     }
@@ -531,7 +534,7 @@ final class AppState {
     /// equals `url` — used by URL-driven bulk updates (external file-change
     /// reload, discard changes, workspace search & replace) so a file split
     /// into both groups doesn't leave one pane showing stale content.
-    private func updateTabs(withFileURL url: URL, _ mutate: (inout TabModel) -> Void) {
+    func updateTabs(withFileURL url: URL, _ mutate: (inout TabModel) -> Void) {
         for side: EditorGroupSide in [.primary, .secondary] {
             var groupTabs = tabs(in: side)
             guard let index = groupTabs.firstIndex(where: { $0.fileURL == url }) else { continue }
@@ -2488,6 +2491,7 @@ final class AppState {
 
         branches = (try? await gitService.branches(at: workspace.rootURL)) ?? branches
         gitStashes = (try? await gitService.stashList(at: workspace.rootURL)) ?? []
+        await refreshGitOperation()
     }
 
     // MARK: - Commit / sync / stash
@@ -2640,7 +2644,10 @@ final class AppState {
         defer { isLoadingCommitHistory = false }
 
         do {
-            commitHistory = try await gitService.log(at: workspace.rootURL, limit: limit, path: commitHistoryPath)
+            let graph = gitExtras.showGraph && commitHistoryPath == nil
+            commitHistory = try await gitService.log(at: workspace.rootURL, limit: limit, path: commitHistoryPath, allBranches: graph)
+            gitExtras.graphRows = graph ? GitGraphLayout.layout(commitHistory) : []
+            if commitHistoryPath != nil || !graph { gitExtras.lineHistoryLabel = nil }
         } catch {
             commitHistoryErrorMessage = "Git error: \(error.localizedDescription)"
         }

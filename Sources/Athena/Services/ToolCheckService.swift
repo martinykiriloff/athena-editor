@@ -64,6 +64,22 @@ actor ToolCheckService {
         )
     }
 
+    // MARK: - GitHub CLI
+
+    /// Absolute path of the `gh` CLI, or nil when it isn't installed (the
+    /// pull-request view is hidden in that case).
+    nonisolated static func ghExecutable(
+        searchPaths: [String] = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]
+    ) -> String? {
+        for dir in searchPaths {
+            let path = dir + "/gh"
+            if FileManager.default.isExecutableFile(atPath: path) { return path }
+        }
+        return nil
+    }
+
+    func ghPath() -> String? { Self.ghExecutable() }
+
     // MARK: - Private helper
 
     /// Whether `executable` exits 0. A missing executable counts as failure.

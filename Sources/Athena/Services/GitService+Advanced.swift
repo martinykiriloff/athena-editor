@@ -73,6 +73,11 @@ extension GitService {
         _ = try await run(args: ["merge", "--no-edit", branch], at: url, extraEnvironment: Self.noEditor)
     }
 
+    /// Finishes a conflicted merge once every file is resolved and staged.
+    func mergeContinue(at url: URL) async throws {
+        _ = try await run(args: ["commit", "--no-edit"], at: url, extraEnvironment: Self.noEditor)
+    }
+
     func mergeAbort(at url: URL) async throws {
         _ = try await run(args: ["merge", "--abort"], at: url)
     }
