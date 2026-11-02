@@ -269,7 +269,7 @@ struct KeyBinding: Identifiable, Codable, Sendable {
         KeyBinding(action: .newFile,           combo: KeyCombo(key: "n",   command: true)),
         KeyBinding(action: .closeTab,          combo: KeyCombo(key: "w",   command: true)),
         KeyBinding(action: .reopenClosedTab,   combo: KeyCombo(key: "t",   command: true, shift: true)),
-        KeyBinding(action: .showLocalHistory,  combo: nil),
+        KeyBinding(action: .showLocalHistory,  combo: KeyCombo(key: "h",   command: true, option: true)),
         // View
         KeyBinding(action: .toggleSidebar,     combo: KeyCombo(key: "b",   command: true)),
         KeyBinding(action: .toggleTerminal,    combo: KeyCombo(key: "backtick", control: true)),
@@ -290,7 +290,7 @@ struct KeyBinding: Identifiable, Codable, Sendable {
         KeyBinding(action: .previousTab,       combo: KeyCombo(key: "tab", shift: true, control: true)),
         KeyBinding(action: .goToLine,          combo: KeyCombo(key: "g",   control: true)),
         KeyBinding(action: .goToSymbol,        combo: KeyCombo(key: "o",   command: true, shift: true)),
-        KeyBinding(action: .runTask,           combo: nil),
+        KeyBinding(action: .runTask,           combo: KeyCombo(key: "r",   command: true, option: true)),
         KeyBinding(action: .goToWorkspaceSymbol, combo: KeyCombo(key: "t", command: true)),
         KeyBinding(action: .nextProblem,       combo: KeyCombo(key: "f8")),
         KeyBinding(action: .previousProblem,   combo: KeyCombo(key: "f8",  shift: true)),

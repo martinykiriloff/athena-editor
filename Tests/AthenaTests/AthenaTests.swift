@@ -3743,6 +3743,14 @@ struct SFCCUploadCommandTests {
         let registered = Set(KeyBinding.vscodeDefaults.map(\.action))
         #expect(registered == Set(KeyAction.allCases))
     }
+
+    @Test func newCommandsHaveDefaultShortcutsAndNoTwoDefaultsCollide() {
+        let defaults = KeyBinding.vscodeDefaults
+        #expect(defaults.first { $0.action == .runTask }?.combo == KeyCombo(key: "r", command: true, option: true))
+        #expect(defaults.first { $0.action == .showLocalHistory }?.combo == KeyCombo(key: "h", command: true, option: true))
+        let combos = defaults.compactMap(\.combo)
+        #expect(combos.count == Set(combos).count)
+    }
 }
 
 // MARK: - Breakpoint and debug commands
