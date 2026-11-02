@@ -75,7 +75,7 @@ struct FindReplaceBarView: View {
 
             iconButton(controller.showReplace ? "chevron.down" : "chevron.right",
                        help: controller.showReplace ? "Hide Replace" : "Show Replace") {
-                withAnimation(.easeInOut(duration: 0.12)) { controller.showReplace.toggle() }
+                withAnimation(AccessibilityPrefs.animation(.easeInOut(duration: 0.12))) { controller.showReplace.toggle() }
             }
 
             iconButton("xmark", help: "Close (Esc)") { controller.dismiss() }

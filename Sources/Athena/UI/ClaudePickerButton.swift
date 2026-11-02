@@ -172,7 +172,7 @@ struct ClaudePickerButton<ID: Hashable>: View {
     }
 
     private func setPresented(_ presented: Bool) {
-        withAnimation(.easeOut(duration: 0.12)) { isPresented = presented }
+        withAnimation(AccessibilityPrefs.animation(.easeOut(duration: 0.12))) { isPresented = presented }
     }
 }
 

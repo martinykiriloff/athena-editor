@@ -1883,7 +1883,8 @@ struct EditorThemeAthenaLightTests {
     }
 
     @Test func builtInsCarryTheAthenaNamesAndLegacyIdsStillResolve() {
-        #expect(EditorTheme.all.map(\.name) == ["Athena Dark", "Athena Dracula", "Athena Light"])
+        #expect(EditorTheme.all.map(\.name) == ["Athena Dark", "Athena Dracula", "Athena Light",
+                                           "Athena High Contrast Dark", "Athena High Contrast Light"])
         #expect(EditorTheme.named("darcula") == .athenaDracula)
         #expect(EditorTheme.named("one-dark") == .athenaDark)
         #expect(EditorTheme.named("soft-light") == .athenaLight)

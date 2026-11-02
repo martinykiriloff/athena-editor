@@ -395,7 +395,7 @@ private struct FileNodeRow<Menu: View>: View {
                     .font(.system(size: appState.sf(10), weight: .semibold))
                     .foregroundColor(.secondary)
                     .rotationEffect(node.isExpanded ? .degrees(90) : .degrees(0))
-                    .animation(.easeInOut(duration: 0.15), value: node.isExpanded)
+                    .animation(AccessibilityPrefs.animation(.easeInOut(duration: 0.15)), value: node.isExpanded)
                     .frame(width: appState.sf(14))
             } else {
                 Color.clear.frame(width: appState.sf(14))
@@ -428,6 +428,12 @@ private struct FileNodeRow<Menu: View>: View {
             if !node.isDirectory { appState.keepOpen(node.url) }
         })
         .contextMenu { menu() }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(node.name)
+        .accessibilityValue(node.isDirectory ? (node.isExpanded ? "Folder, expanded, level \(node.depth + 1)" : "Folder, collapsed, level \(node.depth + 1)") : "File, level \(node.depth + 1)")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint(node.isDirectory ? "Activate to expand or collapse" : "Activate to open")
+        .accessibilityAction { onTap() }
     }
 
     @ViewBuilder

@@ -68,6 +68,9 @@ struct StatusBarView: View {
                             Label(branch, systemImage: "arrow.triangle.branch")
                         }
                         .menuStyle(.borderlessButton)
+                        .accessibilityLabel("Branch")
+                        .accessibilityValue(branch)
+                        .accessibilityHint("Opens the branch switcher")
                     }
                 }
 
@@ -83,6 +86,8 @@ struct StatusBarView: View {
                         }
                         .buttonStyle(.plain)
                         .help("Install Athena \(release.version)")
+                        .accessibilityLabel("Update \(release.version) available")
+                        .accessibilityHint("Opens the update prompt")
                     }
                 case .downloading:
                     StatusBarItem {
@@ -109,12 +114,16 @@ struct StatusBarView: View {
                 StatusBarItem {
                     Label("\(errorCount)", systemImage: "xmark.circle")
                         .foregroundStyle(errorCount > 0 ? Color.red : Color.secondary)
+                        .accessibilityLabel("Errors")
+                        .accessibilityValue("\(errorCount)")
                 }
 
                 // Warning count
                 StatusBarItem {
                     Label("\(warningCount)", systemImage: "exclamationmark.triangle")
                         .foregroundStyle(warningCount > 0 ? Color.yellow : Color.secondary)
+                        .accessibilityLabel("Warnings")
+                        .accessibilityValue("\(warningCount)")
                 }
             }
             .padding(.leading, appState.sf(8))
@@ -134,6 +143,8 @@ struct StatusBarView: View {
                 // item 22), so this tracks whichever pane the user is in.
                 if let tab = appState.focusedTab {
                     Text("Ln \(tab.cursorLine)  Col \(tab.cursorColumn)")
+                        .accessibilityLabel("Cursor position")
+                        .accessibilityValue("Line \(tab.cursorLine), column \(tab.cursorColumn)")
                 }
 
                 // Language
@@ -151,6 +162,8 @@ struct StatusBarView: View {
         .overlay(alignment: .top) {
             Divider()
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Status bar")
     }
 
     // MARK: Helpers

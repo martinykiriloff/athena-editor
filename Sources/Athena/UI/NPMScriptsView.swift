@@ -110,7 +110,7 @@ private struct PackageGroupView: View {
         VStack(alignment: .leading, spacing: 0) {
             // Group header
             Button {
-                withAnimation(.easeInOut(duration: 0.15)) { isExpanded.toggle() }
+                withAnimation(AccessibilityPrefs.animation(.easeInOut(duration: 0.15))) { isExpanded.toggle() }
             } label: {
                 HStack(spacing: appState.sf(6)) {
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
@@ -226,8 +226,8 @@ private struct ScriptRowView: View {
                 ? Color.green.opacity(0.08)
                 : (isHovering ? Color(nsColor: .selectedContentBackgroundColor).opacity(0.25) : Color.clear)
         )
-        .animation(.easeInOut(duration: 0.1), value: isHovering)
-        .animation(.easeInOut(duration: 0.1), value: isRunning)
+        .animation(AccessibilityPrefs.animation(.easeInOut(duration: 0.1)), value: isHovering)
+        .animation(AccessibilityPrefs.animation(.easeInOut(duration: 0.1)), value: isRunning)
         .onHover { isHovering = $0 }
     }
 }

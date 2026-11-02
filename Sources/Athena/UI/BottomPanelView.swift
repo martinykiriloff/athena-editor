@@ -52,6 +52,8 @@ struct BottomPanelView: View {
         .padding(.horizontal, appState.sf(8))
         .frame(height: headerHeight)
         .background(Color(nsColor: .controlBackgroundColor))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Panel header")
     }
 
     @ViewBuilder
@@ -110,6 +112,9 @@ struct BottomPanelView: View {
             .contentShape(shape)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(panelLabel(panel))
+        .accessibilityValue(panel == .problems && problemCount > 0 ? "\(problemCount) problems" : "")
+        .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
     }
 
     private var problemCount: Int {
@@ -243,6 +248,7 @@ private struct PanelHeaderButton: View {
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
         .help(help)
+        .accessibilityLabel(help)
     }
 }
 
@@ -294,6 +300,9 @@ struct ProblemsView: View {
                             }
                             .buttonStyle(.plain)
                             .help("Go to \(diagnostic.fileURL.lastPathComponent):\(diagnostic.line):\(diagnostic.column)")
+                            .accessibilityLabel("\(diagnostic.severity) \(diagnostic.message)")
+                            .accessibilityValue("\(diagnostic.fileURL.lastPathComponent), line \(diagnostic.line), column \(diagnostic.column)")
+                            .accessibilityHint("Go to problem")
                         }
                     } header: {
                         Text(fileURL.lastPathComponent)
@@ -317,6 +326,7 @@ private struct DiagnosticRowView: View {
         HStack(alignment: .top, spacing: appState.sf(8)) {
             severityIcon
                 .font(.system(size: appState.sf(13)))
+                .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: appState.sf(2)) {
                 Text(diagnostic.message)

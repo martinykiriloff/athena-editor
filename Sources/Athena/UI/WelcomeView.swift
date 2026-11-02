@@ -191,7 +191,7 @@ private struct QuickActionButton: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
-        .animation(.easeInOut(duration: 0.12), value: isHovered)
+        .animation(AccessibilityPrefs.animation(.easeInOut(duration: 0.12)), value: isHovered)
     }
 }
 

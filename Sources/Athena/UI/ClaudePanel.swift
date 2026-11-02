@@ -203,7 +203,7 @@ struct ClaudePanel: View {
                 .padding(.vertical, appState.sf(8))
             }
             .onChange(of: appState.claudeTimeline.count) { _, _ in
-                withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo("bottom", anchor: .bottom) }
+                withAnimation(AccessibilityPrefs.animation(.easeOut(duration: 0.15))) { proxy.scrollTo("bottom", anchor: .bottom) }
             }
             .onChange(of: appState.claudeTimeline.last?.kind) { _, _ in
                 proxy.scrollTo("bottom", anchor: .bottom)
