@@ -478,6 +478,15 @@ struct CodeEditorView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .task(id: tab.id) { await appState.loadBlame(for: tab) }
             .task(id: tab.id) { await appState.refreshGitLineChanges(for: tab) }
+            .onReceive(NotificationCenter.default.publisher(for: .athenaGitHunkAction)) { note in
+                // Several containers may be alive; only the focused tab's acts.
+                guard appState.focusedTab?.id == tab.id, let fileURL = tab.fileURL,
+                      let path = note.userInfo?["path"] as? String, path == fileURL.path,
+                      let line = note.userInfo?["line"] as? Int,
+                      let name = note.userInfo?["action"] as? String,
+                      let action = GitHunkAction(notificationName: name) else { return }
+                Task { await appState.applyGitHunk(action, fileURL: fileURL, line: line) }
+            }
             .overlay(alignment: .topTrailing) {
                 if let controller = findReplaceController, controller.isVisible {
                     FindReplaceBarView(controller: controller)
