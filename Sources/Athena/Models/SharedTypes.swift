@@ -427,7 +427,7 @@ struct DBQueryResult: Sendable {
 }
 
 enum BottomPanel: String, Sendable, CaseIterable {
-    case terminal, scripts, output, problems, sfcclogs, references, debugConsole
+    case terminal, scripts, output, problems, sfcclogs, references, debugConsole, hierarchy
 }
 
 // MARK: - Language

@@ -453,6 +453,17 @@ final class AppState {
     /// / `didChange`); re-synced with a fresh `didOpen` once they qualify.
     @ObservationIgnored var lspSuspendedTabs: Set<UUID> = []
     var editorTrimTrailingWhitespace: Bool = false
+    // LSP extras (Settings → Editor). All off until opted into.
+    var editorInlayHints:     Bool = false
+    var editorSemanticTokens: Bool = false
+    var editorCodeLens:       Bool = false
+    var editorLinkedEditing:  Bool = false
+    var editorFixAllOnSave:   Bool = false
+    /// Call/type hierarchy panel state (see `AppState+LSPExtras.swift`).
+    var hierarchyRoots: [HierarchyItem] = []
+    var hierarchyChildren: [UUID: [HierarchyItem]] = [:]
+    var hierarchyDirection: HierarchyDirection = .incomingCalls
+    var isLoadingHierarchy: Bool = false
     var editorInsertFinalNewline: Bool   = false
     var editorUseEditorConfig:   Bool    = true
     /// Resolved .editorconfig settings keyed by file path; cleared whenever
@@ -1123,6 +1134,11 @@ final class AppState {
         async let lft  = settingsService.value(for: "largeFileThresholdKB",    default: LargeFilePolicy.defaultThresholdKB)
         async let ttw  = settingsService.value(for: "editorTrimTrailingWhitespace", default: false)
         async let ifn  = settingsService.value(for: "editorInsertFinalNewline", default: false)
+        async let inl  = settingsService.value(for: "editorInlayHints",        default: false)
+        async let sem  = settingsService.value(for: "editorSemanticTokens",    default: false)
+        async let lens = settingsService.value(for: "editorCodeLens",          default: false)
+        async let lnk  = settingsService.value(for: "editorLinkedEditing",     default: false)
+        async let fixa = settingsService.value(for: "editorFixAllOnSave",      default: false)
         async let uec  = settingsService.value(for: "editorUseEditorConfig",   default: true)
         async let th   = settingsService.value(for: "theme",                   default: "athena-dark")
         async let ct   = settingsService.value(for: "customThemes",            default: [EditorTheme]())
@@ -1146,6 +1162,11 @@ final class AppState {
         largeFileThresholdKB    = await lft
         editorTrimTrailingWhitespace = await ttw
         editorInsertFinalNewline = await ifn
+        editorInlayHints        = await inl
+        editorSemanticTokens    = await sem
+        editorCodeLens          = await lens
+        editorLinkedEditing     = await lnk
+        editorFixAllOnSave      = await fixa
         editorUseEditorConfig   = await uec
         customThemes            = await ct
         let themeId             = await th
@@ -1491,6 +1512,16 @@ final class AppState {
               let url = groupTabs[index].fileURL
         else { return }
         var tab = groupTabs[index]
+
+        if let fixed = await contentAfterFixAll(for: tab) {
+            tab.content = fixed
+            groupTabs = tabs(in: side)
+            if let i = groupTabs.firstIndex(where: { $0.id == id }) {
+                groupTabs[i].content = fixed
+                setTabs(groupTabs, in: side)
+            }
+            groupTabs = tabs(in: side)
+        }
 
         if let formatted = await formattedContent(for: tab) {
             tab.content = formatted
@@ -3208,8 +3239,10 @@ final class AppState {
         case .directoryChanged:
             scheduleFileTreeRebuild()
         case .fileChanged(let url):
+            forwardWatchedFile(url, type: 2)
             await handleExternalFileChange(url)
         case .fileDeleted(let url):
+            forwardWatchedFile(url, type: 3)
             await handleExternalFileRemoval(url)
         }
     }
@@ -3437,6 +3470,12 @@ final class AppState {
             presentQuickOpen(prefill: "@")
         case .goToWorkspaceSymbol:
             showWorkspaceSymbols = true
+        case .organizeImports:
+            await organizeImports()
+        case .showCallHierarchy:
+            await showHierarchy(types: false)
+        case .showTypeHierarchy:
+            await showHierarchy(types: true)
         case .nextTab:
             cycleTab(forward: true)
         case .previousTab:
@@ -3523,6 +3562,16 @@ final class AppState {
                 guard let url = tab.fileURL else { continue }
 
                 var contentToSave = tab.content
+                var tab = tab
+                if let fixed = await contentAfterFixAll(for: tab) {
+                    tab.content = fixed
+                    contentToSave = fixed
+                    var groupTabs = tabs(in: side)
+                    if let i = groupTabs.firstIndex(where: { $0.id == tab.id }) {
+                        groupTabs[i].content = fixed
+                        setTabs(groupTabs, in: side)
+                    }
+                }
                 if let formatted = await formattedContent(for: tab) {
                     contentToSave = formatted
                     var groupTabs = tabs(in: side)
