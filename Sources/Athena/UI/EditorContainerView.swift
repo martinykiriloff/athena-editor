@@ -502,6 +502,10 @@ struct CodeEditorView: View {
                 },
                 onGhostTextShown: { appState.recordGhostTextShown() },
                 onGhostTextAccepted: { appState.recordGhostTextAccepted() },
+                onRequestNextEdit: { query in
+                    await appState.predictNextEdit(query, tab: tab)
+                },
+                isNextEditEnabled: appState.isNextEditPredictionActive,
                 ghostTextDebounceMs: appState.ghostTextDebounceMs
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)

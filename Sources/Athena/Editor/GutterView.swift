@@ -46,6 +46,8 @@ final class GutterView: NSRulerView {
     /// breakpoint column (run triangle, or pass/fail mark); a click runs the
     /// test, ⌥-click still toggles a breakpoint.
     var testMarks: [Int: TestStatus] = [:]
+    /// 1-based line a next-edit suggestion points at (drawn as an arrow).
+    var nextEditLine: Int? { didSet { if nextEditLine != oldValue { needsDisplay = true } } }
     var onRunTest: ((Int) -> Void)?
     /// Non-standard breakpoint appearance (conditional / logpoint / disabled).
     var breakpointStyles: [Int: BreakpointGlyphStyle] = [:]
@@ -312,6 +314,7 @@ final class GutterView: NSRulerView {
         }
 
         if !hasBP, !isDebugLine, let state = testMarks[lineNum] { drawTestMark(state, rulerY: rulerY, height: height) }
+        if !hasBP, !isDebugLine, lineNum == nextEditLine { drawNextEditArrow(rulerY: rulerY, height: height) }
 
         // Line number
         let numStr = "\(lineNum)" as NSString
@@ -324,6 +327,21 @@ final class GutterView: NSRulerView {
         let x = max(numbersLeftEdge, gutterWidth - numberRightPad - size.width)
         let y = rulerY + (height - size.height) / 2
         numStr.draw(at: NSPoint(x: x, y: y), withAttributes: attrs)
+    }
+
+    /// A right-pointing arrow: "the suggested next edit is on this line".
+    private func drawNextEditArrow(rulerY: CGFloat, height: CGFloat) {
+        let cx = dotColumnX, cy = rulerY + height / 2, s: CGFloat = 4.5
+        let path = NSBezierPath()
+        path.move(to: NSPoint(x: cx - s, y: cy))
+        path.line(to: NSPoint(x: cx + s, y: cy))
+        path.move(to: NSPoint(x: cx + 1, y: cy - s + 1))
+        path.line(to: NSPoint(x: cx + s, y: cy))
+        path.line(to: NSPoint(x: cx + 1, y: cy + s - 1))
+        path.lineWidth = 1.8
+        path.lineCapStyle = .round
+        NSColor.controlAccentColor.setStroke()
+        path.stroke()
     }
 
     /// Run triangle (unknown/skipped), green check, red cross, or an amber dot while running.

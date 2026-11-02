@@ -800,6 +800,12 @@ enum EditorCommand: Sendable, Equatable {
     case insertCursorBelow
     case columnSelect(ColumnSelectDirection)
     case expandEmmet
+    /// Ask for an inline suggestion now (⌥\).
+    case triggerInlineSuggestion
+    /// Accept the visible suggestion up to its next line break.
+    case acceptInlineSuggestionLine
+    /// Ask for a next-edit prediction now.
+    case triggerNextEdit
 }
 
 // MARK: - Code folding
@@ -1698,6 +1704,23 @@ struct GhostTextCloudUsage: Codable, Sendable, Equatable {
 /// `range` is UTF-16, valid only for the buffer `docVersion` it was made from.
 struct NextEditPrediction: Sendable, Equatable {
     var range: NSRange
+    var original: String
+    var replacement: String
+}
+
+/// What the editor sends for a next-edit prediction: an excerpt of the
+/// buffer around the recent edits, where it starts, the caret's line, and
+/// the edits themselves (all lines 1-based).
+struct NextEditQuery: Sendable, Equatable {
+    var excerpt: String
+    var excerptStartLine: Int
+    var cursorLine: Int
+    var edits: [RecentEdit]
+}
+
+/// The model's proposed edit, before it's located in the buffer: replace
+/// `original` (copied verbatim from the excerpt) with `replacement`.
+struct NextEditCandidate: Sendable, Equatable {
     var original: String
     var replacement: String
 }

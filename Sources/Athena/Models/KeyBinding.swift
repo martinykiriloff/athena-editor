@@ -98,6 +98,9 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
     case columnSelectLeft    = "cursorColumnSelectLeft"
     case columnSelectRight   = "cursorColumnSelectRight"
     case expandEmmet         = "editor.emmet.action.expandAbbreviation"
+    case triggerInlineSuggestion    = "editor.action.inlineSuggest.trigger"
+    case acceptInlineSuggestionLine = "editor.action.inlineSuggest.acceptNextLine"
+    case triggerNextEdit            = "athena.nextEdit.trigger"
     // Debug
     case toggleBreakpoint       = "editor.debug.action.toggleBreakpoint"
     case removeAllBreakpoints   = "workbench.debug.viewlet.action.removeAllBreakpoints"
@@ -218,6 +221,9 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
         case .columnSelectLeft:    return "Column Selection Left"
         case .columnSelectRight:   return "Column Selection Right"
         case .expandEmmet:         return "Emmet: Expand Abbreviation"
+        case .triggerInlineSuggestion:    return "Trigger Inline Suggestion"
+        case .acceptInlineSuggestionLine: return "Accept Next Line of Inline Suggestion"
+        case .triggerNextEdit:            return "Suggest Next Edit"
         case .zoomIn:            return "Zoom In"
         case .zoomOut:           return "Zoom Out"
         case .resetZoom:         return "Reset Zoom"
@@ -276,7 +282,8 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
              .sortLinesAscending, .sortLinesDescending, .reverseLines, .removeDuplicateLines,
              .trimTrailingWhitespace, .joinLines, .transformToUppercase, .transformToLowercase,
              .transformToTitlecase, .insertCursorAbove, .insertCursorBelow,
-             .columnSelectUp, .columnSelectDown, .columnSelectLeft, .columnSelectRight, .expandEmmet:
+             .columnSelectUp, .columnSelectDown, .columnSelectLeft, .columnSelectRight, .expandEmmet,
+             .triggerInlineSuggestion, .acceptInlineSuggestionLine, .triggerNextEdit:
             return "Editor"
         }
     }
@@ -520,6 +527,12 @@ struct KeyBinding: Identifiable, Codable, Sendable {
         KeyBinding(action: .columnSelectLeft,    combo: KeyCombo(key: "left",  command: true, shift: true, option: true)),
         KeyBinding(action: .columnSelectRight,   combo: KeyCombo(key: "right", command: true, shift: true, option: true)),
         KeyBinding(action: .expandEmmet,         combo: nil),
+        // VS Code's ⌥\ asks for a suggestion now. Accept-word (⌘→) and the
+        // alternatives (⌥] / ⌥[) are handled by the editor only while a
+        // suggestion shows, so those keys keep their meaning otherwise.
+        KeyBinding(action: .triggerInlineSuggestion,    combo: KeyCombo(key: "\\", option: true)),
+        KeyBinding(action: .acceptInlineSuggestionLine, combo: nil),
+        KeyBinding(action: .triggerNextEdit,            combo: nil),
         // Debug — VS Code's own function keys. Breakpoints had no binding,
         // no menu item and no palette entry at all, so the only way to set
         // one was to know the gutter was clickable.

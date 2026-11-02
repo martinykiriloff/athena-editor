@@ -188,6 +188,10 @@ struct EditorView: NSViewRepresentable {
     /// Session counters for Settings (suggestions shown / accepted).
     var onGhostTextShown: () -> Void = {}
     var onGhostTextAccepted: () -> Void = {}
+    /// Asks for the edit the user will most likely make next (Claude only).
+    var onRequestNextEdit: @MainActor (NextEditQuery) async -> NextEditCandidate? = { _ in nil }
+    /// Whether next-edit prediction is on (Settings → AI, Claude provider).
+    var isNextEditEnabled: Bool = false
     /// User-tunable delay (Settings → AI) before a ghost-text request fires
     /// after the last keystroke — mirrors the completion popup's fixed 150ms
     /// debounce just below, but configurable since local-LLM latency varies
@@ -313,6 +317,13 @@ struct EditorView: NSViewRepresentable {
         }
         driver.onShown = { [weak coord = context.coordinator] in coord?.parent.onGhostTextShown() }
         driver.onAccepted = { [weak coord = context.coordinator] in coord?.parent.onGhostTextAccepted() }
+        let nextEdit = context.coordinator.nextEditDriver
+        nextEdit.textView = textView
+        nextEdit.isEnabled = { [weak coord = context.coordinator] in coord?.parent.isNextEditEnabled ?? false }
+        nextEdit.isGhostVisible = { [weak coord = context.coordinator] in coord?.ghostController.hasSuggestion ?? false }
+        nextEdit.requestCandidate = { [weak coord = context.coordinator] query in
+            await coord?.parent.onRequestNextEdit(query)
+        }
 
         // Expose scroll view via proxy so the minimap can drive scrolling.
         let proxy = EditorScrollProxy()
@@ -798,6 +809,8 @@ extension EditorView {
         /// accept and alternatives (see `InlineSuggestionDriver`).
         let inlineDriver         = InlineSuggestionDriver()
         var ghostController: GhostTextController { inlineDriver.ghost }
+        /// Next-edit prediction (see `NextEditDriver`).
+        let nextEditDriver       = NextEditDriver()
         @ObservationIgnored private var completionDebounce: Task<Void, Never>?
         let signatureController = SignatureHelpController()
         @ObservationIgnored private var signatureDebounce: Task<Void, Never>?
@@ -1198,6 +1211,15 @@ extension EditorView {
             case .expandEmmet:
                 guard tv.window?.firstResponder === tv else { return }
                 _ = expandEmmetAbbreviation(in: tv)
+            case .triggerInlineSuggestion:
+                guard tv.window?.firstResponder === tv else { return }
+                inlineDriver.triggerManually()
+            case .acceptInlineSuggestionLine:
+                guard tv.window?.firstResponder === tv else { return }
+                inlineDriver.acceptNextLine()
+            case .triggerNextEdit:
+                guard tv.window?.firstResponder === tv else { return }
+                nextEditDriver.trigger()
             }
         }
 
@@ -1902,6 +1924,7 @@ extension EditorView {
             // Ghost text either advances (the keystroke typed through the
             // suggestion) or is dismissed and rescheduled by the driver.
             let typedThrough = inlineDriver.textDidChange()
+            nextEditDriver.textDidChange()
             completionDebounce?.cancel()
             cancelHover()
             completionSuppressed = false
@@ -2016,6 +2039,7 @@ extension EditorView {
         func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
             recordPendingHighlightEdit(in: textView, affected: affectedCharRange, replacement: replacementString)
             inlineDriver.willChangeText(range: affectedCharRange, replacement: replacementString)
+            nextEditDriver.willChangeText(range: affectedCharRange)
             recordLinkedTagEdit(in: textView, affected: affectedCharRange, replacement: replacementString)
             guard var snippet = activeSnippet else { return true }
             let delta = (replacementString?.utf16.count ?? 0) - affectedCharRange.length
@@ -2464,6 +2488,11 @@ extension EditorView {
                 if let tv = textView, advanceSnippet(in: tv) {
                     return true
                 }
+                // Next edit: first Tab jumps to it, the second applies it.
+                if event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
+                   nextEditDriver.handleTab() {
+                    return true
+                }
                 if let tv = textView, expandEmmetAbbreviation(in: tv) {
                     return true
                 }
@@ -2479,6 +2508,7 @@ extension EditorView {
                     return true
                 }
                 if inlineDriver.handleKey(event) { return true }
+                if nextEditDriver.handleEscape() { return true }
                 if signatureController.isVisible {
                     signatureDebounce?.cancel()
                     signatureController.dismiss()

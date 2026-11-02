@@ -3609,6 +3609,9 @@ final class AppState {
         case .columnSelectLeft:     postEditorCommand(.columnSelect(.left))
         case .columnSelectRight:    postEditorCommand(.columnSelect(.right))
         case .expandEmmet:          postEditorCommand(.expandEmmet)
+        case .triggerInlineSuggestion:    postEditorCommand(.triggerInlineSuggestion)
+        case .acceptInlineSuggestionLine: postEditorCommand(.acceptInlineSuggestionLine)
+        case .triggerNextEdit:            postEditorCommand(.triggerNextEdit)
         case .toggleBreakpoint:
             toggleBreakpointAtCursor()
         case .removeAllBreakpoints:

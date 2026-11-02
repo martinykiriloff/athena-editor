@@ -437,6 +437,21 @@ struct InlineCompletionStreamingTests {
         #expect(events.last == .finished(nil))
     }
 
+    // Next-edit prediction shares the Claude mock, so it lives in this
+    // serialized suite rather than one that could run alongside it.
+    @Test func claudeAnswerBecomesACandidate() async {
+        InlineMockURLProtocol.set("claude/v1/messages", .init(status: 200, body: """
+        {"content":[{"type":"text","text":"{\\"original\\": \\"getUser(2)\\", \\"replacement\\": \\"fetchUser(2)\\"}"}]}
+        """))
+        let service = InlineCompletionService()
+        let query = NextEditQuery(excerpt: "const b = getUser(2)", excerptStartLine: 1, cursorLine: 1, edits: [])
+        let result = await service.predictNextEdit(query, path: "a.ts", language: .typescript, apiKey: "mock-key")
+        #expect(result == .candidate(NextEditCandidate(original: "getUser(2)", replacement: "fetchUser(2)")))
+        let sent = InlineMockURLProtocol.body("claude/v1/messages")
+        #expect(sent?["model"] as? String == "claude-haiku-5-5")
+        #expect(sent?["stream"] == nil)
+    }
+
     @Test func openAICompatibleFallsBackFromInfill() async {
         let host = "llama.mock.test"
         InlineMockURLProtocol.set("\(host)/infill", .init(status: 404, body: "Not Found"))
@@ -479,5 +494,63 @@ struct InlineCompletionStreamingTests {
         #expect(events.last == .finished("return a - b"))
         let extra = InlineMockURLProtocol.body("\(host)/infill")?["input_extra"] as? [[String: String]]
         #expect(extra == [["filename": "src/x.ts", "text": "export const x = 1"]])
+    }
+}
+
+// MARK: - Next-edit prediction
+
+@Suite("Next-edit prediction")
+struct NextEditTests {
+    @Test func parsesAnswerAndRejectsNoOps() {
+        #expect(InlinePromptBuilder.parseNextEdit(#"{"original": "getUser(id)", "replacement": "fetchUser(id)"}"#)
+                == NextEditCandidate(original: "getUser(id)", replacement: "fetchUser(id)"))
+        // Prose around the object is tolerated.
+        #expect(InlinePromptBuilder.parseNextEdit("Here: {\"original\": \"a\", \"replacement\": \"b\"} done")?.replacement == "b")
+        #expect(InlinePromptBuilder.parseNextEdit(#"{"none": true}"#) == nil)
+        #expect(InlinePromptBuilder.parseNextEdit(#"{"original": "a", "replacement": "a"}"#) == nil)
+        #expect(InlinePromptBuilder.parseNextEdit("no json") == nil)
+    }
+
+    @Test func promptListsRecentEdits() {
+        let query = NextEditQuery(excerpt: "const a = getUser(1)\nconst b = getUser(2)", excerptStartLine: 10,
+                                  cursorLine: 10, edits: [RecentEdit(line: 10, before: "const a = getUser(1)", after: "const a = fetchUser(1)")])
+        let prompt = InlinePromptBuilder.nextEdit(query, path: "src/a.ts", language: .typescript)
+        #expect(prompt.user.contains("first_line=\"10\""))
+        #expect(prompt.user.contains("line 10:\n- const a = getUser(1)\n+ const a = fetchUser(1)"))
+        #expect(prompt.system.contains("exactly once"))
+    }
+
+    @Test func locateNeedsAUniqueMatchAwayFromTheCaret() {
+        let buffer = "const a = fetchUser(1)\nconst b = getUser(2)\n" as NSString
+        let all = NSRange(location: 0, length: buffer.length)
+        let candidate = NextEditCandidate(original: "getUser(2)", replacement: "fetchUser(2)")
+        let range = NextEditDriver.locate(candidate, in: buffer, within: all, cursor: 5)
+        #expect(range == buffer.range(of: "getUser(2)"))
+
+        // Ambiguous: two occurrences.
+        let twice = "getUser(2)\ngetUser(2)" as NSString
+        #expect(NextEditDriver.locate(candidate, in: twice, within: NSRange(location: 0, length: twice.length), cursor: 0) == nil)
+        // Caret inside the target: that's typing, not a next edit.
+        let inside = buffer.range(of: "getUser(2)").location + 3
+        #expect(NextEditDriver.locate(candidate, in: buffer, within: all, cursor: inside) == nil)
+        // Outside the window: not found.
+        #expect(NextEditDriver.locate(candidate, in: buffer, within: NSRange(location: 0, length: 10), cursor: 0) == nil)
+    }
+
+    @Test func lineHelpers() {
+        let ns = "one\ntwo\nthree" as NSString
+        #expect(NextEditDriver.lineNumber(at: 0, in: ns) == 1)
+        #expect(NextEditDriver.lineNumber(at: 5, in: ns) == 2)
+        #expect(NextEditDriver.location(ofLine: 3, in: ns) == 8)
+        #expect(NextEditDriver.location(ofLine: 9, in: ns) == ns.length)
+        #expect(NextEditDriver.lineText(at: 5, in: ns) == "two")
+    }
+
+    @Test func inlineSuggestionBindings() {
+        let d = KeyBinding.vscodeDefaults
+        #expect(d.first { $0.action == .triggerInlineSuggestion }?.combo == KeyCombo(key: "\\", option: true))
+        #expect(d.first { $0.action == .acceptInlineSuggestionLine }?.combo == nil)
+        #expect(KeyAction.triggerInlineSuggestion.rawValue == "editor.action.inlineSuggest.trigger")
+        #expect(KeyAction.triggerNextEdit.category == "Editor")
     }
 }

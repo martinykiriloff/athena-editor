@@ -160,6 +160,42 @@ enum InlinePromptBuilder {
             .joined(separator: "\n") + "\n"
     }
 
+    // MARK: - Next-edit prediction
+
+    static func nextEdit(_ query: NextEditQuery, path: String, language: Language) -> ClaudePrompt {
+        let system = """
+        You predict the next edit a developer will make in a file, from the edits they just made. \
+        Typical follow-ups: the other uses of something just renamed, call sites after a signature \
+        change, the same change on similar neighbouring lines, an import for something just used. \
+        Reply with ONLY a JSON object, no markdown: \
+        {"original": "<text currently in the excerpt, copied exactly, at most a few lines>", "replacement": "<the new text>"}. \
+        The original must occur exactly once in the excerpt and must not be on the line the caret is on. \
+        Never repeat an edit that was already made. If no follow-up edit is clearly implied, reply {"none": true}.
+        """
+        var user = "<file path=\"\(path)\" language=\"\(language.displayName)\" first_line=\"\(query.excerptStartLine)\">\n"
+        user += query.excerpt
+        user += "\n</file>\n<caret line=\"\(query.cursorLine)\"/>\n<recent_edits>\n"
+        for edit in query.edits {
+            user += "line \(edit.line):\n- \(edit.before)\n+ \(edit.after)\n"
+        }
+        user += "</recent_edits>"
+        return ClaudePrompt(system: system, user: user)
+    }
+
+    /// Reads the model's JSON answer; `nil` for "none", malformed output,
+    /// or a no-op.
+    static func parseNextEdit(_ text: String) -> NextEditCandidate? {
+        guard let open = text.firstIndex(of: "{"), let close = text.lastIndex(of: "}"), open < close,
+              let data = String(text[open...close]).data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              (json["none"] as? Bool) != true,
+              let original = json["original"] as? String,
+              let replacement = json["replacement"] as? String,
+              !original.isEmpty, original != replacement
+        else { return nil }
+        return NextEditCandidate(original: original, replacement: replacement)
+    }
+
     // MARK: - Cleaning output
 
     /// Cleans raw model output. While streaming (`final == false`) returns

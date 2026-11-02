@@ -107,7 +107,7 @@ extension AppState {
     /// Backoff after a 429/529, the daily cap, and a minimum gap between
     /// cloud requests so a short debounce can't turn every pause into a
     /// paid call. Counts the request when it's admitted.
-    private func admitCloudRequest() async -> Bool {
+    func admitCloudRequest() async -> Bool {
         let now = Date()
         if let until = cloudBackoffUntil, until > now { return false }
 
@@ -325,5 +325,42 @@ extension AppState {
         let endpoint = ollamaEndpoint.isEmpty ? Self.defaultOllamaEndpoint : ollamaEndpoint
         let model = ollamaModel.isEmpty ? Self.defaultOllamaModel : ollamaModel
         return await inlineCompletionService.ollamaCapabilities(endpoint: endpoint, model: model)
+    }
+}
+
+// MARK: - Next-edit prediction
+
+extension AppState {
+
+    /// Whether next-edit prediction may run: the experiment is on and the
+    /// provider is Claude (local 7–8B models aren't reliable at it).
+    var isNextEditPredictionActive: Bool {
+        nextEditPredictionEnabled && ghostTextProvider == .claude && !claudeAPIKey.isEmpty
+    }
+
+    /// Asks Claude for the edit the user will most likely make next in
+    /// `tab`. Subject to the same file rules and cloud limits as ghost text.
+    func predictNextEdit(_ query: NextEditQuery, tab: TabModel) async -> NextEditCandidate? {
+        guard isNextEditPredictionActive, isGhostTextAllowed(in: tab) else { return nil }
+        guard await admitCloudRequest(), !Task.isCancelled else { return nil }
+        inlineCompletionsInFlight += 1
+        defer { inlineCompletionsInFlight -= 1 }
+
+        let result = await inlineCompletionService.predictNextEdit(
+            query, path: inlinePath(for: tab), language: tab.language, apiKey: claudeAPIKey
+        )
+        switch result {
+        case .candidate(let candidate):
+            return candidate
+        case .none:
+            return nil
+        case .failed(let message):
+            if statusMessage != message { statusMessage = message }
+            return nil
+        case .rateLimited(let until, let message):
+            cloudBackoffUntil = until
+            if statusMessage != message { statusMessage = message }
+            return nil
+        }
     }
 }

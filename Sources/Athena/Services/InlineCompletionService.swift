@@ -172,6 +172,59 @@ actor InlineCompletionService {
         }
     }
 
+    // MARK: - Next-edit prediction (Claude)
+
+    enum NextEditResult: Sendable, Equatable {
+        case candidate(NextEditCandidate)
+        case none
+        case failed(String)
+        case rateLimited(until: Date, message: String)
+    }
+
+    /// One non-streaming Claude call — the answer is a small JSON object
+    /// that's only usable once complete.
+    func predictNextEdit(_ query: NextEditQuery, path: String, language: Language, apiKey: String) async -> NextEditResult {
+        guard !apiKey.isEmpty else { return .failed("Next edit suggestions need a Claude API key (Settings → AI).") }
+        let prompt = InlinePromptBuilder.nextEdit(query, path: path, language: language)
+        let body: [String: Any] = [
+            "model":         Self.claudeModel,
+            "max_tokens":    512,
+            "thinking":      ["type": "disabled"],
+            "output_config": ["effort": "low"],
+            "system":        prompt.system,
+            "messages":      [["role": "user", "content": prompt.user]],
+        ]
+        var req = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue(apiKey,               forHTTPHeaderField: "x-api-key")
+        req.setValue("2023-06-01",         forHTTPHeaderField: "anthropic-version")
+        req.timeoutInterval = 20
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: req)
+            let text = String(data: data, encoding: .utf8) ?? ""
+            if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+                let message = "Claude error \(http.statusCode): \(Self.errorMessage(in: text))"
+                if http.statusCode == 429 || http.statusCode == 529 {
+                    let seconds = http.value(forHTTPHeaderField: "retry-after").flatMap(Double.init) ?? 30
+                    return .rateLimited(until: Date().addingTimeInterval(seconds), message: message)
+                }
+                return .failed(message)
+            }
+            guard let json = Self.json(text),
+                  let content = json["content"] as? [[String: Any]],
+                  let answer = content.first(where: { $0["type"] as? String == "text" })?["text"] as? String
+            else { return .none }
+            return InlinePromptBuilder.parseNextEdit(answer).map(NextEditResult.candidate) ?? .none
+        } catch {
+            if Task.isCancelled { return .none }
+            if let urlError = error as? URLError, urlError.code == .cancelled { return .none }
+            return .failed("Claude unreachable: \(error.localizedDescription)")
+        }
+    }
+
     // MARK: - Ollama (local)
 
     private func runOllama(
