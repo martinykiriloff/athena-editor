@@ -46,7 +46,21 @@ struct LexicalRules: Sendable, Equatable {
             return LexicalRules(lineComment: u("//"), blockOpen: u("/*"), blockClose: u("*/"), quotes: [dq])
         case .css:
             return LexicalRules(blockOpen: u("/*"), blockClose: u("*/"), quotes: [dq, sq])
-        case .python, .html, .isml, .markdown, .image, .plaintext:
+        case .java, .c, .cpp:
+            return LexicalRules(lineComment: u("//"), blockOpen: u("/*"), blockClose: u("*/"),
+                                quotes: [dq, sq], charLiteralQuote: true)
+        case .kotlin:
+            return LexicalRules(lineComment: u("//"), blockOpen: u("/*"), blockClose: u("*/"),
+                                quotes: [dq, sq], tripleQuotes: true, charLiteralQuote: true)
+        case .php:
+            return LexicalRules(lineComment: u("//"), blockOpen: u("/*"), blockClose: u("*/"),
+                                quotes: [dq, sq])
+        case .graphql:
+            return LexicalRules(lineComment: u("#"), quotes: [dq])
+        // Indentation- or keyword-structured (or markup/config) languages:
+        // no bracket structure worth folding on, so fall back to indentation.
+        case .python, .html, .isml, .markdown, .image, .plaintext,
+             .yaml, .sql, .shell, .ruby, .vue, .svelte, .toml, .env, .dockerfile:
             return nil
         }
     }
