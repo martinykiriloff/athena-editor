@@ -435,6 +435,9 @@ final class AppState {
     var editorWordWrap:          Bool    = false
     var editorLineNumbers:       Bool    = true
     var editorRenderWhitespace:  Bool    = true
+    var editorIndentGuides:      Bool    = true
+    var editorBracketPairColorization: Bool = true
+    var editorStickyScroll:      Bool    = true
     var editorMinimapEnabled:    Bool    = true
     var editorCursorStyle:       String  = "line"
     var editorCursorBlink:       String  = "blink"
@@ -1114,6 +1117,9 @@ final class AppState {
         async let ln   = settingsService.value(for: "editorLineNumbers",       default: true)
         async let rws  = settingsService.value(for: "editorRenderWhitespace",  default: true)
         async let mm   = settingsService.value(for: "editorMinimapEnabled",    default: true)
+        async let ig   = settingsService.value(for: "editorIndentGuides",      default: true)
+        async let bpc  = settingsService.value(for: "editorBracketPairColorization", default: true)
+        async let sks  = settingsService.value(for: "editorStickyScroll",      default: true)
         async let cs   = settingsService.value(for: "editorCursorStyle",       default: "line")
         async let cb   = settingsService.value(for: "editorCursorBlink",       default: "blink")
         async let sbl  = settingsService.value(for: "editorScrollBeyondLastLine", default: true)
@@ -1137,6 +1143,9 @@ final class AppState {
         editorLineNumbers       = await ln
         editorRenderWhitespace  = await rws
         editorMinimapEnabled    = await mm
+        editorIndentGuides      = await ig
+        editorBracketPairColorization = await bpc
+        editorStickyScroll      = await sks
         editorCursorStyle       = await cs
         editorCursorBlink       = await cb
         editorScrollBeyondLastLine = await sbl
@@ -3477,6 +3486,20 @@ final class AppState {
             postEditorCommand(.copyLineDown)
         case .deleteLine:
             postEditorCommand(.deleteLine)
+        case .fold:
+            postEditorCommand(.fold)
+        case .unfold:
+            postEditorCommand(.unfold)
+        case .toggleFold:
+            postEditorCommand(.toggleFold)
+        case .foldAll:
+            postEditorCommand(.foldAll)
+        case .unfoldAll:
+            postEditorCommand(.unfoldAll)
+        case .foldLevel1, .foldLevel2, .foldLevel3, .foldLevel4, .foldLevel5, .foldLevel6, .foldLevel7:
+            postEditorCommand(.foldLevel(action.foldLevel ?? 1))
+        case .goToMatchingBracket:
+            postEditorCommand(.goToMatchingBracket)
         case .toggleBreakpoint:
             toggleBreakpointAtCursor()
         case .removeAllBreakpoints:

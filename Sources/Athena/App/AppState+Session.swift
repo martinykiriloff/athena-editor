@@ -20,6 +20,7 @@ extension AppState {
                 cursorColumn: tab.cursorColumn
             )
             s.isMarkdownPreview = tab.isMarkdownPreview
+            s.foldedLines = tab.foldedLines.isEmpty ? nil : tab.foldedLines
             if tab.isDirty {
                 s.unsavedContent = tab.content
                 s.externallyModified = tab.externallyModified
@@ -196,6 +197,7 @@ extension AppState {
         tab.cursorLine = st.cursorLine
         tab.cursorColumn = st.cursorColumn
         tab.isMarkdownPreview = st.isMarkdownPreview
+        tab.foldedLines = st.foldedLines ?? []
         return tab
     }
 }

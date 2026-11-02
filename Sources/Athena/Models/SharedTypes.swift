@@ -653,6 +653,22 @@ enum EditorCommand: Sendable {
     case copyLineUp
     case copyLineDown
     case deleteLine
+    case fold
+    case unfold
+    case toggleFold
+    case foldAll
+    case unfoldAll
+    case foldLevel(Int)
+    case goToMatchingBracket
+}
+
+// MARK: - Code folding
+
+/// A foldable span of lines, 0-based and inclusive. Folding hides lines
+/// `startLine + 1 ... endLine` and leaves `startLine` (the header) visible.
+struct FoldRange: Sendable, Equatable, Hashable {
+    var startLine: Int
+    var endLine: Int
 }
 
 // MARK: - Workspace & Files
@@ -685,6 +701,8 @@ struct TabModel: Identifiable, Sendable {
     var language: Language = .plaintext
     var cursorLine: Int = 1
     var cursorColumn: Int = 1
+    /// 0-based header lines of the regions folded in the editor (code folding).
+    var foldedLines: [Int] = []
     /// Set when the file backing this tab changed on disk while the tab had
     /// unsaved edits (so the silent-reload path in `AppState` couldn't just
     /// overwrite it). Drives the "file changed on disk" banner in
@@ -905,6 +923,8 @@ struct SessionTabState: Codable, Sendable, Equatable {
     /// The tab was already flagged "changed on disk" when the snapshot was taken.
     var externallyModified: Bool = false
     var isMarkdownPreview: Bool = false
+    /// 0-based header lines of the folded regions; nil in older snapshots.
+    var foldedLines: [Int]? = nil
 }
 
 /// Everything hot exit restores on launch: workspace, both editor groups,

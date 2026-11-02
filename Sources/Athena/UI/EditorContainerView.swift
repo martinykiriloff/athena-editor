@@ -316,6 +316,17 @@ struct CodeEditorView: View {
                 language: tab.language,
                 theme: appState.currentTheme,
                 highlightingEnabled: !isLargeFile,
+                indentGuides:     appState.editorIndentGuides,
+                bracketPairColorization: appState.editorBracketPairColorization,
+                stickyScroll:     appState.editorStickyScroll,
+                foldedLines:      tab.foldedLines,
+                onFoldedLinesChange: { lines in
+                    appState.setFoldedLines(tabId: tab.id, in: side, lines: lines)
+                },
+                onRequestFoldingRanges: {
+                    guard let fileURL = tab.fileURL else { return nil }
+                    return await appState.lspManager.foldingRanges(fileURL: fileURL)
+                },
                 fontSize:         appState.editorFontSize,
                 fontFamily:       appState.editorFontFamily,
                 fontLigatures:    appState.editorFontLigatures,

@@ -241,6 +241,30 @@ struct SettingsView: View {
                     .help("Show · for spaces and → for tabs")
             }
 
+            SettingRow("Indent Guides") {
+                Toggle("Indent Guides", isOn: state.editorIndentGuides)
+                    .onChange(of: appState.editorIndentGuides) { _, v in
+                        appState.persistSetting(v, for: "editorIndentGuides")
+                    }
+                    .help("Vertical lines at each indentation level. Off in large-file mode.")
+            }
+
+            SettingRow("Bracket Pair Colorization") {
+                Toggle("Bracket Pair Colorization", isOn: state.editorBracketPairColorization)
+                    .onChange(of: appState.editorBracketPairColorization) { _, v in
+                        appState.persistSetting(v, for: "editorBracketPairColorization")
+                    }
+                    .help("Colour matching brackets by nesting depth. Off in large-file mode.")
+            }
+
+            SettingRow("Sticky Scroll") {
+                Toggle("Sticky Scroll", isOn: state.editorStickyScroll)
+                    .onChange(of: appState.editorStickyScroll) { _, v in
+                        appState.persistSetting(v, for: "editorStickyScroll")
+                    }
+                    .help("Pin the lines of the enclosing scopes to the top of the editor. Off in large-file mode.")
+            }
+
             SettingRow("Scroll Beyond Last Line") {
                 Toggle("Scroll Beyond Last Line", isOn: state.editorScrollBeyondLastLine)
                     .onChange(of: appState.editorScrollBeyondLastLine) { _, v in
@@ -733,7 +757,7 @@ struct SettingsIndexEntry {
 enum SettingsIndex {
     static let font = SettingsIndexEntry(title: "Font", labels: ["Font Family", "Font Size", "Font Ligatures", "Line Height"])
     static let indentation = SettingsIndexEntry(title: "Indentation", labels: ["Tab Size", "Insert Spaces", "Detect Indentation", "Auto Indent"])
-    static let display = SettingsIndexEntry(title: "Display", labels: ["Word Wrap", "Line Numbers", "Render Whitespace", "Scroll Beyond Last Line"])
+    static let display = SettingsIndexEntry(title: "Display", labels: ["Word Wrap", "Line Numbers", "Render Whitespace", "Indent Guides", "Bracket Pair Colorization", "Sticky Scroll", "Scroll Beyond Last Line"])
     static let cursor = SettingsIndexEntry(title: "Cursor", labels: ["Cursor Style", "Cursor Blinking"])
     static let files = SettingsIndexEntry(title: "Files", labels: ["Format on Save", "Trim Trailing Whitespace", "Insert Final Newline", "Use .editorconfig"])
     static let theme = SettingsIndexEntry(title: "Theme", labels: ["Color Theme", "Import VS Code Theme"])

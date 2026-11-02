@@ -28,6 +28,11 @@ final class GutterView: NSRulerView {
     /// — kept in sync with the editor's theme by `EditorView`.
     var theme: EditorTheme = .athenaDracula
     var onToggleBreakpoint: ((Int) -> Void)?
+    /// 1-based lines that start a foldable region, mapped to whether the
+    /// region is currently collapsed. Drives the fold arrows.
+    var foldMarkers: [Int: Bool] = [:] { didSet { if foldMarkers != oldValue { needsDisplay = true } } }
+    /// Fired when a fold arrow is clicked, with the 1-based header line.
+    var onToggleFold: ((Int) -> Void)?
 
     /// Conflict regions found in the current buffer (plan.md item 23, "D5"),
     /// kept in sync by `EditorView.Coordinator.updateConflictHighlights`.
@@ -43,12 +48,12 @@ final class GutterView: NSRulerView {
     private var pendingConflictRegion: ConflictRegion?
 
     // Visual constants
-    private let baseGutterWidth: CGFloat = 52
+    private let baseGutterWidth: CGFloat = 64
     private let baseFontSize:    CGFloat = 11
     private let dotRadius:      CGFloat = 5
     private let changeBarWidth: CGFloat = 3    // git change bar — absolute left edge
     private let diagDotRadius:  CGFloat = 2.5  // small, left-edge — clear of the change bar
-    private let numberRightPad: CGFloat = 8   // right margin for the line numbers
+    private let numberRightPad: CGFloat = 20  // right margin for the line numbers
     /// Centre of the breakpoint column, to the LEFT of the line numbers —
     /// where every other editor puts it, and clear of the numbers so the
     /// dot never sits on top of a digit.
@@ -128,10 +133,9 @@ final class GutterView: NSRulerView {
 
         let visCharStart  = lm.characterRange(forGlyphRange: NSRange(location: visRange.location, length: 0),
                                               actualGlyphRange: nil).location
-        let startLine     = lineNumber(in: str, before: visCharStart)
+        var lineNum       = lineNumber(in: str, before: visCharStart)
 
         var glyphIndex = visRange.location
-        var lineNum    = startLine
 
         while glyphIndex < NSMaxRange(visRange) {
             var fragRange = NSRange()
@@ -139,11 +143,38 @@ final class GutterView: NSRulerView {
             // Convert from text-container coords to ruler coords.
             let rulerY = fragRect.minY + originY - visibleRect.minY
 
-            drawLine(lineNum, rulerY: rulerY, height: fragRect.height)
+            // A folded header's fragment spans several lines, and a wrapped
+            // line spans several fragments: count real newlines, and number
+            // only the fragment that starts a line.
+            let chars = lm.characterRange(forGlyphRange: fragRange, actualGlyphRange: nil)
+            let startsLine = chars.location == 0 || str.character(at: chars.location - 1) == 0x0A
+            if startsLine {
+                drawLine(lineNum, rulerY: rulerY, height: fragRect.height)
+                if let collapsed = foldMarkers[lineNum] { drawFoldArrow(collapsed: collapsed, rulerY: rulerY, height: fragRect.height) }
+            }
+            var k = chars.location
+            let end = min(NSMaxRange(chars), str.length)
+            while k < end { if str.character(at: k) == 0x0A { lineNum += 1 }; k += 1 }
 
-            glyphIndex = NSMaxRange(fragRange)
-            lineNum   += 1
+            glyphIndex = max(NSMaxRange(fragRange), glyphIndex + 1)
         }
+    }
+
+    private func drawFoldArrow(collapsed: Bool, rulerY: CGFloat, height: CGFloat) {
+        let cx = gutterWidth - 10, cy = rulerY + height / 2, s: CGFloat = 3
+        let path = NSBezierPath()
+        if collapsed {
+            path.move(to: NSPoint(x: cx - s / 2, y: cy - s)); path.line(to: NSPoint(x: cx + s / 2 + 1, y: cy))
+            path.line(to: NSPoint(x: cx - s / 2, y: cy + s))
+        } else {
+            path.move(to: NSPoint(x: cx - s, y: cy - s / 2)); path.line(to: NSPoint(x: cx, y: cy + s / 2 + 1))
+            path.line(to: NSPoint(x: cx + s, y: cy - s / 2))
+        }
+        path.lineWidth = 1.4
+        path.lineCapStyle = .round
+        path.lineJoinStyle = .round
+        theme.comment.withAlphaComponent(collapsed ? 1 : 0.55).setStroke()
+        path.stroke()
     }
 
     private func drawLine(_ lineNum: Int, rulerY: CGFloat, height: CGFloat) {
@@ -285,6 +316,12 @@ final class GutterView: NSRulerView {
         // pops the resolution menu instead of toggling a breakpoint.
         if let region = conflictRegions.first(where: { ($0.startLine...$0.endLine).contains(lineNum) }) {
             showConflictMenu(for: region, at: local)
+            textView.window?.makeFirstResponder(textView)
+            return
+        }
+
+        if local.x >= gutterWidth - 20, foldMarkers[lineNum] != nil {
+            onToggleFold?(lineNum)
             textView.window?.makeFirstResponder(textView)
             return
         }

@@ -51,6 +51,19 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
     case copyLineUp          = "editor.action.copyLinesUpAction"
     case copyLineDown        = "editor.action.copyLinesDownAction"
     case deleteLine          = "editor.action.deleteLines"
+    case fold                = "editor.fold"
+    case unfold              = "editor.unfold"
+    case toggleFold          = "editor.toggleFold"
+    case foldAll             = "editor.foldAll"
+    case unfoldAll           = "editor.unfoldAll"
+    case foldLevel1          = "editor.foldLevel1"
+    case foldLevel2          = "editor.foldLevel2"
+    case foldLevel3          = "editor.foldLevel3"
+    case foldLevel4          = "editor.foldLevel4"
+    case foldLevel5          = "editor.foldLevel5"
+    case foldLevel6          = "editor.foldLevel6"
+    case foldLevel7          = "editor.foldLevel7"
+    case goToMatchingBracket = "editor.action.jumpToBracket"
     // Debug
     case toggleBreakpoint       = "editor.debug.action.toggleBreakpoint"
     case removeAllBreakpoints   = "workbench.debug.viewlet.action.removeAllBreakpoints"
@@ -117,9 +130,31 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
         case .copyLineUp:        return "Copy Line Up"
         case .copyLineDown:      return "Copy Line Down"
         case .deleteLine:        return "Delete Line"
+        case .fold:              return "Fold"
+        case .unfold:            return "Unfold"
+        case .toggleFold:        return "Toggle Fold"
+        case .foldAll:           return "Fold All"
+        case .unfoldAll:         return "Unfold All"
+        case .foldLevel1, .foldLevel2, .foldLevel3, .foldLevel4, .foldLevel5, .foldLevel6, .foldLevel7:
+            return "Fold Level \(foldLevel ?? 1)"
+        case .goToMatchingBracket: return "Go to Bracket"
         case .zoomIn:            return "Zoom In"
         case .zoomOut:           return "Zoom Out"
         case .resetZoom:         return "Reset Zoom"
+        }
+    }
+
+    /// The level for `foldLevelN` actions.
+    var foldLevel: Int? {
+        switch self {
+        case .foldLevel1: return 1
+        case .foldLevel2: return 2
+        case .foldLevel3: return 3
+        case .foldLevel4: return 4
+        case .foldLevel5: return 5
+        case .foldLevel6: return 6
+        case .foldLevel7: return 7
+        default: return nil
         }
     }
 
@@ -144,7 +179,9 @@ enum KeyAction: String, Codable, CaseIterable, Sendable {
             return "SFCC"
         case .findInFile, .findAndReplace, .toggleComment, .indentLine, .outdentLine,
              .selectNextOccurrence, .findReferences, .renameSymbol, .quickFix,
-             .moveLineUp, .moveLineDown, .copyLineUp, .copyLineDown, .deleteLine:
+             .moveLineUp, .moveLineDown, .copyLineUp, .copyLineDown, .deleteLine,
+             .fold, .unfold, .toggleFold, .foldAll, .unfoldAll, .goToMatchingBracket,
+             .foldLevel1, .foldLevel2, .foldLevel3, .foldLevel4, .foldLevel5, .foldLevel6, .foldLevel7:
             return "Editor"
         }
     }
@@ -330,6 +367,22 @@ struct KeyBinding: Identifiable, Codable, Sendable {
         KeyBinding(action: .copyLineUp,         combo: KeyCombo(key: "up",   shift: true, option: true)),
         KeyBinding(action: .copyLineDown,       combo: KeyCombo(key: "down", shift: true, option: true)),
         KeyBinding(action: .deleteLine,         combo: KeyCombo(key: "k",    command: true, shift: true)),
+        // Folding — VS Code's ⌥⌘[ / ⌥⌘]. Fold All, Unfold All and Fold Level N are
+        // chords in VS Code (⌘K ⌘0 / ⌘J / ⌘1…7); chords aren't supported, so they
+        // are unbound here and reachable from the command palette.
+        KeyBinding(action: .fold,               combo: KeyCombo(key: "[",    command: true, option: true)),
+        KeyBinding(action: .unfold,             combo: KeyCombo(key: "]",    command: true, option: true)),
+        KeyBinding(action: .toggleFold,         combo: nil),
+        KeyBinding(action: .foldAll,            combo: nil),
+        KeyBinding(action: .unfoldAll,          combo: nil),
+        KeyBinding(action: .foldLevel1,         combo: nil),
+        KeyBinding(action: .foldLevel2,         combo: nil),
+        KeyBinding(action: .foldLevel3,         combo: nil),
+        KeyBinding(action: .foldLevel4,         combo: nil),
+        KeyBinding(action: .foldLevel5,         combo: nil),
+        KeyBinding(action: .foldLevel6,         combo: nil),
+        KeyBinding(action: .foldLevel7,         combo: nil),
+        KeyBinding(action: .goToMatchingBracket, combo: KeyCombo(key: "\\", command: true, shift: true)),
         // Debug — VS Code's own function keys. Breakpoints had no binding,
         // no menu item and no palette entry at all, so the only way to set
         // one was to know the gutter was clickable.
