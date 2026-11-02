@@ -91,6 +91,14 @@ final class GutterView: NSRulerView {
 
     override var requiredThickness: CGFloat { gutterWidth }
 
+    // MARK: - Accessibility
+
+    // The gutter is drawn, not made of elements. Expose it as one labelled
+    // group; the current line is announced by the text view and the status bar.
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .group }
+    override func accessibilityLabel() -> String? { "Line numbers, breakpoints and change markers" }
+
     // MARK: - Observers
 
     func installObservers(textView: NSTextView) {

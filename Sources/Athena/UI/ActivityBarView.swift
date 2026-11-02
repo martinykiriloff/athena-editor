@@ -99,5 +99,8 @@ private struct ActivityBarButton: View {
         }
         .onHover { isHovered = $0 }
         .help(help)
+        .accessibilityLabel(help)
+        .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
+        .accessibilityHint(isActive ? "Selected. Activate to collapse" : "Activate to show")
     }
 }

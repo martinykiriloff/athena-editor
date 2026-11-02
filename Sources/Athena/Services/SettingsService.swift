@@ -47,6 +47,24 @@ actor SettingsService {
         try data.write(to: fileURL(for: key), options: .atomic)
     }
 
+    // MARK: - Raw access (profiles)
+
+    /// Names (without `.json`) of every stored settings file.
+    func allKeys() -> [String] {
+        let files = (try? FileManager.default.contentsOfDirectory(at: settingsDirectory, includingPropertiesForKeys: nil)) ?? []
+        return files.filter { $0.pathExtension == "json" }
+            .map { $0.deletingPathExtension().lastPathComponent }
+            .sorted()
+    }
+
+    func rawData(for key: String) -> Data? {
+        try? Data(contentsOf: fileURL(for: key))
+    }
+
+    func setRawData(_ data: Data, for key: String) throws {
+        try data.write(to: fileURL(for: key), options: .atomic)
+    }
+
     // MARK: - Reset
 
     func reset(key: String) async {

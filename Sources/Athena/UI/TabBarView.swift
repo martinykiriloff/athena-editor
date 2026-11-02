@@ -42,6 +42,7 @@ struct TabBarView: View {
             }
             .buttonStyle(.plain)
             .help("New Tab")
+            .accessibilityLabel("New Tab")
         }
         .frame(height: tabBarHeight)
         .background(Color(nsColor: .controlBackgroundColor))
@@ -101,6 +102,7 @@ private struct TabItemView: View {
                             )
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Close \(tab.title)")
                 }
             }
             .frame(width: appState.sf(14), height: appState.sf(14))
@@ -119,6 +121,12 @@ private struct TabItemView: View {
         .contentShape(Rectangle())
         .onHover { isHovering = $0 }
         .onTapGesture { appState.activateTab(tab.id) }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(tab.title + (tab.isDirty ? ", unsaved changes" : ""))
+        .accessibilityValue(isActive ? "Selected" : "")
+        .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
+        .accessibilityHint("Activate to switch to this tab")
+        .accessibilityAction { appState.activateTab(tab.id) }
         .simultaneousGesture(TapGesture(count: 2).onEnded { appState.pinTab(tab.id) })
         .overlay { MiddleClickDetector { appState.closeTab(tab.id) } }
         .contextMenu {

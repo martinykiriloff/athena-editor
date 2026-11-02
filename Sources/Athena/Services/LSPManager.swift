@@ -39,6 +39,10 @@ actor LSPManager {
     /// an unstructured `Task` per opened file, so restoring several same-
     /// language tabs on launch calls it concurrently — see `startServer`.
     private var startingLanguages: Set<Language> = []
+    /// False until the user trusts the workspace; a server binary located inside the workspace is refused meanwhile.
+    private var workspaceTrusted = true
+
+    func setWorkspaceTrusted(_ trusted: Bool) { workspaceTrusted = trusted }
     /// Per-document `textDocument/didChange` version counter, keyed by file
     /// URL. The LSP spec requires a monotonically increasing version per
     /// document; `didOpen` seeds it at 1 and `didChange` increments it.
@@ -88,6 +92,7 @@ actor LSPManager {
         defer { startingLanguages.remove(language) }
 
         guard let launch = await launchCommand(for: language) else { return }
+        if !workspaceTrusted, TrustPolicy.isInsideWorkspace(executablePath: launch.executable, workspace: workspaceURL) { return }
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: launch.executable)

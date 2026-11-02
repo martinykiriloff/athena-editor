@@ -559,7 +559,7 @@ struct EditorView: NSViewRepresentable {
         textView.backgroundColor = t.background
         textView.textColor       = t.foreground
         textView.insertionPointColor = t.cursor
-        textView.selectedTextAttributes = [.backgroundColor: t.selection]
+        textView.selectedTextAttributes = [.backgroundColor: t.selectionColor(increaseContrast: AccessibilityPrefs.increaseContrast)]
         if let lm = textView.layoutManager as? AthenaLayoutManager {
             lm.dotColor       = t.whitespace
             lm.showWhitespace = renderWhitespace

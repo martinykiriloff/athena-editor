@@ -159,7 +159,38 @@ extension EditorTheme {
         diffAdded: 0x4E8A5A, diffRemoved: 0xB4637A, diffModified: 0x2E6B80
     )
 
-    static let all: [EditorTheme] = [.athenaDark, .athenaDracula, .athenaLight]
+    // High-contrast pair: pure black/white grounds, every token at WCAG AAA
+    // (>= 7:1) against the background, and a selection that stays clearly
+    // visible against the text.
+    static let athenaHighContrastDark = EditorTheme(
+        id: "athena-hc-dark", name: "Athena High Contrast Dark",
+        bg: 0x000000, fg: 0xFFFFFF, cursor: 0xFFFFFF, selection: 0x1B4A9E, line: 0x1A1A1A,
+        keyword: 0x6CB6FF, string: 0xF2A98A, number: 0xB5CEA8,
+        comment: 0x9FD08F, type: 0x4EE0C4, function: 0xFFD866, annotation: 0xFF9DA4,
+        whitespace: 0x6E6E6E,
+        diagnosticError: 0xFF6B6B, diagnosticWarning: 0xFFD866, diagnosticInfo: 0x6CB6FF,
+        diffAdded: 0x7EE787, diffRemoved: 0xFF7B72, diffModified: 0x6CB6FF
+    )
+
+    static let athenaHighContrastLight = EditorTheme(
+        id: "athena-hc-light", name: "Athena High Contrast Light",
+        bg: 0xFFFFFF, fg: 0x000000, cursor: 0x000000, selection: 0x9CC3FF, line: 0xEDEDED,
+        keyword: 0x0000B8, string: 0x8A0000, number: 0x005A00,
+        comment: 0x4A4A4A, type: 0x004B6B, function: 0x5B2C83, annotation: 0x9B1C1C,
+        whitespace: 0x8A8A8A,
+        diagnosticError: 0xB00000, diagnosticWarning: 0x7A4B00, diagnosticInfo: 0x0000B8,
+        diffAdded: 0x006400, diffRemoved: 0xB00000, diffModified: 0x0000B8
+    )
+
+    static let all: [EditorTheme] = [.athenaDark, .athenaDracula, .athenaLight,
+                                     .athenaHighContrastDark, .athenaHighContrastLight]
+
+    /// Selection fill, pushed toward the foreground when the system's
+    /// Increase Contrast setting is on.
+    func selectionColor(increaseContrast: Bool) -> NSColor {
+        guard increaseContrast else { return selection }
+        return selection.blended(withFraction: 0.35, of: foreground) ?? selection
+    }
 
     /// Resolves a built-in theme by id. Ids persisted by earlier versions
     /// ("darcula", "one-dark", "soft-light", "github-light") map onto their
@@ -169,6 +200,8 @@ extension EditorTheme {
         case "athena-dark", "one-dark":                     return .athenaDark
         case "athena-dracula", "darcula":                   return .athenaDracula
         case "athena-light", "soft-light", "github-light":  return .athenaLight
+        case "athena-hc-dark":                              return .athenaHighContrastDark
+        case "athena-hc-light":                             return .athenaHighContrastLight
         default:                                            return .athenaDark
         }
     }

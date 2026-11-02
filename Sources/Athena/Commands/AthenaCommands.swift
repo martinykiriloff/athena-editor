@@ -78,6 +78,10 @@ struct AthenaCommands: Commands {
             Button("Check for Updates…") {
                 NotificationCenter.default.post(name: .athenaCheckForUpdates, object: nil)
             }
+            Button("Show Logs") { performAction(.showLogs) }
+            Button("Export Settings Profile…") { performAction(.exportSettingsProfile) }
+            Button("Import Settings Profile…") { performAction(.importSettingsProfile) }
+            Button("Trust This Workspace…") { performAction(.trustWorkspace) }
             Divider()
         }
     }

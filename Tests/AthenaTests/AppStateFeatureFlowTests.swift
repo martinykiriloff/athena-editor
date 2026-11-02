@@ -48,7 +48,7 @@ struct AppStateSFCCLaunchTests {
             .write(to: dir.appendingPathComponent("dw.json"), atomically: true, encoding: .utf8)
 
         let state = AppState()
-        state.workspace = WorkspaceModel(rootURL: dir)
+        state.workspace = WorkspaceModel(rootURL: dir); state.trust.state = .trusted
         state.loadLaunchConfigs()
         #expect(state.launchConfigs.contains { $0.isSFCC })
         #expect(state.selectedLaunchConfigId != nil)
@@ -63,7 +63,7 @@ struct AppStateSFCCLaunchTests {
         try #"{"hostname":"other"}"#.write(to: dir.appendingPathComponent("dw.json"), atomically: true, encoding: .utf8)
 
         let state = AppState()
-        state.workspace = WorkspaceModel(rootURL: dir)
+        state.workspace = WorkspaceModel(rootURL: dir); state.trust.state = .trusted
         state.loadLaunchConfigs()
         let sfcc = state.launchConfigs.filter(\.isSFCC)
         #expect(sfcc.count == 1)
@@ -81,7 +81,7 @@ struct AppStateSFCCLaunchTests {
             .write(to: dir.appendingPathComponent("dw.json"), atomically: true, encoding: .utf8)
 
         let state = AppState()
-        state.workspace = WorkspaceModel(rootURL: dir)
+        state.workspace = WorkspaceModel(rootURL: dir); state.trust.state = .trusted
         state.loadLaunchConfigs()
         state.selectedLaunchConfigId = state.launchConfigs.first(where: \.isSFCC)?.id
         await state.startDebugging()
@@ -93,7 +93,7 @@ struct AppStateSFCCLaunchTests {
         let dir = try makeTempDir("athena-sfcc-nocreds")
         defer { try? FileManager.default.removeItem(at: dir) }
         let state = AppState()
-        state.workspace = WorkspaceModel(rootURL: dir)
+        state.workspace = WorkspaceModel(rootURL: dir); state.trust.state = .trusted
         state.launchConfigs = [LaunchConfig(type: "prophet", request: "launch", name: "x", program: "")]
         state.selectedLaunchConfigId = state.launchConfigs[0].id
         await state.startDebugging()
@@ -199,7 +199,7 @@ struct AppStateGitFlowTests {
         let dir = try makeRepo()
         defer { try? FileManager.default.removeItem(at: dir) }
         let state = AppState()
-        state.workspace = WorkspaceModel(rootURL: dir)
+        state.workspace = WorkspaceModel(rootURL: dir); state.trust.state = .trusted
 
         await state.refreshGitStatus()
         #expect(state.gitStatus.branch == "main")
@@ -275,7 +275,7 @@ struct AppStateGitFlowTests {
         let dir = try makeRepo()
         defer { try? FileManager.default.removeItem(at: dir) }
         let state = AppState()
-        state.workspace = WorkspaceModel(rootURL: dir)
+        state.workspace = WorkspaceModel(rootURL: dir); state.trust.state = .trusted
         for n in 1...2 {
             try "v\(n)\n".write(to: dir.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
             state.commitMessage = "stash \(n)"
@@ -297,7 +297,7 @@ struct AppStateGitFlowTests {
         let dir = try makeRepo()
         defer { try? FileManager.default.removeItem(at: dir) }
         let state = AppState()
-        state.workspace = WorkspaceModel(rootURL: dir)
+        state.workspace = WorkspaceModel(rootURL: dir); state.trust.state = .trusted
         try "new\n".write(to: dir.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
         await state.refreshGitStatus()
         state.commitMessage = "keep me"
@@ -311,13 +311,13 @@ struct AppStateGitFlowTests {
         let dir = try makeRepo()
         defer { try? FileManager.default.removeItem(at: dir) }
         let state = AppState()
-        state.workspace = WorkspaceModel(rootURL: dir)
+        state.workspace = WorkspaceModel(rootURL: dir); state.trust.state = .trusted
         await state.showFileHistory(path: "a.txt")
         state.commitMessage = "typed"
         // A non-repository folder: status fails, nothing from the old repo may survive.
         let plain = try makeTempDir("athena-plain")
         defer { try? FileManager.default.removeItem(at: plain) }
-        state.workspace = WorkspaceModel(rootURL: plain)
+        state.workspace = WorkspaceModel(rootURL: plain); state.trust.state = .trusted
         await state.refreshGitStatus()
         #expect(state.gitStashes.isEmpty)
         #expect(state.gitStatus.branch.isEmpty)
@@ -327,7 +327,7 @@ struct AppStateGitFlowTests {
         let dir = try makeRepo()
         defer { try? FileManager.default.removeItem(at: dir) }
         let state = AppState()
-        state.workspace = WorkspaceModel(rootURL: dir)
+        state.workspace = WorkspaceModel(rootURL: dir); state.trust.state = .trusted
         await state.refreshGitStatus()
         // Nothing staged: git refuses; the message must survive.
         state.commitMessage = "nothing to commit"
@@ -364,7 +364,7 @@ struct AppStateCartridgeDeployTests {
         defer { try? FileManager.default.removeItem(at: root) }
 
         let state = AppState(sfccService: SFCCService(transport: { _ in (Data(), 521) }))
-        state.workspace = WorkspaceModel(rootURL: root)
+        state.workspace = WorkspaceModel(rootURL: root); state.trust.state = .trusted
         state.sfccConnections = [connection()]
 
         await state.uploadAllCartridges()
@@ -394,7 +394,7 @@ struct AppStateCartridgeDeployTests {
         defer { try? FileManager.default.removeItem(at: root) }
 
         let state = AppState(sfccService: SFCCService(transport: { _ in (Data(), 201) }))
-        state.workspace = WorkspaceModel(rootURL: root)
+        state.workspace = WorkspaceModel(rootURL: root); state.trust.state = .trusted
         state.sfccConnections = [connection()]
 
         await state.uploadAllCartridges()
@@ -438,7 +438,7 @@ struct DebugReportingTests {
         defer { try? FileManager.default.removeItem(at: dir) }
 
         let state = AppState()
-        state.workspace = WorkspaceModel(rootURL: dir)
+        state.workspace = WorkspaceModel(rootURL: dir); state.trust.state = .trusted
         // Attach to a port with nothing listening: fails after the CDP probe.
         state.launchConfigs = [LaunchConfig(type: "node-cdp", request: "attach",
                                             name: "Attach", program: "", debugPort: 9351)]

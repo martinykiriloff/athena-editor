@@ -51,7 +51,7 @@ struct SearchPanelView: View {
     private var searchBar: some View {
         HStack(spacing: appState.sf(4)) {
             Button {
-                withAnimation(.easeInOut(duration: 0.15)) { showReplace.toggle() }
+                withAnimation(AccessibilityPrefs.animation(.easeInOut(duration: 0.15))) { showReplace.toggle() }
             } label: {
                 Image(systemName: showReplace ? "chevron.down" : "chevron.right")
                     .font(.system(size: appState.sf(10), weight: .semibold))
@@ -76,7 +76,7 @@ struct SearchPanelView: View {
 
             // Filter toggle
             Button {
-                withAnimation(.easeInOut(duration: 0.15)) { showFilters.toggle() }
+                withAnimation(AccessibilityPrefs.animation(.easeInOut(duration: 0.15))) { showFilters.toggle() }
             } label: {
                 Image(systemName: showFilters
                       ? "line.3.horizontal.decrease.circle.fill"

@@ -233,7 +233,7 @@ private struct RecordingChip: View {
                     .strokeBorder(Color.accentColor.opacity(0.5), style: StrokeStyle(lineWidth: 1, dash: [4]))
             )
             .opacity(visible ? 1 : 0.4)
-            .animation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true), value: visible)
+            .animation(AccessibilityPrefs.animation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)), value: visible)
             .onAppear { visible = false }
     }
 }
