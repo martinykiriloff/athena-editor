@@ -3477,6 +3477,22 @@ final class AppState {
             postEditorCommand(.copyLineDown)
         case .deleteLine:
             postEditorCommand(.deleteLine)
+        case .sortLinesAscending:   postEditorCommand(.transformLines(.sortAscending))
+        case .sortLinesDescending:  postEditorCommand(.transformLines(.sortDescending))
+        case .reverseLines:         postEditorCommand(.transformLines(.reverse))
+        case .removeDuplicateLines: postEditorCommand(.transformLines(.removeDuplicates))
+        case .trimTrailingWhitespace: postEditorCommand(.transformLines(.trimTrailingWhitespace))
+        case .joinLines:            postEditorCommand(.transformLines(.join))
+        case .transformToUppercase: postEditorCommand(.transformLines(.uppercase))
+        case .transformToLowercase: postEditorCommand(.transformLines(.lowercase))
+        case .transformToTitlecase: postEditorCommand(.transformLines(.titlecase))
+        case .insertCursorAbove:    postEditorCommand(.insertCursorAbove)
+        case .insertCursorBelow:    postEditorCommand(.insertCursorBelow)
+        case .columnSelectUp:       postEditorCommand(.columnSelect(.up))
+        case .columnSelectDown:     postEditorCommand(.columnSelect(.down))
+        case .columnSelectLeft:     postEditorCommand(.columnSelect(.left))
+        case .columnSelectRight:    postEditorCommand(.columnSelect(.right))
+        case .expandEmmet:          postEditorCommand(.expandEmmet)
         case .toggleBreakpoint:
             toggleBreakpointAtCursor()
         case .removeAllBreakpoints:

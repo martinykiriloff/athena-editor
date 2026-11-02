@@ -51,6 +51,10 @@ final class AthenaTextView: NSTextView {
             super.mouseDown(with: event)
             return
         }
+        if event.modifierFlags.contains(.option), event.modifierFlags.contains(.shift) {
+            trackColumnDrag(from: event)
+            return
+        }
         if event.modifierFlags.contains(.option) {
             let point   = convert(event.locationInWindow, from: nil)
             let charIdx = characterIndex(for: point)
@@ -61,6 +65,22 @@ final class AthenaTextView: NSTextView {
             return
         }
         super.mouseDown(with: event)
+    }
+
+    /// Called with (anchor, head) character indices while ⌥⇧-dragging a box.
+    var onColumnDrag: ((Int, Int) -> Void)?
+
+    /// Runs the drag to completion (mouse-up) inside mouseDown, like AppKit's
+    /// own selection tracking.
+    private func trackColumnDrag(from event: NSEvent) {
+        let anchor = characterIndex(for: convert(event.locationInWindow, from: nil))
+        guard anchor != NSNotFound else { return }
+        onColumnDrag?(anchor, anchor)
+        while let next = window?.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
+            let idx = characterIndex(for: convert(next.locationInWindow, from: nil))
+            if idx != NSNotFound { onColumnDrag?(anchor, idx) }
+            if next.type == .leftMouseUp { break }
+        }
     }
 
     override func keyDown(with event: NSEvent) {

@@ -637,7 +637,7 @@ struct ClaudeAttachment: Identifiable, Equatable, Sendable {
 
 /// Editor-level actions dispatched from the keybinding system to the active
 /// text view (which can't be reached directly from AppState).
-enum EditorCommand: Sendable {
+enum EditorCommand: Sendable, Equatable {
     case find
     case findAndReplace
     case goToLine
@@ -653,7 +653,22 @@ enum EditorCommand: Sendable {
     case copyLineUp
     case copyLineDown
     case deleteLine
+    case transformLines(LineTransform)
+    case insertCursorAbove
+    case insertCursorBelow
+    case columnSelect(ColumnSelectDirection)
+    case expandEmmet
 }
+
+/// Line/selection text transforms dispatched as `EditorCommand.transformLines`.
+enum LineTransform: Sendable, Equatable {
+    case sortAscending, sortDescending, reverse, removeDuplicates
+    case trimTrailingWhitespace, join
+    case uppercase, lowercase, titlecase
+}
+
+/// Keyboard box-selection step (⌥⇧⌘+arrows).
+enum ColumnSelectDirection: Sendable, Equatable { case up, down, left, right }
 
 // MARK: - Workspace & Files
 
