@@ -1,10 +1,12 @@
 name: CI
 
+# Manual only (Actions → CI → Run workflow). Builds run for releases, via
+# release.yml on `v*` tags — not on every push. The test suite also needs a
+# logged-in desktop session (windows, FSEvents) that hosted runners lack:
+# on push it never finished, hanging until the job timeout. Run the tests
+# locally with `make test` before tagging.
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  workflow_dispatch:
 
 # A newer push to the same branch supersedes a queued or running check.
 concurrency:
