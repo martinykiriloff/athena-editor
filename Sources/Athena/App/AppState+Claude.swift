@@ -95,6 +95,7 @@ extension AppState {
         claudeSessionTokens = 0
         claudeIsStreaming = false
         claudeStatus = ""
+        claudeIsLoadingHistory = false
     }
 
     /// Switches the active Claude account. Each account is a separate CLI
@@ -136,11 +137,45 @@ extension AppState {
         )
     }
 
-    /// Reopens a past conversation. The CLI replays its own history, so the
-    /// panel starts from a note rather than a reconstructed transcript.
+    /// Reopens a past conversation: the agent resumes it by id, and the
+    /// panel shows its earlier turns read from the CLI's transcript — in
+    /// the streaming protocol `--resume` restores the model's context but
+    /// sends none of the old messages back.
     func resumeClaudeSession(_ session: ClaudeStoredSession) {
         newClaudeConversation(resuming: session.id)
-        appendClaudeNotice("Resumed “\(session.displayTitle)”.", level: .info)
+        let generation = claudeSessionGeneration
+        let store = claudeSessionStore
+        let root = workspace?.rootURL
+        let account = activeClaudeAccount
+        claudeIsLoadingHistory = true
+
+        Task { [weak self] in
+            let history = await store.history(sessionId: session.id, workspace: root, account: account)
+            // Another conversation took over the panel meanwhile.
+            guard let self, generation == self.claudeSessionGeneration else { return }
+            self.claudeIsLoadingHistory = false
+
+            var restored: [ClaudeTimelineItem] = []
+            if history.omitted > 0 {
+                restored.append(.init(
+                    id: UUID().uuidString,
+                    kind: .notice(text: "\(history.omitted) earlier entries aren't shown.", level: .info)
+                ))
+            }
+            restored += history.items
+            restored.append(.init(
+                id: UUID().uuidString,
+                kind: .notice(
+                    text: history.items.isEmpty
+                        ? "Resumed “\(session.displayTitle)”. Its earlier messages couldn't be read."
+                        : "Resumed “\(session.displayTitle)”.",
+                    level: history.items.isEmpty ? .warning : .info
+                )
+            ))
+            // Anything that arrived while loading (a message sent right
+            // away, a launch error) stays after the restored history.
+            self.claudeTimeline = restored + self.claudeTimeline
+        }
     }
 
     // MARK: - Sending

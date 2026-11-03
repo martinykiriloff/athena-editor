@@ -248,7 +248,7 @@ struct ClaudeStreamDecoder: Sendable {
     }
 
     /// `tool_result.content` is either a plain string or a content-block array.
-    private static func toolResultText(_ content: JSONValue?) -> String {
+    static func toolResultText(_ content: JSONValue?) -> String {
         guard let content else { return "" }
         if let text = content.stringValue { return text }
         guard let blocks = content.arrayValue else { return content.displayText }

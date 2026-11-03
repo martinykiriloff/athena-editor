@@ -187,7 +187,9 @@ struct ClaudePanel: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    if appState.claudeTimeline.isEmpty {
+                    if appState.claudeTimeline.isEmpty && appState.claudeIsLoadingHistory {
+                        historyLoadingRow
+                    } else if appState.claudeTimeline.isEmpty {
                         emptyState
                     } else {
                         ForEach(appState.claudeTimeline) { item in
@@ -253,7 +255,20 @@ struct ClaudePanel: View {
         .padding(.vertical, appState.sf(4))
     }
 
-    private var emptyState: some View {
+    /// Shown while a reopened conversation's earlier turns are read.
+    private var historyLoadingRow: some View {
+        HStack(spacing: appState.sf(8)) {
+            ProgressView().controlSize(.small)
+            Text("Loading conversation…")
+                .font(.system(size: appState.sf(12)))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, appState.sf(40))
+        .accessibilityElement(children: .combine)
+    }
+
+        private var emptyState: some View {
         VStack(spacing: appState.sf(14)) {
             VStack(spacing: appState.sf(6)) {
                 Image(systemName: "sparkles")

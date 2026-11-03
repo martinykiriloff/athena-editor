@@ -345,6 +345,8 @@ final class AppState {
     /// Resumable conversations for this workspace, loaded on demand by the
     /// panel's history menu.
     var claudeRecentSessions: [ClaudeStoredSession] = []
+    /// True while a reopened conversation's earlier turns are being read.
+    var claudeIsLoadingHistory: Bool = false
     /// Bumped on every session start. A consumer task that finds the counter
     /// moved on knows a newer session replaced it and must not touch state —
     /// two rapid starts otherwise let the older task clear the newer one's
