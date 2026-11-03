@@ -265,8 +265,8 @@ struct ClaudeResumeHistoryTests {
         let project = root.appending(path: "projects/-tmp-shop")
         try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
         let lines = [
-            #"{"parentUuid":null,"type":"user","message":{"role":"user","content":[{"type":"text","text":"Add dark mode"}]},"uuid":"u1","timestamp":"2026-11-02T20:00:00.000Z"}"#,
-            #"{"parentUuid":"u1","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Added a dark theme."}]},"uuid":"a1","timestamp":"2026-11-02T20:00:05.000Z"}"#,
+            #"{"parentUuid":null,"type":"user","message":{"role":"user","content":[{"type":"text","text":"Add dark mode"}]},"uuid":"u1","cwd":"/tmp/shop","timestamp":"2026-11-02T20:00:00.000Z"}"#,
+            #"{"parentUuid":"u1","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Added a dark theme."}]},"uuid":"a1","cwd":"/tmp/shop","timestamp":"2026-11-02T20:00:05.000Z"}"#,
         ]
         try lines.joined(separator: "\n").write(to: project.appending(path: "\(sessionId).jsonl"), atomically: true, encoding: .utf8)
         let account = ClaudeAccount(id: "test", name: "Test", binaryName: "athena-test-no-such-claude", configDirectory: root.path)
@@ -293,6 +293,7 @@ struct ClaudeResumeHistoryTests {
 
         let state = AppState()
         state.activeClaudeAccount = account
+        state.workspace = WorkspaceModel(rootURL: URL(fileURLWithPath: "/tmp/shop"))
         state.resumeClaudeSession(ClaudeStoredSession(id: id, cwd: "/tmp/shop", title: "Add dark mode", modifiedAt: .now))
         #expect(state.claudeIsLoadingHistory)
 
@@ -322,6 +323,7 @@ struct ClaudeResumeHistoryTests {
 
         let state = AppState()
         state.activeClaudeAccount = account
+        state.workspace = WorkspaceModel(rootURL: URL(fileURLWithPath: "/tmp/shop"))
         state.resumeClaudeSession(ClaudeStoredSession(id: id, cwd: "/tmp/shop", title: "Add dark mode", modifiedAt: .now))
         state.newClaudeConversation()
         #expect(state.claudeIsLoadingHistory == false)
@@ -329,5 +331,65 @@ struct ClaudeResumeHistoryTests {
         let clock = ContinuousClock()
         try? await clock.sleep(until: clock.now.advanced(by: .milliseconds(300)))
         #expect(!state.claudeTimeline.contains { isUser($0, "Add dark mode") })
+    }
+
+    /// A session recorded in another folder can't be resumed here, even if
+    /// a stale list still offered it.
+    @Test func refusesAnotherProjectsSession() async throws {
+        let id = "77777777-7777-7777-7777-777777777777"
+        let (root, account) = try makeAccount(sessionId: id)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let state = AppState()
+        state.activeClaudeAccount = account
+        state.workspace = WorkspaceModel(rootURL: URL(fileURLWithPath: "/tmp/other-project"))
+        let before = state.claudeSessionGeneration
+        state.resumeClaudeSession(ClaudeStoredSession(id: id, cwd: "/tmp/shop", title: "Add dark mode", modifiedAt: .now))
+
+        #expect(state.claudeSessionGeneration == before)   // no session started
+        #expect(state.claudeIsLoadingHistory == false)
+        guard case .notice(let text, .warning)? = state.claudeTimeline.last?.kind else {
+            Issue.record("expected a warning"); return
+        }
+        #expect(text == "“Add dark mode” belongs to another project.")
+    }
+
+    /// Opening another folder ends the old project's conversation, its
+    /// history list, and any history still loading for it.
+    @Test func switchingProjectsClearsTheConversationAndList() async throws {
+        let id = "88888888-8888-8888-8888-888888888888"
+        let (root, account) = try makeAccount(sessionId: id)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let state = AppState()
+        state.activeClaudeAccount = account
+        state.workspace = WorkspaceModel(rootURL: URL(fileURLWithPath: "/tmp/shop"))
+        await state.loadClaudeRecentSessions()
+        #expect(state.claudeRecentSessions.map(\.id) == [id])
+
+        state.resumeClaudeSession(ClaudeStoredSession(id: id, cwd: "/tmp/shop", title: "Add dark mode", modifiedAt: .now))
+        state.claudeWorkspaceWillChange(to: URL(fileURLWithPath: "/tmp/other-project"))
+        state.workspace = WorkspaceModel(rootURL: URL(fileURLWithPath: "/tmp/other-project"))
+
+        #expect(state.claudeRecentSessions.isEmpty)
+        #expect(state.claudeIsLoadingHistory == false)
+        let clock = ContinuousClock()
+        try? await clock.sleep(until: clock.now.advanced(by: .milliseconds(300)))
+        #expect(!state.claudeTimeline.contains { isUser($0, "Add dark mode") })
+
+        // The new project's list has none of the old project's sessions.
+        await state.loadClaudeRecentSessions()
+        #expect(state.claudeRecentSessions.isEmpty)
+    }
+
+    /// Re-opening the same folder keeps the conversation going.
+    @Test func reopeningTheSameFolderKeepsTheConversation() {
+        let state = AppState()
+        state.workspace = WorkspaceModel(rootURL: URL(fileURLWithPath: "/tmp/shop"))
+        state.appendClaudeNotice("still here", level: .info)
+        let before = state.claudeSessionGeneration
+        state.claudeWorkspaceWillChange(to: URL(fileURLWithPath: "/tmp/shop/"))
+        #expect(state.claudeSessionGeneration == before)
+        #expect(state.claudeTimeline.count == 1)
     }
 }

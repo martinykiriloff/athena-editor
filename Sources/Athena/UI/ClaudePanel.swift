@@ -178,7 +178,10 @@ struct ClaudePanel: View {
             guard let session = sessions.first(where: { $0.id == id }) else { return }
             appState.resumeClaudeSession(session)
         }
-        .task(id: appState.claudeSessionGeneration) { await appState.loadClaudeRecentSessions() }
+        // Reload for a new session, a different project, or another account.
+        .task(id: "\(appState.claudeSessionGeneration)|\(appState.workspace?.rootURL.path ?? "")|\(appState.activeClaudeAccount.id)") {
+            await appState.loadClaudeRecentSessions()
+        }
     }
 
     // MARK: - Timeline

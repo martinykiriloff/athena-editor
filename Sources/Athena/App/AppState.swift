@@ -942,6 +942,7 @@ final class AppState {
         gitPanelShowsHistory = false
         commitMessage = ""
 
+        claudeWorkspaceWillChange(to: url)
         workspace = WorkspaceModel(rootURL: url)
         await evaluateTrust(for: url)
         statusMessage = "Opening workspace \(url.lastPathComponent)…"

@@ -77,10 +77,26 @@ extension AppState {
         Task { await service.stop() }
     }
 
+    /// The conversation and its history belong to one project: the agent
+    /// runs in the workspace root, and the history menu lists that root's
+    /// sessions. Opening a different folder ends both.
+    func claudeWorkspaceWillChange(to url: URL) {
+        // Compare resolved paths: an open panel's directory URL may carry a
+        // trailing slash or a symlinked prefix (/tmp → /private/tmp) and
+        // still be the same project.
+        func resolved(_ u: URL) -> String { u.standardizedFileURL.resolvingSymlinksInPath().path }
+        guard workspace.map({ resolved($0.rootURL) }) != resolved(url) else { return }
+        resetClaudeSession()
+        claudeRecentSessions = []
+    }
+
     /// Drops all conversation state without touching the child process.
     private func clearClaudeConversation() {
         claudeEventTask?.cancel()
         claudeEventTask = nil
+        // Anything still in flight for the old conversation (its event
+        // stream, a history load) checks this and stands down.
+        claudeSessionGeneration += 1
 
         claudeTimeline = []
         claudePendingPermissions = []
@@ -132,9 +148,11 @@ extension AppState {
             claudeRecentSessions = []
             return
         }
-        claudeRecentSessions = await claudeSessionStore.recentSessions(
-            workspace: root, account: activeClaudeAccount
-        )
+        let account = activeClaudeAccount
+        let sessions = await claudeSessionStore.recentSessions(workspace: root, account: account)
+        // The project or account changed while reading: this list is stale.
+        guard workspace?.rootURL == root, activeClaudeAccount == account else { return }
+        claudeRecentSessions = sessions
     }
 
     /// Reopens a past conversation: the agent resumes it by id, and the
@@ -142,10 +160,15 @@ extension AppState {
     /// the streaming protocol `--resume` restores the model's context but
     /// sends none of the old messages back.
     func resumeClaudeSession(_ session: ClaudeStoredSession) {
+        // Only this project's conversations: the CLI looks a session up under
+        // the agent's working directory, which is the workspace root.
+        guard let root = workspace?.rootURL, session.cwd == root.path else {
+            appendClaudeNotice("“\(session.displayTitle)” belongs to another project.", level: .warning)
+            return
+        }
         newClaudeConversation(resuming: session.id)
         let generation = claudeSessionGeneration
         let store = claudeSessionStore
-        let root = workspace?.rootURL
         let account = activeClaudeAccount
         claudeIsLoadingHistory = true
 
